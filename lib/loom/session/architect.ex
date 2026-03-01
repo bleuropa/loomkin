@@ -47,14 +47,23 @@ defmodule Loom.Session.Architect do
     case plan(user_text, state, architect_model: architect_model) do
       {:ok, plan_data, state} ->
         steps = plan_data["plan"] || []
+        team_spawned = plan_data["team_spawned"] == true
 
-        if steps == [] do
-          Logger.info("[Architect] Plan returned 0 steps — falling back to conversational response")
-          conversational_fallback(user_text, state, architect_model)
-        else
-          Logger.info("[Architect] Plan succeeded with #{length(steps)} steps, executing...")
-          broadcast(state.id, {:architect_phase, :executing})
-          execute_plan(plan_data, state, editor_model: editor_model)
+        cond do
+          team_spawned ->
+            # Team was spawned to handle the task — don't fall back or re-plan
+            Logger.info("[Architect] Team spawned — delegating execution to agents")
+            summary = plan_data["summary"] || "Team spawned to handle task"
+            {:ok, summary, state}
+
+          steps == [] ->
+            Logger.info("[Architect] Plan returned 0 steps — falling back to conversational response")
+            conversational_fallback(user_text, state, architect_model)
+
+          true ->
+            Logger.info("[Architect] Plan succeeded with #{length(steps)} steps, executing...")
+            broadcast(state.id, {:architect_phase, :executing})
+            execute_plan(plan_data, state, editor_model: editor_model)
         end
 
       {:error, reason, state} ->
@@ -226,8 +235,8 @@ defmodule Loom.Session.Architect do
     state = %{state | messages: state.messages ++ [assistant_msg]}
     broadcast(state.id, {:new_message, state.id, assistant_msg})
 
-    # Return empty plan — the team handles execution, not the editor
-    {:ok, %{"plan" => [], "summary" => "Team spawned to handle task"}, state}
+    # Signal that the team was spawned — run/3 should not fall back to conversational
+    {:ok, %{"plan" => [], "summary" => response_text, "team_spawned" => true}, state}
   end
 
   defp conversational_fallback(user_text, state, model) do

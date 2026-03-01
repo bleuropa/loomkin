@@ -35,6 +35,18 @@ defmodule Loom.Session.Manager do
         {:ok, pid}
 
       {:error, {:already_started, pid}} ->
+        # Ensure secondary callers also get team wiring by re-broadcasting
+        # the team_id if the session already has one.
+        spawn(fn ->
+          try do
+            case GenServer.call(pid, :get_team_id, 5_000) do
+              nil -> :ok
+              team_id -> broadcast(session_id, {:team_available, session_id, team_id})
+            end
+          catch
+            _, _ -> :ok
+          end
+        end)
         {:ok, pid}
 
       {:error, reason} ->
@@ -55,28 +67,25 @@ defmodule Loom.Session.Manager do
   # This is best-effort — if it fails, the session still works without teams.
   defp maybe_create_backing_team(session_id, opts) do
     project_path = Keyword.get(opts, :project_path)
+    model = Keyword.get(opts, :model)
 
     Task.start(fn ->
       try do
         {:ok, team_id} = Loom.Teams.Manager.create_team(name: "session-#{String.slice(session_id, 0, 8)}", project_path: project_path)
-        Logger.debug("[Session.Manager] Created backing team #{team_id} for session #{session_id}")
 
-        # Store team_id in session's registry metadata for later lookup
+        # Spawn the lead agent so the team actually has a member
+        case Loom.Teams.Manager.spawn_agent(team_id, "lead", :lead, model: model, project_path: project_path) do
+          {:ok, _pid} ->
+            Logger.debug("[Session.Manager] Created backing team #{team_id} with lead agent for session #{session_id}")
+
+          {:error, reason} ->
+            Logger.warning("[Session.Manager] Backing team #{team_id} created but lead agent failed: #{inspect(reason)}")
+        end
+
+        # Notify the session process about its team
         case Registry.lookup(Loom.SessionRegistry, session_id) do
-          [{pid, _}] ->
-            Registry.update_value(Loom.SessionRegistry, session_id, fn status ->
-              if is_map(status) do
-                Map.put(status, :team_id, team_id)
-              else
-                %{status: status, team_id: team_id}
-              end
-            end)
-
-            # Notify the session about its team
-            send(pid, {:team_created, team_id})
-
-          _ ->
-            :ok
+          [{pid, _}] -> send(pid, {:team_created, team_id})
+          _ -> :ok
         end
       rescue
         e ->
@@ -85,12 +94,27 @@ defmodule Loom.Session.Manager do
     end)
   end
 
-  @doc "Stop a session gracefully."
+  @doc "Stop a session gracefully, dissolving its backing team."
   @spec stop_session(String.t()) :: :ok | {:error, :not_found}
   def stop_session(session_id) do
     case find_session(session_id) do
       {:ok, pid} ->
+        # Retrieve team_id before stopping the session process
+        team_id =
+          try do
+            GenServer.call(pid, :get_team_id, 5_000)
+          catch
+            _, _ -> nil
+          end
+
         GenServer.stop(pid, :normal)
+
+        # Dissolve the backing team to clean up ETS tables and agent processes
+        if team_id do
+          Loom.Teams.Manager.dissolve_team(team_id)
+          Logger.debug("[Session.Manager] Dissolved backing team #{team_id} for session #{session_id}")
+        end
+
         :ok
 
       :error ->
@@ -113,5 +137,9 @@ defmodule Loom.Session.Manager do
       [{pid, _}] -> {:ok, pid}
       [] -> :error
     end
+  end
+
+  defp broadcast(session_id, message) do
+    Phoenix.PubSub.broadcast(Loom.PubSub, "session:#{session_id}", message)
   end
 end

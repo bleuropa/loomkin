@@ -155,6 +155,11 @@ defmodule Loom.Session do
     {:reply, {:ok, state.status}, state}
   end
 
+  @impl true
+  def handle_call(:get_team_id, _from, state) do
+    {:reply, state.team_id, state}
+  end
+
   # --- handle_info ---
 
   @impl true
