@@ -117,12 +117,21 @@ defmodule LoomWeb.WorkspaceLive do
 
   def handle_event("send_message", %{"text" => text}, socket) when text != "" do
     session_id = socket.assigns.session_id
+    trimmed = String.trim(text)
     # Send async to avoid blocking the LiveView process
-    task = Task.async(fn -> Session.send_message(session_id, String.trim(text)) end)
+    task = Task.async(fn -> Session.send_message(session_id, trimmed) end)
+
+    # Optimistically show user message + thinking state immediately
+    user_msg = %{role: :user, content: trimmed}
 
     {:noreply,
      socket
-     |> assign(input_text: "", async_task: task)
+     |> assign(
+       input_text: "",
+       async_task: task,
+       status: :thinking,
+       messages: socket.assigns.messages ++ [user_msg]
+     )
      |> push_event("clear-input", %{})}
   end
 
@@ -166,6 +175,11 @@ defmodule LoomWeb.WorkspaceLive do
   end
 
   # --- PubSub Info ---
+
+  def handle_info({:new_message, _session_id, %{role: :user}}, socket) do
+    # User messages are added optimistically in handle_event — skip PubSub duplicate
+    {:noreply, socket}
+  end
 
   def handle_info({:new_message, _session_id, msg}, socket) do
     socket = assign(socket, messages: socket.assigns.messages ++ [msg])

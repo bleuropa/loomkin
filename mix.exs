@@ -73,7 +73,7 @@ defmodule Loom.MixProject do
 
       # Text processing
       {:diff_match_patch, "~> 0.3"},
-      {:earmark, "~> 1.4"},
+      {:mdex, "~> 0.6"},
 
       # CLI
       {:owl, "~> 0.13"},

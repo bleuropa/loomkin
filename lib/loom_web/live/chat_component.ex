@@ -92,7 +92,7 @@ defmodule LoomWeb.ChatComponent do
           <%= if @streaming && @streaming_content != "" do %>
             <div class="border-l-2 border-violet-500/40 pl-3 py-0.5">
               <div class="max-w-none chat-markdown">
-                {render_markdown(@streaming_content)}
+                {render_markdown(@streaming_content, streaming: true)}
               </div>
               <span class="inline-block w-2 h-4 bg-violet-400 animate-pulse ml-0.5"></span>
             </div>
@@ -149,15 +149,24 @@ defmodule LoomWeb.ChatComponent do
     """
   end
 
-  defp render_markdown(nil), do: ""
+  defp render_markdown(content, opts \\ [])
+  defp render_markdown(nil, _opts), do: ""
+  defp render_markdown("", _opts), do: ""
 
-  defp render_markdown(content) when is_binary(content) do
-    content
-    |> Earmark.as_html!(%Earmark.Options{code_class_prefix: "language-"})
-    |> Phoenix.HTML.raw()
+  defp render_markdown(content, opts) when is_binary(content) do
+    streaming = Keyword.get(opts, :streaming, false)
+
+    doc =
+      MDEx.new(streaming: streaming)
+      |> MDEx.Document.put_markdown(content)
+
+    case MDEx.to_html(doc) do
+      {:ok, html} -> Phoenix.HTML.raw(html)
+      _ -> Phoenix.HTML.raw("<p>#{Phoenix.HTML.html_escape(content)}</p>")
+    end
   end
 
-  defp render_markdown(_), do: ""
+  defp render_markdown(_, _opts), do: ""
 
   defp truncate_result(nil), do: ""
 
