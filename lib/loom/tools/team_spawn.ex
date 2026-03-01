@@ -1,15 +1,19 @@
 defmodule Loom.Tools.TeamSpawn do
   @moduledoc "Spawn a team with agents."
 
+  @valid_roles ~w(lead researcher coder reviewer tester)
+
   use Jido.Action,
     name: "team_spawn",
     description:
       "Create a new agent team and spawn agents with specified roles. " <>
+        "Valid roles: researcher (read-only exploration), coder (implementation), " <>
+        "reviewer (code review), tester (run tests), lead (coordination). " <>
         "Optionally use a template name to spawn a pre-configured team. " <>
         "Returns a team status summary with team_id and agent list.",
     schema: [
       team_name: [type: :string, required: true, doc: "Human-readable team name"],
-      roles: [type: {:list, :map}, doc: "List of %{name, role} maps for agents to spawn (ignored if template is set)"],
+      roles: [type: {:list, :map}, doc: "List of %{name, role} maps. role must be one of: researcher, coder, reviewer, tester, lead"],
       template: [type: :string, doc: "Template name from .loom.toml to use instead of explicit roles"],
       project_path: [type: :string, doc: "Path to the project for agents to work on"]
     ]
@@ -66,23 +70,14 @@ defmodule Loom.Tools.TeamSpawn do
       Enum.map(roles, fn role_map ->
         name = Map.get(role_map, :name) || Map.get(role_map, "name")
         role = Map.get(role_map, :role) || Map.get(role_map, "role")
-        role_atom =
-          if is_binary(role) do
-            try do
-              String.to_existing_atom(role)
-            rescue
-              ArgumentError -> nil
-            end
-          else
-            role
-          end
+        role_atom = resolve_role(role)
 
         if is_nil(role_atom) do
-          "  - #{name} (#{role}): failed - unknown role"
+          "  - #{name} (#{role}): failed - unknown role. Valid: #{Enum.join(@valid_roles, ", ")}"
         else
           case Manager.spawn_agent(team_id, name, role_atom, project_path: project_path) do
-            {:ok, _pid} -> "  - #{name} (#{role}): spawned"
-            {:error, reason} -> "  - #{name} (#{role}): failed - #{inspect(reason)}"
+            {:ok, _pid} -> "  - #{name} (#{role_atom}): spawned"
+            {:error, reason} -> "  - #{name} (#{role_atom}): failed - #{inspect(reason)}"
           end
         end
       end)
@@ -95,4 +90,35 @@ defmodule Loom.Tools.TeamSpawn do
 
     {:ok, %{result: String.trim(summary), team_id: team_id}}
   end
+
+  # Resolve a role string to one of the valid role atoms.
+  # Handles exact matches, and falls back to keyword matching for
+  # descriptive strings like "Analyze code quality and patterns".
+  defp resolve_role(role) when is_atom(role), do: role
+
+  defp resolve_role(role) when is_binary(role) do
+    downcased = String.downcase(role)
+
+    # Exact match first
+    if downcased in @valid_roles do
+      String.to_existing_atom(downcased)
+    else
+      # Keyword-based fuzzy match for descriptive role strings
+      cond do
+        String.contains?(downcased, "review") -> :reviewer
+        String.contains?(downcased, "test") -> :tester
+        String.contains?(downcased, "code") or String.contains?(downcased, "implement") -> :coder
+        String.contains?(downcased, "research") or String.contains?(downcased, "analy") or
+          String.contains?(downcased, "audit") or String.contains?(downcased, "explor") or
+          String.contains?(downcased, "investigat") or String.contains?(downcased, "document") -> :researcher
+        String.contains?(downcased, "lead") or String.contains?(downcased, "coordinat") -> :lead
+        # If the LLM sends a security/quality/architecture analysis role, map to researcher
+        String.contains?(downcased, "security") or String.contains?(downcased, "quality") or
+          String.contains?(downcased, "architect") or String.contains?(downcased, "coverage") -> :researcher
+        true -> nil
+      end
+    end
+  end
+
+  defp resolve_role(_), do: nil
 end
