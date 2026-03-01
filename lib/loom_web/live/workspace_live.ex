@@ -19,6 +19,7 @@ defmodule LoomWeb.WorkspaceLive do
         input_text: "",
         current_tool: nil,
         current_tool_name: nil,
+        file_tree_version: 0,
         selected_file: nil,
         file_content: nil,
         diffs: [],
@@ -149,6 +150,14 @@ defmodule LoomWeb.WorkspaceLive do
 
   def handle_info({:tool_complete, _session_id, tool_name, result}, socket) do
     socket = assign(socket, current_tool: nil)
+
+    # Bump file tree version when file-modifying tools complete
+    socket =
+      if tool_name in ["file_edit", "file_write", "file_delete"] do
+        assign(socket, file_tree_version: socket.assigns.file_tree_version + 1)
+      else
+        socket
+      end
 
     socket =
       cond do
@@ -442,6 +451,7 @@ defmodule LoomWeb.WorkspaceLive do
           id="file-tree"
           project_path={assigns[:project_path] || File.cwd!()}
           session_id={@session_id}
+          version={@file_tree_version}
         />
       </div>
       <div :if={@selected_file} class="h-1/2 border-t border-gray-800 flex flex-col animate-fade-in">
