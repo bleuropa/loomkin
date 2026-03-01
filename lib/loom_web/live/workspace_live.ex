@@ -200,7 +200,11 @@ defmodule LoomWeb.WorkspaceLive do
     {:noreply, assign(socket, status: status)}
   end
 
-  def handle_info({:tool_executing, _session_id, tool_name}, socket) do
+  def handle_info({:tool_executing, _source, %{tool_name: name}}, socket) do
+    {:noreply, assign(socket, current_tool: name, current_tool_name: name)}
+  end
+
+  def handle_info({:tool_executing, _source, tool_name}, socket) when is_binary(tool_name) do
     {:noreply, assign(socket, current_tool: tool_name, current_tool_name: tool_name)}
   end
 
