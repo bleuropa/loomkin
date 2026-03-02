@@ -35,12 +35,18 @@ defmodule Loomkin.Tools.DecisionLog do
     node_type = String.to_existing_atom(raw_type)
     title = param!(params, :title)
 
+    metadata =
+      %{}
+      |> then(fn m -> if team_id = param(context, :team_id), do: Map.put(m, "team_id", team_id), else: m end)
+
     attrs = %{
       node_type: node_type,
       title: title,
       description: param(params, :description),
       confidence: param(params, :confidence),
-      session_id: param(context, :session_id)
+      session_id: param(context, :session_id),
+      agent_name: param(context, :agent_name),
+      metadata: metadata
     }
 
     case Graph.add_node(attrs) do

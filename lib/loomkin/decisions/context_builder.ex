@@ -7,28 +7,34 @@ defmodule Loomkin.Decisions.ContextBuilder do
 
   def build(session_id, opts \\ []) do
     max_tokens = Keyword.get(opts, :max_tokens, @default_max_tokens)
+    cross_session = Keyword.get(opts, :cross_session, false)
     max_chars = max_tokens * 4
 
     sections = [
-      build_goals_section(),
+      build_goals_section(session_id, cross_session),
       build_decisions_section(),
+      build_prior_attempts_section(),
       build_session_section(session_id)
     ]
 
-    result = Enum.join(sections, "\n\n")
+    result = sections |> Enum.reject(&(&1 == "")) |> Enum.join("\n\n")
     {:ok, truncate(result, max_chars)}
   end
 
-  defp build_goals_section do
-    goals = Graph.active_goals()
+  defp build_goals_section(session_id, cross_session) do
+    goals =
+      if cross_session do
+        Graph.list_nodes(node_type: :goal, status: :active)
+      else
+        Graph.list_nodes(node_type: :goal, status: :active, session_id: session_id)
+      end
 
     if goals == [] do
       "## Active Goals\nNone."
     else
       items =
         Enum.map_join(goals, "\n", fn g ->
-          conf = if g.confidence, do: " (confidence: #{g.confidence}%)", else: ""
-          "- #{g.title}#{conf}"
+          format_node_line(g)
         end)
 
       "## Active Goals\n#{items}"
@@ -43,10 +49,47 @@ defmodule Loomkin.Decisions.ContextBuilder do
     else
       items =
         Enum.map_join(decisions, "\n", fn d ->
-          "- [#{d.node_type}] #{d.title}"
+          "- [#{d.node_type}] #{d.title}#{format_keeper_ref(d)}"
         end)
 
       "## Recent Decisions\n#{items}"
+    end
+  end
+
+  defp build_prior_attempts_section do
+    revisits = Graph.list_nodes(node_type: :revisit, status: :active)
+    abandoned = Graph.list_nodes(status: :abandoned)
+    superseded = Graph.list_nodes(status: :superseded)
+
+    items =
+      Enum.map(revisits, fn n ->
+        confidence = if n.confidence, do: " (confidence: #{n.confidence})", else: ""
+        keeper = format_keeper_ref(n)
+        "- [REVISIT] #{n.title}#{confidence} — needs re-evaluation#{keeper}"
+      end) ++
+        Enum.map(abandoned, fn n ->
+          desc = if n.description, do: " — #{n.description}", else: ""
+          keeper = format_keeper_ref(n)
+          "- [ABANDONED] #{n.title}#{desc}#{keeper}"
+        end) ++
+        Enum.map(superseded, fn n ->
+          keeper = format_keeper_ref(n)
+          "- [SUPERSEDED] #{n.title} → replaced#{keeper}"
+        end)
+
+    if items == [], do: "", else: "## Prior Attempts & Lessons\n" <> Enum.join(items, "\n")
+  end
+
+  defp format_node_line(node) do
+    base = "- #{node.title}"
+    base = if node.confidence, do: "#{base} (confidence: #{node.confidence}%)", else: base
+    base <> format_keeper_ref(node)
+  end
+
+  defp format_keeper_ref(node) do
+    case node.metadata do
+      %{"keeper_id" => id} when is_binary(id) -> " → Deep context available in keeper #{id}"
+      _ -> ""
     end
   end
 

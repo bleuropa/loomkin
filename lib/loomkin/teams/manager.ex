@@ -1,6 +1,7 @@
 defmodule Loomkin.Teams.Manager do
   @moduledoc "Public API for team lifecycle management."
 
+  alias Loomkin.Decisions.{AutoLogger, Broadcaster}
   alias Loomkin.Teams.{Comms, Distributed, TableRegistry}
 
   require Logger
@@ -32,6 +33,9 @@ defmodule Loomkin.Teams.Manager do
       depth: 0,
       created_at: DateTime.utc_now()
     }})
+
+    # Start decision graph nervous system processes
+    start_nervous_system(team_id)
 
     Logger.info("[Teams] Created team #{name} (#{team_id})")
     {:ok, team_id}
@@ -76,6 +80,9 @@ defmodule Loomkin.Teams.Manager do
           parent_table = TableRegistry.get_table!(parent_team_id)
           existing = get_sub_team_ids(parent_team_id)
           :ets.insert(parent_table, {:sub_teams, [sub_team_id | existing]})
+
+          # Start decision graph nervous system processes
+          start_nervous_system(sub_team_id)
 
           Logger.info("[Teams] Created sub-team #{name} (#{sub_team_id}) under #{parent_team_id}")
           {:ok, sub_team_id}
@@ -201,6 +208,9 @@ defmodule Loomkin.Teams.Manager do
       if Process.alive?(keeper.pid), do: Distributed.terminate_child(keeper.pid)
     end)
 
+    # Stop decision graph nervous system processes
+    stop_nervous_system(team_id)
+
     # Reset rate limiter budget
     Loomkin.Teams.RateLimiter.reset_team(team_id)
 
@@ -275,6 +285,26 @@ defmodule Loomkin.Teams.Manager do
 
       _ ->
         :ok
+    end
+  end
+
+  defp start_nervous_system(team_id) do
+    if Application.get_env(:loomkin, :start_nervous_system, true) do
+      try do
+        Distributed.start_child({AutoLogger, team_id: team_id})
+        Distributed.start_child({Broadcaster, team_id: team_id})
+      catch
+        :exit, _ -> :ok
+      end
+    end
+  end
+
+  defp stop_nervous_system(team_id) do
+    for key <- [{:auto_logger, team_id}, {:broadcaster, team_id}] do
+      case Registry.lookup(Loomkin.Teams.AgentRegistry, key) do
+        [{pid, _}] -> Distributed.terminate_child(pid)
+        [] -> :ok
+      end
     end
   end
 

@@ -646,6 +646,30 @@ defmodule Loomkin.Teams.Agent do
     {:noreply, state}
   end
 
+  # --- Nervous system handlers ---
+
+  @impl true
+  def handle_info({:discovery_relevant, payload}, state) do
+    %{observation_title: obs_title, goal_title: goal_title, source_agent: source, keeper_id: keeper_id} = payload
+
+    msg = "[Discovery from #{source}] #{obs_title} — relevant to your goal: #{goal_title}"
+    msg = if keeper_id, do: msg <> "\n  → Full context: context_retrieve on keeper #{keeper_id}", else: msg
+
+    messages = state.messages ++ [%{role: :user, content: msg}]
+    {:noreply, %{state | messages: messages}}
+  end
+
+  @impl true
+  def handle_info({:confidence_warning, payload}, state) do
+    %{source_title: title, source_confidence: conf, affected_title: affected, keeper_id: keeper_id} = payload
+
+    msg = "[Confidence Warning] Upstream decision '#{title}' has low confidence (#{conf}). Your work on '#{affected}' may be affected."
+    msg = if keeper_id, do: msg <> "\n  → Re-evaluate using keeper #{keeper_id}", else: msg
+
+    messages = state.messages ++ [%{role: :user, content: msg}]
+    {:noreply, %{state | messages: messages}}
+  end
+
   @impl true
   def handle_info(_msg, state) do
     {:noreply, state}

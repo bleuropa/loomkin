@@ -258,4 +258,134 @@ defmodule Loomkin.Teams.AgentTest do
       assert state.status == :idle
     end
   end
+
+  describe "discovery_relevant handler" do
+    test "injects system message with observation and goal" do
+      %{pid: pid, team_id: team_id} = start_agent()
+
+      Phoenix.PubSub.broadcast(
+        Loomkin.PubSub,
+        "team:#{team_id}",
+        {:discovery_relevant, %{
+          observation_title: "Cache hit rate dropped",
+          goal_title: "Improve API latency",
+          source_agent: "researcher-1",
+          keeper_id: nil
+        }}
+      )
+
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      assert length(state.messages) == 1
+      [msg] = state.messages
+      assert msg.role == :user
+      assert msg.content =~ "[Discovery from researcher-1]"
+      assert msg.content =~ "Cache hit rate dropped"
+      assert msg.content =~ "relevant to your goal: Improve API latency"
+      refute msg.content =~ "keeper"
+    end
+
+    test "includes keeper reference when keeper_id is present" do
+      %{pid: pid, team_id: team_id} = start_agent()
+
+      Phoenix.PubSub.broadcast(
+        Loomkin.PubSub,
+        "team:#{team_id}",
+        {:discovery_relevant, %{
+          observation_title: "Memory leak found",
+          goal_title: "Stabilize production",
+          source_agent: "coder-2",
+          keeper_id: "keeper-xyz-789"
+        }}
+      )
+
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      [msg] = state.messages
+      assert msg.content =~ "context_retrieve on keeper keeper-xyz-789"
+    end
+  end
+
+  describe "confidence_warning handler" do
+    test "injects system message with confidence warning" do
+      %{pid: pid, team_id: team_id} = start_agent()
+
+      Phoenix.PubSub.broadcast(
+        Loomkin.PubSub,
+        "team:#{team_id}",
+        {:confidence_warning, %{
+          source_title: "Use PostgreSQL",
+          source_confidence: 35,
+          affected_title: "Design schema migration",
+          keeper_id: nil
+        }}
+      )
+
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      assert length(state.messages) == 1
+      [msg] = state.messages
+      assert msg.role == :user
+      assert msg.content =~ "[Confidence Warning]"
+      assert msg.content =~ "Upstream decision 'Use PostgreSQL' has low confidence (35)"
+      assert msg.content =~ "Your work on 'Design schema migration' may be affected"
+      refute msg.content =~ "keeper"
+    end
+
+    test "includes keeper reference when keeper_id is present" do
+      %{pid: pid, team_id: team_id} = start_agent()
+
+      Phoenix.PubSub.broadcast(
+        Loomkin.PubSub,
+        "team:#{team_id}",
+        {:confidence_warning, %{
+          source_title: "Use Redis",
+          source_confidence: 20,
+          affected_title: "Cache layer impl",
+          keeper_id: "keeper-abc-123"
+        }}
+      )
+
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      [msg] = state.messages
+      assert msg.content =~ "Re-evaluate using keeper keeper-abc-123"
+    end
+
+    test "multiple nervous system messages accumulate" do
+      %{pid: pid, team_id: team_id} = start_agent()
+
+      Phoenix.PubSub.broadcast(
+        Loomkin.PubSub,
+        "team:#{team_id}",
+        {:discovery_relevant, %{
+          observation_title: "Obs 1",
+          goal_title: "Goal 1",
+          source_agent: "agent-a",
+          keeper_id: nil
+        }}
+      )
+
+      Phoenix.PubSub.broadcast(
+        Loomkin.PubSub,
+        "team:#{team_id}",
+        {:confidence_warning, %{
+          source_title: "Decision X",
+          source_confidence: 25,
+          affected_title: "Task Y",
+          keeper_id: nil
+        }}
+      )
+
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      assert length(state.messages) == 2
+      assert Enum.all?(state.messages, &(&1.role == :user))
+    end
+  end
 end

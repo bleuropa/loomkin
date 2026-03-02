@@ -174,6 +174,231 @@ defmodule Loomkin.Decisions.GraphTest do
     end
   end
 
+  describe "list_nodes/1 team_id filter" do
+    test "filters nodes by team_id in metadata" do
+      team_id = Ecto.UUID.generate()
+      other_team_id = Ecto.UUID.generate()
+
+      {:ok, _n1} =
+        Graph.add_node(node_attrs(%{title: "Team node", metadata: %{"team_id" => team_id}}))
+
+      {:ok, _n2} =
+        Graph.add_node(
+          node_attrs(%{title: "Other team", metadata: %{"team_id" => other_team_id}})
+        )
+
+      {:ok, _n3} = Graph.add_node(node_attrs(%{title: "No team"}))
+
+      results = Graph.list_nodes(team_id: team_id)
+      assert length(results) == 1
+      assert hd(results).title == "Team node"
+    end
+
+    test "returns empty list when no nodes match team_id" do
+      {:ok, _} = Graph.add_node(node_attrs(%{metadata: %{"team_id" => "other"}}))
+      assert Graph.list_nodes(team_id: "nonexistent") == []
+    end
+  end
+
+  describe "list_nodes/1 cross_session filter" do
+    test "cross_session: true does not restrict results" do
+      {:ok, _n1} = Graph.add_node(node_attrs(%{title: "Node A"}))
+      {:ok, _n2} = Graph.add_node(node_attrs(%{title: "Node B"}))
+
+      # cross_session: true is a no-op filter — all nodes still returned
+      results = Graph.list_nodes(cross_session: true, node_type: :goal)
+      assert length(results) == 2
+    end
+
+    test "cross_session: true can combine with other filters" do
+      {:ok, _} = Graph.add_node(node_attrs(%{title: "Goal", node_type: :goal}))
+      {:ok, _} = Graph.add_node(node_attrs(%{title: "Action", node_type: :action}))
+
+      results = Graph.list_nodes(cross_session: true, node_type: :goal)
+      assert length(results) == 1
+      assert hd(results).title == "Goal"
+    end
+  end
+
+  describe "add_node_with_keeper/2" do
+    test "stores keeper_id in metadata" do
+      keeper_id = Ecto.UUID.generate()
+      {:ok, node} = Graph.add_node_with_keeper(node_attrs(%{title: "Kept node"}), keeper_id)
+      assert node.metadata["keeper_id"] == keeper_id
+    end
+
+    test "preserves existing metadata" do
+      keeper_id = Ecto.UUID.generate()
+
+      {:ok, node} =
+        Graph.add_node_with_keeper(
+          node_attrs(%{title: "Kept", metadata: %{"extra" => "data"}}),
+          keeper_id
+        )
+
+      assert node.metadata["keeper_id"] == keeper_id
+      assert node.metadata["extra"] == "data"
+    end
+  end
+
+  describe "walk_downstream/3" do
+    test "walks a chain of nodes downstream" do
+      {:ok, n1} = Graph.add_node(node_attrs(%{title: "Root"}))
+      {:ok, n2} = Graph.add_node(node_attrs(%{title: "Child"}))
+      {:ok, n3} = Graph.add_node(node_attrs(%{title: "Grandchild"}))
+
+      {:ok, _} = Graph.add_edge(n1.id, n2.id, :leads_to)
+      {:ok, _} = Graph.add_edge(n2.id, n3.id, :leads_to)
+
+      results = Graph.walk_downstream(n1.id, [:leads_to])
+      assert length(results) == 2
+
+      ids = Enum.map(results, fn {node, _depth, _type} -> node.id end)
+      assert n2.id in ids
+      assert n3.id in ids
+    end
+
+    test "respects max_depth" do
+      {:ok, n1} = Graph.add_node(node_attrs(%{title: "A"}))
+      {:ok, n2} = Graph.add_node(node_attrs(%{title: "B"}))
+      {:ok, n3} = Graph.add_node(node_attrs(%{title: "C"}))
+
+      {:ok, _} = Graph.add_edge(n1.id, n2.id, :leads_to)
+      {:ok, _} = Graph.add_edge(n2.id, n3.id, :leads_to)
+
+      results = Graph.walk_downstream(n1.id, [:leads_to], max_depth: 1)
+      assert length(results) == 1
+      assert elem(hd(results), 0).id == n2.id
+    end
+
+    test "returns depth and edge_type in tuples" do
+      {:ok, n1} = Graph.add_node(node_attrs(%{title: "Start"}))
+      {:ok, n2} = Graph.add_node(node_attrs(%{title: "Next"}))
+
+      {:ok, _} = Graph.add_edge(n1.id, n2.id, :enables)
+
+      [{node, depth, edge_type}] = Graph.walk_downstream(n1.id, [:enables])
+      assert node.id == n2.id
+      assert depth == 1
+      assert edge_type == :enables
+    end
+
+    test "filters by edge type" do
+      {:ok, n1} = Graph.add_node(node_attrs(%{title: "Root"}))
+      {:ok, n2} = Graph.add_node(node_attrs(%{title: "Chosen"}))
+      {:ok, n3} = Graph.add_node(node_attrs(%{title: "Blocked"}))
+
+      {:ok, _} = Graph.add_edge(n1.id, n2.id, :chosen)
+      {:ok, _} = Graph.add_edge(n1.id, n3.id, :blocks)
+
+      results = Graph.walk_downstream(n1.id, [:chosen])
+      assert length(results) == 1
+      assert elem(hd(results), 0).id == n2.id
+    end
+  end
+
+  describe "walk_upstream/3" do
+    test "walks a chain of nodes upstream" do
+      {:ok, n1} = Graph.add_node(node_attrs(%{title: "Root"}))
+      {:ok, n2} = Graph.add_node(node_attrs(%{title: "Child"}))
+      {:ok, n3} = Graph.add_node(node_attrs(%{title: "Grandchild"}))
+
+      {:ok, _} = Graph.add_edge(n1.id, n2.id, :leads_to)
+      {:ok, _} = Graph.add_edge(n2.id, n3.id, :leads_to)
+
+      results = Graph.walk_upstream(n3.id, [:leads_to])
+      assert length(results) == 2
+
+      ids = Enum.map(results, fn {node, _depth, _type} -> node.id end)
+      assert n2.id in ids
+      assert n1.id in ids
+    end
+
+    test "respects max_depth upstream" do
+      {:ok, n1} = Graph.add_node(node_attrs(%{title: "A"}))
+      {:ok, n2} = Graph.add_node(node_attrs(%{title: "B"}))
+      {:ok, n3} = Graph.add_node(node_attrs(%{title: "C"}))
+
+      {:ok, _} = Graph.add_edge(n1.id, n2.id, :leads_to)
+      {:ok, _} = Graph.add_edge(n2.id, n3.id, :leads_to)
+
+      results = Graph.walk_upstream(n3.id, [:leads_to], max_depth: 1)
+      assert length(results) == 1
+      assert elem(hd(results), 0).id == n2.id
+    end
+  end
+
+  describe "connected_nodes/2" do
+    test "finds nodes in both directions" do
+      {:ok, n1} = Graph.add_node(node_attrs(%{title: "Parent"}))
+      {:ok, n2} = Graph.add_node(node_attrs(%{title: "Center"}))
+      {:ok, n3} = Graph.add_node(node_attrs(%{title: "Child"}))
+
+      {:ok, _} = Graph.add_edge(n1.id, n2.id, :leads_to)
+      {:ok, _} = Graph.add_edge(n2.id, n3.id, :leads_to)
+
+      results = Graph.connected_nodes(n2.id, [:leads_to])
+      ids = Enum.map(results, fn {node, _depth, _type} -> node.id end)
+
+      assert n1.id in ids
+      assert n3.id in ids
+      assert length(results) == 2
+    end
+
+    test "deduplicates nodes connected in both directions" do
+      {:ok, n1} = Graph.add_node(node_attrs(%{title: "A"}))
+      {:ok, n2} = Graph.add_node(node_attrs(%{title: "B"}))
+
+      # Edges in both directions between same pair
+      {:ok, _} = Graph.add_edge(n1.id, n2.id, :leads_to)
+      {:ok, _} = Graph.add_edge(n2.id, n1.id, :leads_to)
+
+      results = Graph.connected_nodes(n1.id, [:leads_to])
+      assert length(results) == 1
+      assert elem(hd(results), 0).id == n2.id
+    end
+  end
+
+  describe "edge walking — circular references" do
+    test "visited set prevents infinite loops" do
+      {:ok, n1} = Graph.add_node(node_attrs(%{title: "A"}))
+      {:ok, n2} = Graph.add_node(node_attrs(%{title: "B"}))
+      {:ok, n3} = Graph.add_node(node_attrs(%{title: "C"}))
+
+      {:ok, _} = Graph.add_edge(n1.id, n2.id, :leads_to)
+      {:ok, _} = Graph.add_edge(n2.id, n3.id, :leads_to)
+      {:ok, _} = Graph.add_edge(n3.id, n1.id, :leads_to)
+
+      results = Graph.walk_downstream(n1.id, [:leads_to], max_depth: 10)
+      # Should find n2, n3 but not loop infinitely back to n1
+      ids = Enum.map(results, fn {node, _depth, _type} -> node.id end)
+      assert n2.id in ids
+      assert n3.id in ids
+      assert length(results) == 2
+    end
+  end
+
+  describe "list_edges/1 with edge_type list" do
+    test "filters edges by a list of edge types" do
+      {:ok, n1} = Graph.add_node(node_attrs(%{title: "A"}))
+      {:ok, n2} = Graph.add_node(node_attrs(%{title: "B"}))
+      {:ok, n3} = Graph.add_node(node_attrs(%{title: "C"}))
+      {:ok, n4} = Graph.add_node(node_attrs(%{title: "D"}))
+
+      {:ok, _} = Graph.add_edge(n1.id, n2.id, :leads_to)
+      {:ok, _} = Graph.add_edge(n1.id, n3.id, :chosen)
+      {:ok, _} = Graph.add_edge(n1.id, n4.id, :blocks)
+
+      results = Graph.list_edges(edge_type: [:leads_to, :chosen])
+      assert length(results) == 2
+
+      types = Enum.map(results, & &1.edge_type)
+      assert :leads_to in types
+      assert :chosen in types
+      refute :blocks in types
+    end
+  end
+
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
       Regex.replace(~r"%{(\w+)}", msg, fn _, key ->

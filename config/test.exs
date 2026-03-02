@@ -11,3 +11,7 @@ config :loomkin, LoomkinWeb.Endpoint,
   server: false
 
 config :logger, level: :warning
+
+# Disable auto-start of nervous system (AutoLogger/Broadcaster) in tests.
+# Tests that need them start them explicitly with sandbox-aware setup.
+config :loomkin, start_nervous_system: false
