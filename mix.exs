@@ -61,7 +61,6 @@ defmodule Loomkin.MixProject do
       {:jido_signal, "~> 2.0"},
       {:jido_ai, github: "agentjido/jido_ai", branch: "main"},
       {:jido_mcp, github: "agentjido/jido_mcp", branch: "main"},
-      {:jido_shell, github: "agentjido/jido_shell"},
 
       # LLM client
       {:req_llm, "~> 1.6"},

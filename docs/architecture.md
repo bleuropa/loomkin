@@ -119,7 +119,6 @@ Loomkin is built on the [Jido](https://github.com/agentjido/jido) agent ecosyste
 
 - **[jido_action](https://github.com/agentjido/jido_action)** — Every Loomkin tool is a `Jido.Action` with declarative schemas, automatic validation, and composability. No manual parameter parsing, no hand-written JSON Schema.
 - **[jido_ai](https://github.com/agentjido/jido_ai)** — The `Jido.AI.ToolAdapter` bridges our actions to LLM tool schemas in one line. `Jido.AI.Agent` provides the ReAct reasoning strategy that drives the agent loop.
-- **[jido_shell](https://github.com/agentjido/jido_shell)** — Sandboxed shell execution with resource limits (used for the virtual shell backend).
 - **[req_llm](https://github.com/agentjido/req_llm)** — 16+ LLM providers, 665+ models, streaming, tool calling, cost tracking. The engine room of every LLM call Loomkin makes.
 
 The Jido ecosystem saves thousands of lines of code and provides battle-tested infrastructure for the hard problems (tool dispatch, schema validation, provider normalization) so Loomkin can focus on the interesting problems (decision graphs, context intelligence, repo understanding).
