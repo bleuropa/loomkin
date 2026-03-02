@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loomkin — Elixir-Native AI Coding Assistant</title>
+  <meta name="description" content="Reads your codebase, proposes edits, runs commands, commits changes. Built on the BEAM VM with OTP-native multi-agent coordination.">
+  <meta property="og:title" content="Loomkin — Elixir-Native AI Coding Assistant">
+  <meta property="og:description" content="Reads your codebase, proposes edits, runs commands, commits changes. Built on the BEAM VM.">
+  <meta property="og:type" content="website">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='10,2 6,10 15,7' fill='%235B21B6'/%3E%3Cpolygon points='22,2 26,10 17,7' fill='%235B21B6'/%3E%3Cpolygon points='6,10 4,20 12,15' fill='%234B0082'/%3E%3Cpolygon points='26,10 28,20 20,15' fill='%234B0082'/%3E%3Cpolygon points='12,15 16,7 20,15' fill='%237C3AED'/%3E%3Cpolygon points='12,15 16,24 20,15' fill='%234B0082'/%3E%3Ccircle cx='12' cy='14' r='3' fill='%23F59E0B'/%3E%3Ccircle cx='20' cy='14' r='3' fill='%23F59E0B'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0F172A;
+      --bg-elevated: #1E293B;
+      --bg-hover: #253347;
+      --purple: #7C3AED;
+      --purple-deep: #4B0082;
+      --purple-light: #8B5CF6;
+      --violet: #6D28D9;
+      --teal: #14B8A6;
+      --teal-dim: rgba(20, 184, 166, 0.15);
+      --amber: #F59E0B;
+      --amber-dim: rgba(245, 158, 11, 0.15);
+      --text: #F8FAFC;
+      --text-muted: #CBD5E1;
+      --text-dim: #64748B;
+      --border: rgba(124, 58, 237, 0.12);
+      --glow-purple: rgba(124, 58, 237, 0.25);
+      --glow-teal: rgba(20, 184, 166, 0.2);
+    }
+
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ─── NAV ─── */
+    .nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 0.85rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      backdrop-filter: blur(16px) saturate(180%);
+      -webkit-backdrop-filter: blur(16px) saturate(180%);
+      background: rgba(15, 23, 42, 0.75);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      text-decoration: none;
+      color: var(--text);
+    }
+
+    .nav-logo svg { width: 28px; height: 28px; }
+
+    .nav-logo span {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 1.15rem;
+      letter-spacing: -0.02em;
+    }
+
+    .nav-links { display: flex; align-items: center; gap: 1.5rem; }
+
+    .nav-links a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--text); }
+
+    .nav-gh {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(124, 58, 237, 0.06);
+      transition: all 0.2s;
+    }
+
+    .nav-gh:hover {
+      border-color: var(--purple);
+      background: rgba(124, 58, 237, 0.12);
+      color: var(--text) !important;
+    }
+
+    .nav-gh svg { width: 16px; height: 16px; fill: currentColor; }
+
+    /* ─── HERO ─── */
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 6rem 2rem 4rem;
+      overflow: hidden;
+    }
+
+    .hero-glow {
+      position: absolute;
+      width: 600px;
+      height: 600px;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.12;
+      pointer-events: none;
+    }
+
+    .hero-glow--purple {
+      top: 10%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--purple);
+    }
+
+    .hero-glow--teal {
+      bottom: 5%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--teal);
+      opacity: 0.06;
+    }
+
+    /* Background floating threads */
+    .bg-threads {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .bg-thread {
+      position: absolute;
+      width: 1px;
+      background: linear-gradient(180deg, transparent 0%, var(--purple) 30%, var(--teal) 70%, transparent 100%);
+      opacity: 0;
+      animation: threadDrift 28s linear infinite;
+    }
+
+    .bg-thread:nth-child(1) { left: 8%; height: 180px; animation-delay: 0s; }
+    .bg-thread:nth-child(2) { left: 18%; height: 140px; animation-delay: -4s; }
+    .bg-thread:nth-child(3) { left: 32%; height: 200px; animation-delay: -8s; }
+    .bg-thread:nth-child(4) { left: 48%; height: 160px; animation-delay: -12s; }
+    .bg-thread:nth-child(5) { left: 62%; height: 190px; animation-delay: -16s; }
+    .bg-thread:nth-child(6) { left: 75%; height: 150px; animation-delay: -20s; }
+    .bg-thread:nth-child(7) { left: 88%; height: 170px; animation-delay: -24s; }
+    .bg-thread:nth-child(8) { left: 95%; height: 130px; animation-delay: -6s; }
+
+    @keyframes threadDrift {
+      0% { transform: translateY(-220px) rotate(18deg); opacity: 0; }
+      8% { opacity: 0.12; }
+      50% { opacity: 0.18; }
+      92% { opacity: 0.12; }
+      100% { transform: translateY(calc(100vh + 50px)) rotate(18deg); opacity: 0; }
+    }
+
+    .hero-mascot {
+      position: relative;
+      z-index: 2;
+      width: 260px;
+      max-width: 60vw;
+      margin-bottom: 2.5rem;
+    }
+
+    .hero-mascot svg { width: 100%; height: auto; }
+
+    /* Eye glow pulse */
+    .eye-glow {
+      animation: eyePulse 4s ease-in-out infinite;
+    }
+
+    @keyframes eyePulse {
+      0%, 100% { opacity: 0.25; }
+      50% { opacity: 0.55; }
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      text-align: center;
+      max-width: 680px;
+    }
+
+    .hero-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: clamp(3rem, 8vw, 5rem);
+      letter-spacing: -0.04em;
+      line-height: 1;
+      margin-bottom: 1.25rem;
+      background: linear-gradient(135deg, var(--text) 0%, var(--purple-light) 50%, var(--teal) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-tagline {
+      font-size: 1.15rem;
+      color: var(--text-muted);
+      max-width: 540px;
+      margin: 0 auto 2.5rem;
+      font-weight: 400;
+      line-height: 1.7;
+    }
+
+    .hero-ctas {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.75rem;
+      border-radius: 10px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.95rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.25s ease;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn--primary {
+      background: linear-gradient(135deg, var(--purple) 0%, var(--violet) 100%);
+      color: white;
+      box-shadow: 0 4px 20px var(--glow-purple), inset 0 1px 0 rgba(255,255,255,0.1);
+    }
+
+    .btn--primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px var(--glow-purple), inset 0 1px 0 rgba(255,255,255,0.15);
+    }
+
+    .btn--secondary {
+      background: var(--bg-elevated);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+
+    .btn--secondary:hover {
+      border-color: rgba(124, 58, 237, 0.3);
+      color: var(--text);
+      transform: translateY(-2px);
+    }
+
+    .btn--secondary svg { width: 18px; height: 18px; fill: currentColor; }
+
+    /* ─── SECTIONS ─── */
+    .section {
+      padding: 6rem 2rem;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--teal);
+      margin-bottom: 0.75rem;
+    }
+
+    .section-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: clamp(1.75rem, 4vw, 2.5rem);
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 1rem;
+    }
+
+    .section-desc {
+      color: var(--text-muted);
+      max-width: 560px;
+      font-size: 1.05rem;
+      margin-bottom: 3.5rem;
+    }
+
+    /* Divider line between sections */
+    .divider {
+      max-width: 1200px;
+      margin: 0 auto;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border), transparent);
+    }
+
+    /* ─── FEATURES GRID ─── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.25rem;
+    }
+
+    .feature-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.75rem;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--purple), transparent);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .feature-card:hover {
+      border-color: rgba(124, 58, 237, 0.25);
+      background: var(--bg-hover);
+      transform: translateY(-3px);
+    }
+
+    .feature-card:hover::before { opacity: 1; }
+
+    .feature-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1.15rem;
+    }
+
+    .feature-icon--purple { background: rgba(124, 58, 237, 0.12); }
+    .feature-icon--teal { background: var(--teal-dim); }
+    .feature-icon--amber { background: var(--amber-dim); }
+
+    .feature-icon svg { width: 22px; height: 22px; }
+
+    .feature-card h3 {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 1.05rem;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.01em;
+    }
+
+    .feature-card p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }
+
+    /* ─── WHY ELIXIR ─── */
+    .elixir-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.25rem;
+    }
+
+    .elixir-card {
+      padding: 1.5rem;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--bg-elevated);
+      transition: all 0.3s ease;
+    }
+
+    .elixir-card:nth-child(even) {
+      transform: translateY(1.5rem);
+    }
+
+    .elixir-card:hover {
+      border-color: rgba(20, 184, 166, 0.25);
+      transform: translateY(-2px);
+    }
+
+    .elixir-card:nth-child(even):hover {
+      transform: translateY(calc(1.5rem - 2px));
+    }
+
+    .elixir-card h4 {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 0.95rem;
+      margin-bottom: 0.4rem;
+      color: var(--teal);
+    }
+
+    .elixir-card p {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      line-height: 1.55;
+    }
+
+    /* ─── ARCHITECTURE ─── */
+    .arch-container {
+      display: flex;
+      gap: 4rem;
+      align-items: flex-start;
+    }
+
+    .arch-text { flex: 1; }
+
+    .arch-stack {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      max-width: 460px;
+    }
+
+    .arch-layer {
+      padding: 0.9rem 1.25rem;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.88rem;
+      font-weight: 500;
+      position: relative;
+      transition: all 0.25s ease;
+    }
+
+    .arch-layer:hover {
+      transform: scaleX(1.02);
+      z-index: 2;
+    }
+
+    .arch-layer .layer-name { font-weight: 600; }
+    .arch-layer .layer-detail {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      opacity: 0.6;
+    }
+
+    .arch-layer:nth-child(1) { background: linear-gradient(90deg, rgba(20,184,166,0.2), rgba(20,184,166,0.08)); color: var(--teal); }
+    .arch-layer:nth-child(2) { background: linear-gradient(90deg, rgba(20,184,166,0.14), rgba(124,58,237,0.08)); color: #5EEAD4; }
+    .arch-layer:nth-child(3) { background: linear-gradient(90deg, rgba(124,58,237,0.18), rgba(124,58,237,0.06)); color: var(--purple-light); }
+    .arch-layer:nth-child(4) { background: linear-gradient(90deg, rgba(124,58,237,0.22), rgba(124,58,237,0.08)); color: var(--purple-light); }
+    .arch-layer:nth-child(5) { background: linear-gradient(90deg, rgba(109,40,217,0.22), rgba(109,40,217,0.08)); color: #A78BFA; }
+    .arch-layer:nth-child(6) { background: linear-gradient(90deg, rgba(75,0,130,0.3), rgba(75,0,130,0.1)); color: #C4B5FD; }
+    .arch-layer:nth-child(7) { background: linear-gradient(90deg, rgba(75,0,130,0.18), rgba(45,0,96,0.08)); color: var(--text-dim); }
+
+    /* ─── GETTING STARTED ─── */
+    .terminal {
+      background: #0B1120;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      max-width: 720px;
+    }
+
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0.75rem 1rem;
+      background: rgba(30, 41, 59, 0.6);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .terminal-dot--red { background: #EF4444; opacity: 0.7; }
+    .terminal-dot--yellow { background: #F59E0B; opacity: 0.7; }
+    .terminal-dot--green { background: #22C55E; opacity: 0.7; }
+
+    .terminal-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      margin-left: 0.5rem;
+    }
+
+    .terminal-body {
+      padding: 1.25rem 1.5rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      line-height: 1.85;
+      overflow-x: auto;
+    }
+
+    .terminal-body .cmd { color: var(--teal); }
+    .terminal-body .comment { color: var(--text-dim); }
+    .terminal-body .prompt { color: var(--purple-light); user-select: none; }
+    .terminal-body .string { color: var(--amber); }
+
+    /* ─── FOOTER ─── */
+    .footer {
+      padding: 3rem 2rem;
+      text-align: center;
+      border-top: 1px solid var(--border);
+    }
+
+    .footer-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .footer p {
+      color: var(--text-dim);
+      font-size: 0.85rem;
+    }
+
+    .footer a {
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer a:hover { color: var(--purple-light); }
+
+    .footer-owl { width: 32px; height: 32px; opacity: 0.4; margin-bottom: 0.5rem; }
+
+    /* ─── ANIMATIONS ─── */
+    .animate-in {
+      opacity: 0;
+      transform: translateY(28px);
+      transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+                  transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .animate-in.visible {
+      opacity: 1;
+      transform: none;
+    }
+
+    .stagger-1 { transition-delay: 0.05s; }
+    .stagger-2 { transition-delay: 0.1s; }
+    .stagger-3 { transition-delay: 0.15s; }
+    .stagger-4 { transition-delay: 0.2s; }
+    .stagger-5 { transition-delay: 0.25s; }
+    .stagger-6 { transition-delay: 0.3s; }
+    .stagger-7 { transition-delay: 0.35s; }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 960px) {
+      .features-grid { grid-template-columns: repeat(2, 1fr); }
+      .elixir-grid { grid-template-columns: repeat(2, 1fr); }
+      .arch-container { flex-direction: column; gap: 2rem; }
+      .arch-stack { max-width: 100%; }
+      .nav-links a:not(.nav-gh) { display: none; }
+    }
+
+    @media (max-width: 640px) {
+      .features-grid { grid-template-columns: 1fr; }
+      .elixir-grid { grid-template-columns: 1fr; }
+      .elixir-card:nth-child(even) { transform: none; }
+      .elixir-card:nth-child(even):hover { transform: translateY(-2px); }
+      .hero { padding: 5rem 1.25rem 3rem; }
+      .section { padding: 4rem 1.25rem; }
+      .hero-mascot { width: 200px; }
+      .hero-title { font-size: 2.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ══════════ NAV ══════════ -->
+  <nav class="nav">
+    <a href="#" class="nav-logo">
+      <svg viewBox="0 0 32 32" fill="none">
+        <polygon points="10,2 6,10 15,7" fill="#5B21B6"/>
+        <polygon points="22,2 26,10 17,7" fill="#5B21B6"/>
+        <polygon points="6,10 4,20 12,15" fill="#4B0082"/>
+        <polygon points="26,10 28,20 20,15" fill="#4B0082"/>
+        <polygon points="12,15 16,7 20,15" fill="#7C3AED"/>
+        <polygon points="12,15 16,24 20,15" fill="#4B0082"/>
+        <circle cx="12" cy="14" r="3" fill="#F59E0B"/>
+        <circle cx="20" cy="14" r="3" fill="#F59E0B"/>
+      </svg>
+      <span>Loomkin</span>
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#getting-started">Get Started</a>
+      <a href="https://github.com/bleuropa/loomkin" target="_blank" rel="noopener" class="nav-gh">
+        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </nav>
+
+  <!-- ══════════ HERO ══════════ -->
+  <section class="hero">
+    <div class="hero-glow hero-glow--purple"></div>
+    <div class="hero-glow hero-glow--teal"></div>
+
+    <div class="bg-threads">
+      <div class="bg-thread"></div>
+      <div class="bg-thread"></div>
+      <div class="bg-thread"></div>
+      <div class="bg-thread"></div>
+      <div class="bg-thread"></div>
+      <div class="bg-thread"></div>
+      <div class="bg-thread"></div>
+      <div class="bg-thread"></div>
+    </div>
+
+    <!-- ── OWL MASCOT SVG ── -->
+    <div class="hero-mascot">
+      <svg viewBox="0 0 300 470" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <filter id="eyeGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="8" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+          <linearGradient id="threadGrad" gradientUnits="userSpaceOnUse" x1="150" y1="375" x2="150" y2="460">
+            <stop offset="0%" stop-color="#7C3AED"/>
+            <stop offset="100%" stop-color="#14B8A6"/>
+          </linearGradient>
+          <linearGradient id="threadGradL" gradientUnits="userSpaceOnUse" x1="150" y1="375" x2="30" y2="455">
+            <stop offset="0%" stop-color="#7C3AED"/>
+            <stop offset="100%" stop-color="#14B8A6"/>
+          </linearGradient>
+          <linearGradient id="threadGradR" gradientUnits="userSpaceOnUse" x1="150" y1="375" x2="270" y2="455">
+            <stop offset="0%" stop-color="#7C3AED"/>
+            <stop offset="100%" stop-color="#14B8A6"/>
+          </linearGradient>
+        </defs>
+
+        <!-- ── OWL HEAD ── -->
+        <!-- Left ear -->
+        <polygon points="110,10 85,58 130,48" fill="#5B21B6"/>
+        <polygon points="110,10 130,48 150,32" fill="#4B0082"/>
+        <!-- Right ear -->
+        <polygon points="190,10 170,48 215,58" fill="#5B21B6"/>
+        <polygon points="190,10 150,32 170,48" fill="#4B0082"/>
+        <!-- Crown -->
+        <polygon points="130,48 150,32 170,48" fill="#7C3AED"/>
+
+        <!-- Left head side -->
+        <polygon points="85,58 72,110 105,92" fill="#3B0070"/>
+        <polygon points="85,58 105,92 130,48" fill="#4B0082"/>
+        <!-- Right head side -->
+        <polygon points="215,58 228,110 195,92" fill="#3B0070"/>
+        <polygon points="215,58 195,92 170,48" fill="#4B0082"/>
+
+        <!-- Forehead -->
+        <polygon points="130,48 105,92 135,85" fill="#6D28D9"/>
+        <polygon points="170,48 195,92 165,85" fill="#6D28D9"/>
+        <polygon points="130,48 135,85 150,32" fill="#5B21B6"/>
+        <polygon points="170,48 165,85 150,32" fill="#5B21B6"/>
+        <!-- Center forehead highlight -->
+        <polygon points="135,85 150,32 165,85" fill="#8B5CF6"/>
+        <polygon points="135,85 165,85 150,105" fill="#7C3AED"/>
+
+        <!-- Left cheek -->
+        <polygon points="72,110 82,148 105,92" fill="#2D0060"/>
+        <polygon points="105,92 82,148 122,140" fill="#3B0070"/>
+        <!-- Right cheek -->
+        <polygon points="228,110 218,148 195,92" fill="#2D0060"/>
+        <polygon points="195,92 218,148 178,140" fill="#3B0070"/>
+
+        <!-- Under eyes -->
+        <polygon points="105,92 122,140 150,105" fill="#4B0082"/>
+        <polygon points="195,92 178,140 150,105" fill="#4B0082"/>
+
+        <!-- Lower face / beak area -->
+        <polygon points="122,140 150,105 150,158" fill="#5B21B6"/>
+        <polygon points="178,140 150,105 150,158" fill="#6D28D9"/>
+
+        <!-- Chin -->
+        <polygon points="82,148 96,175 122,140" fill="#2D0060"/>
+        <polygon points="122,140 96,175 150,172" fill="#3B0070"/>
+        <polygon points="122,140 150,172 150,158" fill="#4B0082"/>
+        <polygon points="218,148 204,175 178,140" fill="#2D0060"/>
+        <polygon points="178,140 204,175 150,172" fill="#3B0070"/>
+        <polygon points="178,140 150,172 150,158" fill="#4B0082"/>
+
+        <!-- ── OWL BODY ── -->
+        <!-- Neck / shoulders -->
+        <polygon points="96,175 150,172 150,198" fill="#3B0070"/>
+        <polygon points="204,175 150,172 150,198" fill="#3B0070"/>
+        <polygon points="96,175 90,212 150,198" fill="#4B0082"/>
+        <polygon points="204,175 210,212 150,198" fill="#4B0082"/>
+
+        <!-- Wings -->
+        <polygon points="90,212 68,248 100,262" fill="#2D0060"/>
+        <polygon points="210,212 232,248 200,262" fill="#2D0060"/>
+        <polygon points="68,248 82,292 100,262" fill="#3B0070"/>
+        <polygon points="232,248 218,292 200,262" fill="#3B0070"/>
+
+        <!-- Upper body -->
+        <polygon points="90,212 100,262 150,248" fill="#3B0070"/>
+        <polygon points="210,212 200,262 150,248" fill="#3B0070"/>
+        <polygon points="90,212 150,198 150,248" fill="#4B0082"/>
+        <polygon points="210,212 150,198 150,248" fill="#4B0082"/>
+
+        <!-- Lower body -->
+        <polygon points="100,262 118,302 150,288" fill="#2D0060"/>
+        <polygon points="200,262 182,302 150,288" fill="#2D0060"/>
+        <polygon points="100,262 150,248 150,288" fill="#3B0070"/>
+        <polygon points="200,262 150,248 150,288" fill="#3B0070"/>
+
+        <!-- Bottom / feet -->
+        <polygon points="118,302 150,315 150,288" fill="#4B0082"/>
+        <polygon points="182,302 150,315 150,288" fill="#4B0082"/>
+        <!-- Talons -->
+        <polygon points="118,302 125,318 138,314" fill="#3B0070"/>
+        <polygon points="182,302 175,318 162,314" fill="#3B0070"/>
+
+        <!-- ── EYES ── -->
+        <!-- Eye ambient glow -->
+        <circle cx="118" cy="112" r="22" fill="#F59E0B" opacity="0.08"/>
+        <circle cx="182" cy="112" r="22" fill="#F59E0B" opacity="0.08"/>
+        <!-- Eye outer glow (animated) -->
+        <circle class="eye-glow" cx="118" cy="112" r="24" fill="#F59E0B" opacity="0.25" filter="url(#eyeGlow)"/>
+        <circle class="eye-glow" cx="182" cy="112" r="24" fill="#F59E0B" opacity="0.25" filter="url(#eyeGlow)"/>
+        <!-- Iris -->
+        <circle cx="118" cy="112" r="16" fill="#F59E0B"/>
+        <circle cx="182" cy="112" r="16" fill="#F59E0B"/>
+        <!-- Inner iris ring -->
+        <circle cx="118" cy="112" r="12" fill="#D97706" opacity="0.5"/>
+        <circle cx="182" cy="112" r="12" fill="#D97706" opacity="0.5"/>
+        <!-- Pupil -->
+        <circle cx="118" cy="112" r="7" fill="#0F172A"/>
+        <circle cx="182" cy="112" r="7" fill="#0F172A"/>
+        <!-- Highlight -->
+        <circle cx="122" cy="108" r="3.5" fill="#FDE68A" opacity="0.85"/>
+        <circle cx="186" cy="108" r="3.5" fill="#FDE68A" opacity="0.85"/>
+        <circle cx="115" cy="116" r="1.5" fill="#FDE68A" opacity="0.4"/>
+        <circle cx="179" cy="116" r="1.5" fill="#FDE68A" opacity="0.4"/>
+
+        <!-- ── SHUTTLE ── -->
+        <polygon points="150,316 106,346 150,376 194,346" fill="#1E293B"/>
+        <!-- Circuit traces -->
+        <line x1="128" y1="346" x2="172" y2="346" stroke="#7C3AED" stroke-width="0.8" opacity="0.35"/>
+        <line x1="150" y1="324" x2="150" y2="368" stroke="#7C3AED" stroke-width="0.8" opacity="0.35"/>
+        <line x1="128" y1="336" x2="150" y2="346" stroke="#14B8A6" stroke-width="0.5" opacity="0.25"/>
+        <line x1="172" y1="336" x2="150" y2="346" stroke="#14B8A6" stroke-width="0.5" opacity="0.25"/>
+        <line x1="128" y1="356" x2="150" y2="346" stroke="#14B8A6" stroke-width="0.5" opacity="0.25"/>
+        <line x1="172" y1="356" x2="150" y2="346" stroke="#14B8A6" stroke-width="0.5" opacity="0.25"/>
+        <!-- Circuit nodes -->
+        <circle cx="150" cy="346" r="3" fill="#7C3AED" opacity="0.5"/>
+        <circle cx="138" cy="336" r="1.5" fill="#14B8A6" opacity="0.5"/>
+        <circle cx="162" cy="336" r="1.5" fill="#14B8A6" opacity="0.5"/>
+        <circle cx="138" cy="356" r="1.5" fill="#14B8A6" opacity="0.5"/>
+        <circle cx="162" cy="356" r="1.5" fill="#14B8A6" opacity="0.5"/>
+        <circle cx="150" cy="330" r="1" fill="#7C3AED" opacity="0.4"/>
+        <circle cx="150" cy="362" r="1" fill="#7C3AED" opacity="0.4"/>
+
+        <!-- ── THREADS ── -->
+        <!-- Curved threads fanning outward -->
+        <path d="M150,376 Q110,418 38,452" stroke="url(#threadGradL)" stroke-width="1.3" fill="none" opacity="0.45"/>
+        <path d="M150,376 Q120,420 65,458" stroke="url(#threadGradL)" stroke-width="1" fill="none" opacity="0.35"/>
+        <path d="M150,376 Q130,425 95,455" stroke="url(#threadGrad)" stroke-width="0.8" fill="none" opacity="0.4"/>
+        <path d="M150,376 Q140,430 125,462" stroke="url(#threadGrad)" stroke-width="1" fill="none" opacity="0.3"/>
+        <path d="M150,376 Q150,435 150,465" stroke="url(#threadGrad)" stroke-width="1.2" fill="none" opacity="0.35"/>
+        <path d="M150,376 Q160,430 175,462" stroke="url(#threadGrad)" stroke-width="1" fill="none" opacity="0.3"/>
+        <path d="M150,376 Q170,425 205,455" stroke="url(#threadGrad)" stroke-width="0.8" fill="none" opacity="0.4"/>
+        <path d="M150,376 Q180,420 235,458" stroke="url(#threadGradR)" stroke-width="1" fill="none" opacity="0.35"/>
+        <path d="M150,376 Q190,418 262,452" stroke="url(#threadGradR)" stroke-width="1.3" fill="none" opacity="0.45"/>
+
+        <!-- Code-like text on threads -->
+        <text x="58" y="444" fill="#14B8A6" opacity="0.18" font-family="JetBrains Mono, monospace" font-size="5.5" transform="rotate(-32,58,444)">def handle_info</text>
+        <text x="225" y="444" fill="#14B8A6" opacity="0.18" font-family="JetBrains Mono, monospace" font-size="5.5" transform="rotate(32,225,444)">|> Enum.map</text>
+        <text x="115" y="458" fill="#7C3AED" opacity="0.12" font-family="JetBrains Mono, monospace" font-size="5" transform="rotate(-12,115,458)">:ok</text>
+        <text x="172" y="458" fill="#7C3AED" opacity="0.12" font-family="JetBrains Mono, monospace" font-size="5" transform="rotate(12,172,458)">{:noreply</text>
+
+        <!-- Decision graph nodes on threads -->
+        <circle cx="78" cy="435" r="2.5" fill="#14B8A6" opacity="0.3"/>
+        <circle cx="92" cy="445" r="2" fill="#7C3AED" opacity="0.3"/>
+        <circle cx="85" cy="452" r="1.5" fill="#14B8A6" opacity="0.2"/>
+        <line x1="78" y1="435" x2="92" y2="445" stroke="#14B8A6" stroke-width="0.6" opacity="0.25"/>
+        <line x1="92" y1="445" x2="85" y2="452" stroke="#7C3AED" stroke-width="0.5" opacity="0.2"/>
+
+        <circle cx="222" cy="435" r="2.5" fill="#14B8A6" opacity="0.3"/>
+        <circle cx="208" cy="445" r="2" fill="#7C3AED" opacity="0.3"/>
+        <circle cx="215" cy="452" r="1.5" fill="#14B8A6" opacity="0.2"/>
+        <line x1="222" y1="435" x2="208" y2="445" stroke="#14B8A6" stroke-width="0.6" opacity="0.25"/>
+        <line x1="208" y1="445" x2="215" y2="452" stroke="#7C3AED" stroke-width="0.5" opacity="0.2"/>
+      </svg>
+    </div>
+
+    <div class="hero-content">
+      <h1 class="hero-title">Loomkin</h1>
+      <p class="hero-tagline">Elixir-native AI coding assistant. Reads your codebase, proposes edits, runs commands, commits changes &mdash; all on the BEAM.</p>
+      <div class="hero-ctas">
+        <a href="#getting-started" class="btn btn--primary">Get Started</a>
+        <a href="https://github.com/bleuropa/loomkin" target="_blank" rel="noopener" class="btn btn--secondary">
+          <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" fill="currentColor"/></svg>
+          View on GitHub
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ══════════ FEATURES ══════════ -->
+  <section class="section" id="features">
+    <div class="animate-in">
+      <p class="section-label">Capabilities</p>
+      <h2 class="section-title">Everything you need to ship</h2>
+      <p class="section-desc">27 built-in tools, multi-agent teams, and a shared nervous system that routes knowledge in real-time &mdash; backed by OTP fault tolerance.</p>
+    </div>
+
+    <div class="features-grid">
+      <!-- Multi-Agent Teams -->
+      <div class="feature-card animate-in stagger-1">
+        <div class="feature-icon feature-icon--purple">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#7C3AED" stroke-width="1.5">
+            <circle cx="12" cy="6" r="3"/><circle cx="4" cy="18" r="3"/><circle cx="20" cy="18" r="3"/>
+            <line x1="12" y1="9" x2="4" y2="15"/><line x1="12" y1="9" x2="20" y2="15"/>
+            <line x1="4" y1="18" x2="20" y2="18" stroke-dasharray="2 3"/>
+          </svg>
+        </div>
+        <h3>Multi-Agent Teams</h3>
+        <p>OTP-native agents coordinate through a two-layer architecture: the decision graph routes knowledge, Context Keepers preserve full-fidelity memory.</p>
+      </div>
+
+      <!-- 27+ Built-in Tools -->
+      <div class="feature-card animate-in stagger-2">
+        <div class="feature-icon feature-icon--teal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#14B8A6" stroke-width="1.5">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+            <circle cx="6.5" cy="6.5" r="1" fill="#14B8A6"/>
+            <circle cx="17.5" cy="6.5" r="1" fill="#14B8A6"/>
+            <circle cx="6.5" cy="17.5" r="1" fill="#14B8A6"/>
+            <circle cx="17.5" cy="17.5" r="1" fill="#14B8A6"/>
+          </svg>
+        </div>
+        <h3>27+ Built-in Tools</h3>
+        <p>File ops, code search, shell execution, Git, LSP diagnostics, decision tracking &mdash; all as Jido Actions.</p>
+      </div>
+
+      <!-- Decision Graph -->
+      <div class="feature-card animate-in stagger-3">
+        <div class="feature-icon feature-icon--amber">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="1.5">
+            <circle cx="12" cy="4" r="2.5"/>
+            <circle cx="5" cy="12" r="2.5"/>
+            <circle cx="19" cy="12" r="2.5"/>
+            <circle cx="8" cy="20" r="2.5"/>
+            <circle cx="16" cy="20" r="2.5"/>
+            <line x1="12" y1="6.5" x2="5" y2="9.5"/>
+            <line x1="12" y1="6.5" x2="19" y2="9.5"/>
+            <line x1="5" y1="14.5" x2="8" y2="17.5"/>
+            <line x1="19" y1="14.5" x2="16" y2="17.5"/>
+          </svg>
+        </div>
+        <h3>Shared Nervous System</h3>
+        <p>The decision graph auto-traces causality, broadcasts discoveries to relevant agents, and cascades confidence warnings downstream. Graph knows what happened &mdash; Keepers know why.</p>
+      </div>
+
+      <!-- Real-Time Web UI -->
+      <div class="feature-card animate-in stagger-4">
+        <div class="feature-icon feature-icon--teal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#14B8A6" stroke-width="1.5">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <line x1="2" y1="7" x2="22" y2="7"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+            <line x1="6" y1="10.5" x2="14" y2="10.5" stroke-dasharray="3 2"/>
+            <line x1="6" y1="13.5" x2="11" y2="13.5" stroke-dasharray="3 2"/>
+          </svg>
+        </div>
+        <h3>Real-Time Web UI</h3>
+        <p>Phoenix LiveView streams diffs, renders decision graphs, and manages sessions &mdash; zero JavaScript required.</p>
+      </div>
+
+      <!-- 665+ LLM Models -->
+      <div class="feature-card animate-in stagger-5">
+        <div class="feature-icon feature-icon--purple">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#7C3AED" stroke-width="1.5">
+            <rect x="4" y="2" width="16" height="12" rx="2"/>
+            <rect x="6" y="6" width="16" height="12" rx="2" fill="none" opacity="0.5"/>
+            <rect x="2" y="10" width="16" height="12" rx="2" fill="none" opacity="0.3"/>
+            <circle cx="12" cy="8" r="2" fill="#7C3AED" opacity="0.4"/>
+          </svg>
+        </div>
+        <h3>665+ LLM Models</h3>
+        <p>Anthropic, OpenAI, Google, Groq, xAI, Bedrock and more via req_llm. Built-in cost tracking.</p>
+      </div>
+
+      <!-- Ship as Binary -->
+      <div class="feature-card animate-in stagger-6">
+        <div class="feature-icon feature-icon--amber">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="1.5">
+            <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z"/>
+            <line x1="12" y1="12" x2="12" y2="22"/>
+            <line x1="12" y1="12" x2="3" y2="7"/>
+            <line x1="12" y1="12" x2="21" y2="7"/>
+          </svg>
+        </div>
+        <h3>Ship as Binary</h3>
+        <p>Burrito-wrapped single binary for macOS &amp; Linux. No Erlang/Elixir install required.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ══════════ WHY ELIXIR ══════════ -->
+  <section class="section">
+    <div class="animate-in">
+      <p class="section-label">Why the BEAM</p>
+      <h2 class="section-title">Built different, on purpose</h2>
+      <p class="section-desc">The BEAM VM was designed for telecom-grade concurrency and fault tolerance. Turns out that&rsquo;s exactly what AI agents need.</p>
+    </div>
+
+    <div class="elixir-grid">
+      <div class="elixir-card animate-in stagger-1">
+        <h4>Lightweight Processes</h4>
+        <p>Thousands of concurrent tool executions on microsecond-weight BEAM processes. No thread pools, no async/await.</p>
+      </div>
+      <div class="elixir-card animate-in stagger-2">
+        <h4>OTP Supervisors</h4>
+        <p>When a tool crashes, the supervisor restarts it. No try/catch pyramids. The runtime handles failure.</p>
+      </div>
+      <div class="elixir-card animate-in stagger-3">
+        <h4>LiveView</h4>
+        <p>Real-time streaming UI rendered server-side. Diffs, graphs, and sessions update instantly over WebSocket.</p>
+      </div>
+      <div class="elixir-card animate-in stagger-4">
+        <h4>Hot Code Reload</h4>
+        <p>Swap tools, models, and prompts in a running system without dropping a single session or losing state.</p>
+      </div>
+      <div class="elixir-card animate-in stagger-5">
+        <h4>Pattern Matching</h4>
+        <p>LLM response handling via clean pattern matches instead of nested conditionals. Elixir was made for this.</p>
+      </div>
+      <div class="elixir-card animate-in stagger-6">
+        <h4>Built-in Clustering</h4>
+        <p>Distribute agent teams across nodes with native BEAM distribution. No service mesh required.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ══════════ ARCHITECTURE ══════════ -->
+  <section class="section" id="architecture">
+    <div class="arch-container">
+      <div class="arch-text">
+        <div class="animate-in">
+          <p class="section-label">Under the hood</p>
+          <h2 class="section-title">Seven layers deep</h2>
+          <p class="section-desc">A supervision tree that goes from user input to model output, with fault isolation at every boundary.</p>
+        </div>
+      </div>
+
+      <div class="arch-stack animate-in">
+        <div class="arch-layer stagger-1">
+          <span class="layer-name">Interfaces</span>
+          <span class="layer-detail">CLI &middot; LiveView &middot; API</span>
+        </div>
+        <div class="arch-layer stagger-2">
+          <span class="layer-name">Session Layer</span>
+          <span class="layer-detail">GenServer per conversation</span>
+        </div>
+        <div class="arch-layer stagger-3">
+          <span class="layer-name">Tool Layer</span>
+          <span class="layer-detail">27 Jido Actions</span>
+        </div>
+        <div class="arch-layer stagger-4">
+          <span class="layer-name">Intelligence</span>
+          <span class="layer-detail">Causal Tracing &middot; Discovery &middot; Cascades</span>
+        </div>
+        <div class="arch-layer stagger-5">
+          <span class="layer-name">Protocol Layer</span>
+          <span class="layer-detail">MCP + LSP</span>
+        </div>
+        <div class="arch-layer stagger-6">
+          <span class="layer-name">LLM Layer</span>
+          <span class="layer-detail">req_llm &middot; 16+ providers</span>
+        </div>
+        <div class="arch-layer stagger-7">
+          <span class="layer-name">Telemetry</span>
+          <span class="layer-detail">Metrics &middot; Cost tracking</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="divider"></div>
+
+  <!-- ══════════ GETTING STARTED ══════════ -->
+  <section class="section" id="getting-started">
+    <div class="animate-in">
+      <p class="section-label">Quick start</p>
+      <h2 class="section-title">Up and running in minutes</h2>
+      <p class="section-desc">Elixir 1.18+, an API key, and six commands.</p>
+    </div>
+
+    <div class="terminal animate-in stagger-2">
+      <div class="terminal-bar">
+        <div class="terminal-dot terminal-dot--red"></div>
+        <div class="terminal-dot terminal-dot--yellow"></div>
+        <div class="terminal-dot terminal-dot--green"></div>
+        <span class="terminal-title">~/ &mdash; zsh</span>
+      </div>
+      <div class="terminal-body">
+<span class="prompt">$ </span><span class="cmd">git clone</span> https://github.com/bleuropa/loomkin.git
+<span class="prompt">$ </span><span class="cmd">cd</span> loomkin
+<span class="prompt">$ </span><span class="cmd">mix setup</span>                        <span class="comment"># deps + DB</span>
+<span class="prompt">$ </span><span class="cmd">mix phx.server</span>                  <span class="comment"># Web UI on :4200</span>
+<span class="prompt">$ </span><span class="cmd">mix escript.build</span>               <span class="comment"># Build CLI binary</span>
+<span class="prompt">$ </span>./loomkin --project . <span class="string">"refactor the auth module"</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ FOOTER ══════════ -->
+  <footer class="footer">
+    <div class="footer-content">
+      <svg class="footer-owl" viewBox="0 0 32 32" fill="none">
+        <polygon points="10,2 6,10 15,7" fill="#5B21B6"/>
+        <polygon points="22,2 26,10 17,7" fill="#5B21B6"/>
+        <polygon points="6,10 4,20 12,15" fill="#4B0082"/>
+        <polygon points="26,10 28,20 20,15" fill="#4B0082"/>
+        <polygon points="12,15 16,7 20,15" fill="#7C3AED"/>
+        <polygon points="12,15 16,24 20,15" fill="#4B0082"/>
+        <circle cx="12" cy="14" r="3" fill="#F59E0B"/>
+        <circle cx="20" cy="14" r="3" fill="#F59E0B"/>
+      </svg>
+      <p>Built with Elixir, Phoenix, and the BEAM</p>
+      <p><a href="https://github.com/bleuropa/loomkin" target="_blank" rel="noopener">github.com/bleuropa/loomkin</a></p>
+    </div>
+  </footer>
+
+  <!-- ══════════ SCROLL ANIMATIONS ══════════ -->
+  <script>
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    }, {
+      threshold: 0.08,
+      rootMargin: '0px 0px -40px 0px'
+    });
+
+    document.querySelectorAll('.animate-in').forEach(el => observer.observe(el));
+  </script>
+</body>
+</html>
