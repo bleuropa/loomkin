@@ -37,32 +37,44 @@ defmodule Loomkin.Teams.Tasks do
   end
 
   def complete_task(task_id, result) do
-    get_task!(task_id)
-    |> TeamTask.changeset(%{status: :completed, result: result})
-    |> Repo.update()
-    |> tap_ok(fn task ->
-      # Persist accumulated cost/tokens from CostTracker for the owning agent
-      if task.owner do
-        usage = CostTracker.get_agent_usage(task.team_id, task.owner)
-        CostTracker.persist_task_cost(task.id, usage.cost, usage.input_tokens + usage.output_tokens)
-      end
+    task = get_task!(task_id)
 
-      Comms.broadcast_task_event(task.team_id, {:task_completed, task.id, task.owner, result})
-      Context.cache_task(task.team_id, task.id, %{title: task.title, status: :completed, owner: task.owner})
-      record_learning_metric(task, true)
-      auto_schedule_unblocked(task.team_id)
-    end)
+    if task.status in [:completed, :failed] do
+      {:ok, task}
+    else
+      task
+      |> TeamTask.changeset(%{status: :completed, result: result})
+      |> Repo.update()
+      |> tap_ok(fn task ->
+        # Persist accumulated cost/tokens from CostTracker for the owning agent
+        if task.owner do
+          usage = CostTracker.get_agent_usage(task.team_id, task.owner)
+          CostTracker.persist_task_cost(task.id, usage.cost, usage.input_tokens + usage.output_tokens)
+        end
+
+        Comms.broadcast_task_event(task.team_id, {:task_completed, task.id, task.owner, result})
+        Context.cache_task(task.team_id, task.id, %{title: task.title, status: :completed, owner: task.owner})
+        record_learning_metric(task, true)
+        auto_schedule_unblocked(task.team_id)
+      end)
+    end
   end
 
   def fail_task(task_id, reason) do
-    get_task!(task_id)
-    |> TeamTask.changeset(%{status: :failed, result: reason})
-    |> Repo.update()
-    |> tap_ok(fn task ->
-      Comms.broadcast_task_event(task.team_id, {:task_failed, task.id, task.owner, reason})
-      Context.cache_task(task.team_id, task.id, %{title: task.title, status: :failed, owner: task.owner})
-      record_learning_metric(task, false)
-    end)
+    task = get_task!(task_id)
+
+    if task.status in [:completed, :failed] do
+      {:ok, task}
+    else
+      task
+      |> TeamTask.changeset(%{status: :failed, result: reason})
+      |> Repo.update()
+      |> tap_ok(fn task ->
+        Comms.broadcast_task_event(task.team_id, {:task_failed, task.id, task.owner, reason})
+        Context.cache_task(task.team_id, task.id, %{title: task.title, status: :failed, owner: task.owner})
+        record_learning_metric(task, false)
+      end)
+    end
   end
 
   def add_dependency(task_id, depends_on_id, dep_type \\ :blocks) do

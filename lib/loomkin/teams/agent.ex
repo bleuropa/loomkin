@@ -10,7 +10,7 @@ defmodule Loomkin.Teams.Agent do
   use GenServer
 
   alias Loomkin.AgentLoop
-  alias Loomkin.Teams.{Comms, Context, ContextRetrieval, CostTracker, ModelRouter, RateLimiter, Role}
+  alias Loomkin.Teams.{Comms, Context, ContextRetrieval, CostTracker, ModelRouter, PriorityRouter, RateLimiter, Role}
 
   require Logger
 
@@ -30,7 +30,10 @@ defmodule Loomkin.Teams.Agent do
     tokens_used: 0,
     failure_count: 0,
     permission_mode: :auto,
-    pending_permission: nil
+    pending_permission: nil,
+    loop_task: nil,
+    pending_updates: [],
+    priority_queue: []
   ]
 
   # --- Public API ---
@@ -70,6 +73,9 @@ defmodule Loomkin.Teams.Agent do
   def get_history(pid) do
     GenServer.call(pid, :get_history)
   end
+
+  @doc "Cancel an in-progress agent loop."
+  def cancel(pid), do: GenServer.call(pid, :cancel)
 
   @doc """
   Change the role of this agent.
@@ -123,7 +129,12 @@ defmodule Loomkin.Teams.Agent do
   # --- handle_call ---
 
   @impl true
-  def handle_call({:send_message, text}, _from, state) do
+  def handle_call({:send_message, _text}, _from, %{loop_task: {_, _}} = state) do
+    {:reply, {:error, :busy}, state}
+  end
+
+  @impl true
+  def handle_call({:send_message, text}, from, state) do
     state = set_status(state, :working)
 
     user_message = %{role: :user, content: text}
@@ -132,59 +143,13 @@ defmodule Loomkin.Teams.Agent do
     broadcast_team(state, {:agent_status, state.name, :working})
 
     loop_opts = build_loop_opts(state)
+    snapshot = build_snapshot(state)
 
-    case AgentLoop.run(messages, loop_opts) do
-      {:ok, response_text, messages, metadata} ->
-        task_id = state.task && state.task[:id]
+    task = Task.Supervisor.async_nolink(Loomkin.Teams.TaskSupervisor, fn ->
+      run_loop_with_escalation(messages, loop_opts, snapshot)
+    end)
 
-        if task_id do
-          ModelRouter.record_success(state.team_id, state.name, task_id, state.model)
-        end
-
-        state = %{state | messages: messages, failure_count: 0}
-        state = track_usage(state, metadata)
-        state = set_status(state, :idle)
-        {:reply, {:ok, response_text}, state}
-
-      {:error, reason, messages} ->
-        state = %{state | messages: messages}
-        task_id = state.task && state.task[:id]
-
-        escalation_result =
-          if task_id do
-            ModelRouter.record_failure(state.team_id, state.name, task_id)
-
-            if ModelRouter.escalation_enabled?() &&
-                 ModelRouter.should_escalate?(state.team_id, state.name, task_id) &&
-                 state.failure_count < 1 do
-              attempt_escalation(state, messages)
-            else
-              nil
-            end
-          else
-            nil
-          end
-
-        case escalation_result do
-          {:ok, response_text, new_messages, metadata, escalated_state} ->
-            state =
-              escalated_state
-              |> Map.put(:messages, new_messages)
-              |> track_usage(metadata)
-              |> set_status(:idle)
-
-            {:reply, {:ok, response_text}, state}
-
-          _ ->
-            state = set_status(state, :idle)
-            {:reply, {:error, reason}, state}
-        end
-
-      {:pending_permission, pending_info, messages} ->
-        state = %{state | messages: messages, pending_permission: pending_info}
-        state = set_status(state, :waiting_permission)
-        {:reply, {:ok, :pending_permission}, state}
-    end
+    {:noreply, %{state | loop_task: {task, from}}}
   end
 
   @impl true
@@ -214,6 +179,25 @@ defmodule Loomkin.Teams.Agent do
       do_change_role(state, new_role)
     else
       do_change_role(state, new_role)
+    end
+  end
+
+  @impl true
+  def handle_call(:cancel, _from, state) do
+    case state.loop_task do
+      {%Task{} = task, original_from} ->
+        Logger.info("[Agent:#{state.name}] Cancelling agent loop")
+        Task.shutdown(task, :brutal_kill)
+        task_id = state.task && state.task[:id]
+        if original_from, do: GenServer.reply(original_from, {:error, :cancelled})
+        if !original_from && task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, "cancelled")
+        state = %{state | loop_task: nil, pending_updates: [], priority_queue: []}
+        state = set_status(state, :idle)
+        broadcast_team(state, {:agent_status, state.name, :idle})
+        {:reply, :ok, state}
+
+      nil ->
+        {:reply, {:error, :no_task_running}, state}
     end
   end
 
@@ -271,7 +255,151 @@ defmodule Loomkin.Teams.Agent do
     end
   end
 
-  # --- handle_info for PubSub ---
+  # --- Async loop result handlers ---
+
+  @impl true
+  def handle_info({ref, {:loop_ok, text, msgs, meta}}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+
+    case state.loop_task do
+      {%Task{ref: ^ref}, from} ->
+        task_id = state.task && state.task[:id]
+        if task_id, do: ModelRouter.record_success(state.team_id, state.name, task_id, state.model)
+
+        state = %{state | messages: msgs, failure_count: 0, loop_task: nil}
+        state = track_usage(state, meta)
+        state = set_status(state, :idle)
+        broadcast_team(state, {:agent_status, state.name, :idle})
+
+        if from do
+          GenServer.reply(from, {:ok, text})
+        else
+          if task_id, do: Loomkin.Teams.Tasks.complete_task(task_id, text)
+        end
+
+        {:noreply, drain_queues(state)}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({ref, {:loop_ok_escalated, text, msgs, meta, new_model}}, state)
+      when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+
+    case state.loop_task do
+      {%Task{ref: ^ref}, from} ->
+        task_id = state.task && state.task[:id]
+        if task_id, do: ModelRouter.record_success(state.team_id, state.name, task_id, new_model)
+
+        state = %{state | messages: msgs, failure_count: 0, model: new_model, loop_task: nil}
+        state = track_usage(state, meta)
+        state = set_status(state, :idle)
+        broadcast_team(state, {:agent_status, state.name, :idle})
+
+        if from do
+          GenServer.reply(from, {:ok, text})
+        else
+          if task_id, do: Loomkin.Teams.Tasks.complete_task(task_id, text)
+        end
+
+        {:noreply, drain_queues(state)}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({ref, {:loop_error, reason, msgs}}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+
+    case state.loop_task do
+      {%Task{ref: ^ref}, from} ->
+        Logger.error("[Agent:#{state.name}] Loop failed: #{inspect(reason)}")
+        task_id = state.task && state.task[:id]
+
+        state = %{state | messages: msgs, loop_task: nil}
+        state = set_status(state, :idle)
+        broadcast_team(state, {:agent_status, state.name, :idle})
+
+        if from do
+          GenServer.reply(from, {:error, reason})
+        else
+          if task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, inspect(reason))
+        end
+
+        {:noreply, drain_queues(state)}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({ref, {:loop_pending, pending_info, msgs}}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+
+    case state.loop_task do
+      {%Task{ref: ^ref}, from} ->
+        state = %{state | messages: msgs, pending_permission: pending_info, loop_task: nil}
+        state = set_status(state, :waiting_permission)
+
+        if from, do: GenServer.reply(from, {:ok, :pending_permission})
+
+        {:noreply, drain_queues(state)}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) when is_reference(ref) do
+    case state.loop_task do
+      {%Task{ref: ^ref}, from} ->
+        Logger.error("[Agent:#{state.name}] Loop task crashed: #{inspect(reason)}")
+        task_id = state.task && state.task[:id]
+
+        state = %{state | loop_task: nil}
+        state = set_status(state, :idle)
+        broadcast_team(state, {:agent_status, state.name, :idle})
+
+        if from do
+          GenServer.reply(from, {:error, :crashed})
+        else
+          if task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, "crashed: #{inspect(reason)}")
+        end
+
+        {:noreply, drain_queues(state)}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  # --- Priority dispatcher (active during loop) ---
+
+  @impl true
+  def handle_info(msg, %{loop_task: {_task, _from}} = state) when is_tuple(msg) do
+    case PriorityRouter.classify(msg) do
+      {:urgent, _type} ->
+        handle_urgent(msg, state)
+
+      {:high, _type} ->
+        {:noreply, %{state | priority_queue: state.priority_queue ++ [msg]}}
+
+      {:normal, _type} ->
+        {:noreply, %{state | pending_updates: state.pending_updates ++ [msg]}}
+
+      {:ignore, _type} ->
+        {:noreply, state}
+    end
+  end
+
+  # --- handle_info for PubSub (idle path) ---
 
   @impl true
   def handle_info({:context_update, from, payload}, state) do
@@ -341,7 +469,7 @@ defmodule Loomkin.Teams.Agent do
 
   @impl true
   def handle_info({:auto_execute_task, task_id}, state) do
-    if state.status != :idle do
+    if state.status != :idle || state.loop_task != nil do
       Logger.debug("[Agent:#{state.name}] Skipping auto-execute for #{task_id} — status is #{state.status}")
       {:noreply, state}
     else
@@ -355,29 +483,13 @@ defmodule Loomkin.Teams.Agent do
       user_message = %{role: :user, content: description}
       messages = state.messages ++ [user_message]
       loop_opts = build_loop_opts(state)
+      snapshot = build_snapshot(state)
 
-      case AgentLoop.run(messages, loop_opts) do
-        {:ok, response_text, messages, metadata} ->
-          state = %{state | messages: messages, failure_count: 0}
-          state = track_usage(state, metadata)
-          Loomkin.Teams.Tasks.complete_task(task_id, response_text)
-          state = set_status(state, :idle)
-          broadcast_team(state, {:agent_status, state.name, :idle})
-          {:noreply, state}
+      async_task = Task.Supervisor.async_nolink(Loomkin.Teams.TaskSupervisor, fn ->
+        run_loop_with_escalation(messages, loop_opts, snapshot)
+      end)
 
-        {:error, reason, messages} ->
-          Logger.error("[Agent:#{state.name}] Task #{task_id} failed: #{inspect(reason)}")
-          state = %{state | messages: messages}
-          Loomkin.Teams.Tasks.fail_task(task_id, inspect(reason))
-          state = set_status(state, :idle)
-          broadcast_team(state, {:agent_status, state.name, :idle})
-          {:noreply, state}
-
-        {:pending_permission, _info, messages} ->
-          state = %{state | messages: messages}
-          state = set_status(state, :idle)
-          {:noreply, state}
-      end
+      {:noreply, %{state | loop_task: {async_task, nil}}}
     end
   end
 
@@ -677,6 +789,12 @@ defmodule Loomkin.Teams.Agent do
   end
 
   @impl true
+  def handle_info({:inject_system_message, content}, state) do
+    msg = %{role: :system, content: content}
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
   def handle_info(_msg, state) do
     {:noreply, state}
   end
@@ -763,51 +881,144 @@ defmodule Loomkin.Teams.Agent do
     end)
   end
 
-  defp attempt_escalation(state, messages) do
-    old_model = state.model
+  defp run_loop_with_escalation(messages, loop_opts, snapshot) do
+    case AgentLoop.run(messages, loop_opts) do
+      {:ok, text, msgs, meta} ->
+        {:loop_ok, text, msgs, meta}
+
+      {:error, reason, msgs} ->
+        maybe_escalate_in_task(reason, msgs, loop_opts, snapshot)
+
+      {:pending_permission, info, msgs} ->
+        {:loop_pending, info, msgs}
+    end
+  end
+
+  defp maybe_escalate_in_task(reason, messages, loop_opts, snapshot) do
+    task_id = snapshot.task && snapshot.task[:id]
+
+    if task_id do
+      ModelRouter.record_failure(snapshot.team_id, snapshot.name, task_id)
+
+      if ModelRouter.escalation_enabled?() &&
+           ModelRouter.should_escalate?(snapshot.team_id, snapshot.name, task_id) &&
+           snapshot.failure_count < 1 do
+        do_escalate_in_task(reason, messages, loop_opts, snapshot)
+      else
+        {:loop_error, reason, messages}
+      end
+    else
+      {:loop_error, reason, messages}
+    end
+  end
+
+  defp do_escalate_in_task(reason, messages, loop_opts, snapshot) do
+    old_model = snapshot.model
 
     case ModelRouter.escalate(old_model) do
       {:ok, next_model} ->
-        Logger.info("[Agent:#{state.name}] Escalating from #{old_model} to #{next_model}")
+        Logger.info("[Agent:#{snapshot.name}] Escalating from #{old_model} to #{next_model}")
 
-        CostTracker.record_escalation(state.team_id, to_string(state.name), old_model, next_model)
+        CostTracker.record_escalation(
+          snapshot.team_id,
+          to_string(snapshot.name),
+          old_model,
+          next_model
+        )
 
         :telemetry.execute([:loomkin, :team, :escalation], %{}, %{
-          team_id: state.team_id,
-          agent_name: to_string(state.name),
+          team_id: snapshot.team_id,
+          agent_name: to_string(snapshot.name),
           from_model: old_model,
           to_model: next_model
         })
 
-        broadcast_team(state, {:agent_escalation, state.name, old_model, next_model})
+        Phoenix.PubSub.broadcast(
+          Loomkin.PubSub,
+          "team:#{snapshot.team_id}",
+          {:agent_escalation, snapshot.name, old_model, next_model}
+        )
 
-        state = %{state | model: next_model, failure_count: state.failure_count + 1}
-        loop_opts = build_loop_opts(state)
+        new_loop_opts = Keyword.put(loop_opts, :model, next_model)
 
-        case AgentLoop.run(messages, loop_opts) do
-          {:ok, response_text, new_messages, metadata} ->
-            task_id = state.task && state.task[:id]
-
-            if task_id do
-              ModelRouter.record_success(state.team_id, state.name, task_id, next_model)
-            end
-
-            {:ok, response_text, new_messages, metadata, %{state | failure_count: 0}}
+        case AgentLoop.run(messages, new_loop_opts) do
+          {:ok, text, msgs, meta} ->
+            {:loop_ok_escalated, text, msgs, meta, next_model}
 
           {:error, _reason, _msgs} ->
-            nil
+            {:loop_error, reason, messages}
 
           {:pending_permission, _info, _msgs} ->
-            nil
+            {:loop_error, reason, messages}
         end
 
       :max_reached ->
-        nil
+        {:loop_error, reason, messages}
 
       :disabled ->
-        nil
+        {:loop_error, reason, messages}
     end
   end
+
+  defp build_snapshot(state) do
+    %{
+      team_id: state.team_id,
+      name: state.name,
+      model: state.model,
+      task: state.task,
+      failure_count: state.failure_count,
+      role: state.role
+    }
+  end
+
+  defp drain_queues(state) do
+    Enum.each(state.priority_queue, fn msg -> send(self(), msg) end)
+    Enum.each(state.pending_updates, fn msg -> send(self(), msg) end)
+    %{state | priority_queue: [], pending_updates: []}
+  end
+
+  defp handle_urgent({:abort_task, _reason}, state) do
+    case state.loop_task do
+      {%Task{} = task, from} ->
+        Task.shutdown(task, :brutal_kill)
+        task_id = state.task && state.task[:id]
+        if task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, "aborted")
+        if from, do: GenServer.reply(from, {:error, :aborted})
+        state = %{state | loop_task: nil, pending_updates: [], priority_queue: []}
+        state = set_status(state, :idle)
+        broadcast_team(state, {:agent_status, state.name, :idle})
+        {:noreply, state}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  defp handle_urgent({:budget_exceeded, _scope}, state) do
+    case state.loop_task do
+      {%Task{} = task, from} ->
+        Task.shutdown(task, :brutal_kill)
+        task_id = state.task && state.task[:id]
+        if from, do: GenServer.reply(from, {:error, :budget_exceeded})
+        if !from && task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, "budget exceeded")
+        state = %{state | loop_task: nil, pending_updates: [], priority_queue: []}
+        state = set_status(state, :idle)
+        broadcast_team(state, {:agent_status, state.name, :idle})
+        {:noreply, state}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  defp handle_urgent({:file_conflict, details}, state) do
+    # Queue as an internal message so it survives the loop result handler
+    # (which overwrites state.messages with the task-returned msgs).
+    inject = {:inject_system_message, "[URGENT] File conflict detected: #{inspect(details)}"}
+    {:noreply, %{state | priority_queue: state.priority_queue ++ [inject]}}
+  end
+
+  defp handle_urgent(_msg, state), do: {:noreply, state}
 
   defp build_loop_opts(state) do
     team_id = state.team_id
