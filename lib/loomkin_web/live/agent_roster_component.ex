@@ -93,7 +93,7 @@ defmodule LoomkinWeb.AgentRosterComponent do
             <%!-- Row 2: current task --%>
             <div class="mt-0.5 pl-4">
               <span class={"text-xs #{status_text_color(agent.status)}"}>
-                {agent.current_task || status_label(agent.status)}
+                {Map.get(agent, :current_task) || status_label(agent.status)}
               </span>
             </div>
           </button>
