@@ -123,6 +123,11 @@ defmodule Loomkin.Teams.Manager do
     ]
 
     child_opts =
+      if opts[:role_config],
+        do: Keyword.put(child_opts, :role_config, opts[:role_config]),
+        else: child_opts
+
+    child_opts =
       if opts[:permission_mode],
         do: Keyword.put(child_opts, :permission_mode, opts[:permission_mode]),
         else: child_opts

@@ -98,7 +98,13 @@ defmodule Loomkin.Teams.Agent do
 
     permission_mode = Keyword.get(opts, :permission_mode, :auto)
 
-    case Role.get(role) do
+    role_result =
+      case Keyword.get(opts, :role_config) do
+        %Role{} = config -> {:ok, config}
+        _ -> Role.get(role)
+      end
+
+    case role_result do
       {:ok, role_config} ->
         model = Keyword.get(opts, :model) || ModelRouter.default_model()
 
@@ -169,6 +175,8 @@ defmodule Loomkin.Teams.Agent do
 
   @impl true
   def handle_call({:change_role, new_role, opts}, _from, state) do
+    role_config = opts[:role_config]
+
     if opts[:require_approval] do
       # Send approval request to lead and wait synchronously
       request_id = Ecto.UUID.generate()
@@ -176,9 +184,9 @@ defmodule Loomkin.Teams.Agent do
 
       # For now, pending approval proceeds immediately — the lead can reject via PubSub
       # A full interactive approval flow would require async state, which we avoid here.
-      do_change_role(state, new_role)
+      do_change_role(state, new_role, role_config)
     else
-      do_change_role(state, new_role)
+      do_change_role(state, new_role, role_config)
     end
   end
 
@@ -834,36 +842,43 @@ defmodule Loomkin.Teams.Agent do
 
   # --- Private ---
 
-  defp do_change_role(state, new_role) do
-    case Role.get(new_role) do
+  defp do_change_role(state, new_role, role_config_override) do
+    role_result =
+      case role_config_override do
+        %Role{} = config -> {:ok, config}
+        _ -> Role.get(new_role)
+      end
+
+    case role_result do
       {:ok, role_config} ->
         old_role = state.role
+        effective_role_name = role_config.name || new_role
 
         state = %{state |
-          role: new_role,
+          role: effective_role_name,
           role_config: role_config,
           tools: role_config.tools
         }
 
         # Update Registry metadata
         Registry.update_value(Loomkin.Teams.AgentRegistry, {state.team_id, state.name}, fn _old ->
-          %{role: new_role, status: state.status}
+          %{role: effective_role_name, status: state.status}
         end)
 
         # Update Context agent info
         Context.register_agent(state.team_id, state.name, %{
-          role: new_role,
+          role: effective_role_name,
           status: state.status,
           model: state.model
         })
 
         # Log role transition to decision graph
-        log_role_change_to_graph(state.team_id, state.name, old_role, new_role)
+        log_role_change_to_graph(state.team_id, state.name, old_role, effective_role_name)
 
         # Broadcast role change to team
-        broadcast_team(state, {:role_changed, state.name, old_role, new_role})
+        broadcast_team(state, {:role_changed, state.name, old_role, effective_role_name})
 
-        Logger.info("[Agent:#{state.name}] Role changed from #{old_role} to #{new_role}")
+        Logger.info("[Agent:#{state.name}] Role changed from #{old_role} to #{effective_role_name}")
 
         {:reply, :ok, state}
 

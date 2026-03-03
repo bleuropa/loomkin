@@ -8,6 +8,8 @@ defmodule Loomkin.Teams.Role do
   for all built-in roles — meaning "use whatever the user configured."
   """
 
+  require Logger
+
   defstruct [:name, :model_tier, :tools, :system_prompt, :budget_limit]
 
   @type t :: %__MODULE__{
@@ -249,6 +251,7 @@ defmodule Loomkin.Teams.Role do
       - Break down the user's request into clear, actionable subtasks before delegating
       - Include acceptance criteria, file paths, and expected output format for each subtask
       - Assign subtasks to the most appropriate role (researcher, coder, reviewer, tester)
+      - When decomposing tasks, you can use the standard roles (researcher, coder, reviewer, tester) or describe custom specialist roles. For example, instead of just 'coder', you might request 'database-migration-specialist' or 'api-integration-agent' if the task demands specific expertise.
       - Never do research or coding yourself — delegate to the researcher or coder
 
       ## Active Coordination
@@ -416,6 +419,234 @@ defmodule Loomkin.Teams.Role do
   @spec built_in_roles() :: [atom()]
   def built_in_roles do
     Map.keys(@built_in_role_data)
+  end
+
+  # -- Tool catalog descriptions (for LLM-based role generation) --
+
+  @tool_descriptions %{
+    "file_read" => "Read the contents of a file",
+    "file_write" => "Create or overwrite a file",
+    "file_edit" => "Make targeted edits to an existing file",
+    "file_search" => "Search for files by name or glob pattern",
+    "content_search" => "Search file contents by text or regex",
+    "directory_list" => "List files and directories in a path",
+    "shell" => "Execute shell commands",
+    "git" => "Run git operations",
+    "decision_log" => "Log a decision, finding, or rationale",
+    "decision_query" => "Query the decision log for past entries",
+    "sub_agent" => "Spawn a short-lived sub-agent for a focused task",
+    "lsp_diagnostics" => "Get LSP diagnostics (compiler warnings/errors)"
+  }
+
+  @lead_tool_names MapSet.new([
+    "team_spawn",
+    "team_assign",
+    "team_smart_assign",
+    "team_progress",
+    "team_dissolve"
+  ])
+
+  @peer_tool_names [
+    "peer_message",
+    "peer_discovery",
+    "peer_claim_region",
+    "peer_review",
+    "peer_create_task",
+    "peer_complete_task",
+    "peer_ask_question",
+    "peer_answer_question",
+    "peer_forward_question",
+    "peer_change_role",
+    "context_retrieve",
+    "search_keepers",
+    "context_offload",
+    "ask_user"
+  ]
+
+  # Max estimated tokens for the role-specific prompt portion (chars / 4)
+  @max_prompt_chars 2048 * 4
+
+  @doc """
+  Build a catalog of available tools with descriptions, grouped by category.
+
+  Returns a map of `%{category => [%{name: String.t(), description: String.t()}]}`.
+  Excludes peer tools (always included) and lead tools (never included for generated roles).
+  """
+  @spec build_tool_catalog() :: %{String.t() => [%{name: String.t(), description: String.t()}]}
+  def build_tool_catalog do
+    %{
+      "read" => catalog_entries(["file_read", "file_search", "content_search", "directory_list"]),
+      "write" => catalog_entries(["file_write", "file_edit"]),
+      "exec" => catalog_entries(["shell", "git"]),
+      "decision" => catalog_entries(["decision_log", "decision_query"]),
+      "other" => catalog_entries(["sub_agent", "lsp_diagnostics"])
+    }
+  end
+
+  defp catalog_entries(names) do
+    Enum.map(names, fn name ->
+      %{name: name, description: Map.get(@tool_descriptions, name, name)}
+    end)
+  end
+
+  @doc """
+  Generate a custom role spec by calling the LLM.
+
+  Takes a task description and optional keyword options:
+    - `:team_context` - additional context about the team/project (string)
+
+  Returns `{:ok, %Role{}}` or `{:error, reason}`.
+
+  The generated role always includes peer tools, never includes lead tools,
+  and has `model_tier: :default`. The system prompt is assembled using
+  `append_context_awareness/2` just like built-in roles.
+  """
+  @spec generate(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def generate(task_description, opts \\ []) do
+    model = Loomkin.Teams.ModelRouter.default_model()
+    catalog = build_tool_catalog()
+    team_context = Keyword.get(opts, :team_context, "")
+
+    catalog_text =
+      catalog
+      |> Enum.map(fn {category, tools} ->
+        tool_lines = Enum.map_join(tools, "\n", fn t -> "  - #{t.name}: #{t.description}" end)
+        "#{category}:\n#{tool_lines}"
+      end)
+      |> Enum.join("\n")
+
+    team_context_block =
+      if team_context != "" do
+        "\n\nAdditional team context:\n#{team_context}"
+      else
+        ""
+      end
+
+    system_msg =
+      ReqLLM.Context.system("""
+      You are a role designer for an AI agent team. Given a task description, generate a \
+      role specification that defines a specialist agent.
+
+      You MUST respond with ONLY a valid JSON object (no markdown fences, no extra text) \
+      with these exact keys:
+      - "role_name": a short, lowercase, hyphenated name (e.g. "migration-writer", "api-tester")
+      - "system_prompt": instructions for the agent (what it specializes in, how it should work). \
+        Keep this focused and under 1500 characters.
+      - "tools": an array of tool name strings selected from the catalog below
+
+      ## Available Tools (select only what the role needs)
+
+      #{catalog_text}
+
+      Note: Peer communication tools are always included automatically. \
+      Team management tools (team_spawn, team_assign, etc.) are never available for generated roles.
+      """)
+
+    user_msg =
+      ReqLLM.Context.user("""
+      Task description: #{task_description}#{team_context_block}
+
+      Generate a role specification for an agent that can handle this task.
+      Respond with ONLY the JSON object.
+      """)
+
+    messages = [system_msg, user_msg]
+
+    try do
+      case Loomkin.LLMRetry.with_retry([max_retries: 2], fn ->
+             ReqLLM.generate_text(model, messages, [])
+           end) do
+        {:ok, response} ->
+          text = ReqLLM.Response.classify(response).text || ""
+          parse_and_validate_role(text)
+
+        {:error, reason} ->
+          Logger.error("Role.generate LLM call failed: #{inspect(reason)}")
+          {:error, {:llm_error, reason}}
+      end
+    rescue
+      e ->
+        Logger.error("Role.generate raised: #{inspect(e)}")
+        {:error, {:llm_error, e}}
+    end
+  end
+
+  @doc false
+  def parse_and_validate_role(text) do
+    # Strip markdown fences if present
+    cleaned =
+      text
+      |> String.trim()
+      |> String.replace(~r/\A```(?:json)?\s*/, "")
+      |> String.replace(~r/\s*```\z/, "")
+      |> String.trim()
+
+    case Jason.decode(cleaned) do
+      {:ok, %{"role_name" => name, "system_prompt" => prompt, "tools" => tools}}
+      when is_binary(name) and is_binary(prompt) and is_list(tools) ->
+        build_validated_role(name, prompt, tools)
+
+      {:ok, _other} ->
+        {:error, :invalid_role_format}
+
+      {:error, _decode_err} ->
+        {:error, :json_parse_error}
+    end
+  end
+
+  defp build_validated_role(name_str, prompt, tool_names) do
+    # Validate role name — must be a safe atom-compatible string
+    role_name =
+      name_str
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9_-]/, "_")
+      |> String.to_atom()
+
+    # Cap the role-specific prompt at ~2048 tokens
+    capped_prompt =
+      if byte_size(prompt) > @max_prompt_chars do
+        Logger.warning("Role.generate: prompt truncated from #{byte_size(prompt)} to #{@max_prompt_chars} chars")
+        String.slice(prompt, 0, @max_prompt_chars)
+      else
+        prompt
+      end
+
+    # Validate and resolve tools
+    {valid_tools, invalid_tools} =
+      tool_names
+      |> Enum.uniq()
+      |> Enum.split_with(fn name ->
+        is_binary(name) and Map.has_key?(@tool_name_to_module, name) and
+          not MapSet.member?(@lead_tool_names, name)
+      end)
+
+    if invalid_tools != [] do
+      Logger.warning("Role.generate: dropped invalid/lead tools: #{inspect(invalid_tools)}")
+    end
+
+    # Resolve tool name strings to modules
+    resolved_tool_modules =
+      Enum.map(valid_tools, fn name -> Map.fetch!(@tool_name_to_module, name) end)
+
+    # Always include peer tools, never include lead tools
+    all_tool_modules =
+      (resolved_tool_modules ++ @peer_tools)
+      |> Enum.uniq()
+
+    # Assemble the full prompt using append_context_awareness (same as built-in roles)
+    full_prompt = append_context_awareness(role_name, capped_prompt)
+
+    role = %__MODULE__{
+      name: role_name,
+      model_tier: :default,
+      tools: all_tool_modules,
+      system_prompt: full_prompt,
+      budget_limit: nil
+    }
+
+    Logger.info("Role.generate: created role #{role_name} with tools #{inspect(valid_tools ++ @peer_tool_names)}")
+
+    {:ok, role}
   end
 
   @doc "Load a custom role from a config map (e.g. from .loomkin.toml [teams.roles.*])."
