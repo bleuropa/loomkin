@@ -73,7 +73,7 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
     end
   end
 
-  describe "reply button" do
+  describe "card rendering" do
     defp make_event(type, agent, opts \\ %{}) do
       Map.merge(
         %{
@@ -98,20 +98,22 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
       })
     end
 
-    test "message card shows reply button for agent" do
-      html = render_with_events([make_event(:message, "researcher", %{metadata: %{from: "researcher", to: "Team"}})])
-      assert html =~ "Reply to researcher"
-      assert html =~ "reply_to_agent"
-    end
+    test "no reply buttons on any card type" do
+      events = [
+        make_event(:message, "researcher", %{metadata: %{from: "researcher", to: "Team"}}),
+        make_event(:tool_call, "coder", %{metadata: %{tool_name: "read_file"}}),
+        make_event(:task_created, "system", %{metadata: %{title: "Implement feature"}}),
+        make_event(:discovery, "researcher"),
+        make_event(:error, "coder"),
+        make_event(:thinking, "coder"),
+        make_event(:channel_message, "bridge-bot", %{metadata: %{channel: :telegram}}),
+        make_event(:question, "researcher", %{metadata: %{from: "researcher"}}),
+        make_event(:agent_spawn, "coder", %{metadata: %{agent_name: "coder", role: "coder"}})
+      ]
 
-    test "tool_call card shows reply button" do
-      html = render_with_events([make_event(:tool_call, "coder", %{metadata: %{tool_name: "read_file"}})])
-      assert html =~ "Reply to coder"
-    end
-
-    test "task_created card hides reply button for system agent" do
-      html = render_with_events([make_event(:task_created, "system", %{metadata: %{title: "Implement feature"}})])
-      refute html =~ "Reply to system"
+      html = render_with_events(events)
+      refute html =~ "reply_to_agent"
+      refute html =~ "Reply"
     end
 
     test "task_created card renders title and created label" do
@@ -120,44 +122,16 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
       assert html =~ "Implement feature"
     end
 
-    test "task_complete card shows reply button" do
-      html = render_with_events([make_event(:task_complete, "coder", %{metadata: %{title: "Fix bug"}})])
-      assert html =~ "Reply to coder"
+    test "message card renders agent and content" do
+      html = render_with_events([make_event(:message, "researcher", %{metadata: %{from: "researcher", to: "Team"}})])
+      assert html =~ "researcher"
+      assert html =~ "test content"
     end
 
-    test "discovery card shows reply button" do
-      html = render_with_events([make_event(:discovery, "researcher")])
-      assert html =~ "Reply to researcher"
-    end
-
-    test "error card shows reply button" do
-      html = render_with_events([make_event(:error, "coder")])
-      assert html =~ "Reply to coder"
-    end
-
-    test "channel_message card shows reply button" do
-      html = render_with_events([make_event(:channel_message, "bridge-bot", %{metadata: %{channel: :telegram, sender: "user123"}})])
-      assert html =~ "Reply to bridge-bot"
-    end
-
-    test "reply button hidden when agent is You" do
-      html = render_with_events([make_event(:message, "You", %{metadata: %{from: "You", to: "Team"}})])
-      refute html =~ "Reply to You"
-    end
-
-    test "reply button hidden when agent is system" do
-      html = render_with_events([make_event(:message, "system", %{metadata: %{from: "system"}})])
-      refute html =~ "Reply to system"
-    end
-
-    test "agent_spawn card does not show reply button" do
-      html = render_with_events([make_event(:agent_spawn, "coder", %{metadata: %{agent_name: "coder", role: "coder"}})])
-      refute html =~ "reply_to_agent"
-    end
-
-    test "thinking card does not show reply button" do
-      html = render_with_events([make_event(:thinking, "coder")])
-      refute html =~ "reply_to_agent"
+    test "tool_call card renders tool name" do
+      html = render_with_events([make_event(:tool_call, "coder", %{metadata: %{tool_name: "Bash"}})])
+      assert html =~ "Bash"
+      assert html =~ "coder"
     end
   end
 
@@ -234,7 +208,7 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
       })
     end
 
-    test "tool_call card with long result renders collapsed by default" do
+    test "tool_call card with result renders collapsed by default" do
       long_result = String.duplicate("x", 600)
 
       event =
@@ -244,11 +218,12 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
 
       html = render_expand_events([event])
 
-      assert html =~ "Show full result"
+      # Result is collapsed behind a toggle (no preview shown)
+      assert html =~ "Result"
       refute html =~ "Collapse"
     end
 
-    test "tool_call card with short result does not show expand button" do
+    test "tool_call card with short result also shows collapsed toggle" do
       event =
         make_expandable_event(:tool_call, "coder", %{
           metadata: %{tool_name: "Read", result: "short"}
@@ -256,7 +231,8 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
 
       html = render_expand_events([event])
 
-      refute html =~ "Show full result"
+      # All results are collapsed regardless of length
+      assert html =~ "Result"
       refute html =~ "Collapse"
     end
 
@@ -294,7 +270,177 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
       }
 
       html = render_expand_events([event])
-      assert html =~ "Show full result"
+      assert html =~ "Result"
+    end
+  end
+
+  describe "visual hierarchy per event type" do
+    defp make_typed_event(type, agent, opts \\ %{}) do
+      Map.merge(
+        %{
+          id: Ecto.UUID.generate(),
+          type: type,
+          agent: agent,
+          content: "test content",
+          timestamp: DateTime.utc_now(),
+          metadata: Map.get(opts, :metadata, %{})
+        },
+        opts
+      )
+    end
+
+    defp render_typed_events(events) do
+      render_component(LoomkinWeb.TeamActivityComponent, %{
+        id: "test-activity",
+        team_id: @team_id,
+        events: events,
+        known_agents: Enum.map(events, & &1.agent) |> Enum.uniq()
+      })
+    end
+
+    test "tool_call card has violet border and tool badge" do
+      html = render_typed_events([make_typed_event(:tool_call, "coder", %{metadata: %{tool_name: "Bash"}})])
+      assert html =~ "border-violet-500/40"
+      assert html =~ "bg-violet-400/20"
+      assert html =~ "Bash"
+    end
+
+    test "tool_call card shows file basename in header" do
+      html = render_typed_events([make_typed_event(:tool_call, "coder", %{metadata: %{tool_name: "Read", file_path: "/app/lib/foo.ex"}})])
+      assert html =~ "foo.ex"
+    end
+
+    test "message card has emerald border and shows recipient" do
+      html = render_typed_events([make_typed_event(:message, "lead", %{metadata: %{from: "lead", to: "researcher"}})])
+      assert html =~ "border-emerald-500/40"
+      assert html =~ "researcher"
+    end
+
+    test "discovery card has yellow border and star icon" do
+      html = render_typed_events([make_typed_event(:discovery, "researcher")])
+      assert html =~ "border-yellow-500/40"
+      assert html =~ "discovery"
+      # Yellow-tinted background
+      assert html =~ "bg-yellow-950/10"
+    end
+
+    test "error card has red border and warning icon" do
+      html = render_typed_events([make_typed_event(:error, "coder")])
+      assert html =~ "border-red-500/60"
+      assert html =~ "bg-red-950/30"
+      assert html =~ "error"
+    end
+
+    test "error card with short message shows it inline in header" do
+      html = render_typed_events([make_typed_event(:error, "coder", %{content: "Timeout"})])
+      # Short errors are displayed inline in the header row
+      assert html =~ "Timeout"
+    end
+
+    test "question card has sky border and highlighted background" do
+      html = render_typed_events([make_typed_event(:question, "researcher")])
+      assert html =~ "border-sky-500/50"
+      assert html =~ "bg-sky-950/15"
+      assert html =~ "question"
+    end
+
+    test "agent_spawn card shows role inline" do
+      html = render_typed_events([make_typed_event(:agent_spawn, "coder", %{metadata: %{agent_name: "coder", role: "developer"}})])
+      assert html =~ "coder"
+      assert html =~ "joined"
+      assert html =~ "developer"
+    end
+
+    test "task_complete card has green tinted background" do
+      html = render_typed_events([make_typed_event(:task_complete, "coder", %{metadata: %{title: "Done"}})])
+      assert html =~ "bg-green-950/20"
+      assert html =~ "done"
+    end
+
+    test "thinking card shows muted thinking indicator" do
+      html = render_typed_events([make_typed_event(:thinking, "coder")])
+      assert html =~ "border-indigo-500/30"
+      assert html =~ "thinking"
+    end
+
+    test "context_offload card shows content and topic inline" do
+      html = render_typed_events([make_typed_event(:context_offload, "coder", %{content: "Stored context", metadata: %{topic: "architecture"}})])
+      assert html =~ "offload"
+      assert html =~ "Stored context"
+      assert html =~ "architecture"
+    end
+
+    test "long message content is truncated with show more" do
+      long_content = String.duplicate("Hello world. ", 30)
+      html = render_typed_events([make_typed_event(:message, "lead", %{content: long_content, metadata: %{from: "lead"}})])
+      assert html =~ "show more"
+      assert html =~ "line-clamp-3"
+    end
+  end
+
+  describe "card density and responsiveness" do
+    defp make_dense_event(type, agent, opts) do
+      Map.merge(
+        %{
+          id: Ecto.UUID.generate(),
+          type: type,
+          agent: agent,
+          content: "test content",
+          timestamp: DateTime.utc_now(),
+          metadata: Map.get(opts, :metadata, %{})
+        },
+        opts
+      )
+    end
+
+    defp render_dense_events(events) do
+      render_component(LoomkinWeb.TeamActivityComponent, %{
+        id: "test-activity",
+        team_id: @team_id,
+        events: events,
+        known_agents: Enum.map(events, & &1.agent) |> Enum.uniq()
+      })
+    end
+
+    test "filter bar uses horizontal scroll instead of wrapping" do
+      html = render_dense_events([])
+      assert html =~ "overflow-x-auto"
+    end
+
+    test "card headers use min-w-0 for flex truncation" do
+      html = render_dense_events([make_dense_event(:tool_call, "coder", %{metadata: %{tool_name: "Read"}})])
+      assert html =~ "min-w-0"
+    end
+
+    test "agent names use flex-shrink-0 to prevent collapsing" do
+      html = render_dense_events([make_dense_event(:message, "lead", %{metadata: %{from: "lead"}})])
+      assert html =~ "flex-shrink-0"
+    end
+
+    test "content text uses break-words for narrow viewports" do
+      html = render_dense_events([make_dense_event(:message, "lead", %{content: "A long message", metadata: %{from: "lead"}})])
+      assert html =~ "break-words"
+    end
+
+    test "tool_call file path shows only basename" do
+      html = render_dense_events([make_dense_event(:tool_call, "coder", %{metadata: %{tool_name: "Edit", file_path: "/very/long/path/to/some/deeply/nested/file.ex"}})])
+      # Should show basename, not the full path in the header
+      assert html =~ "file.ex"
+    end
+
+    test "task card with long title truncates" do
+      long_title = String.duplicate("very long task title ", 10)
+      html = render_dense_events([make_dense_event(:task_assigned, "lead", %{metadata: %{title: long_title, owner: "coder"}})])
+      # Title should have truncate class
+      assert html =~ "truncate"
+      assert html =~ "coder"
+    end
+
+    test "error card with long content uses break-words" do
+      long_content = String.duplicate("Error: something went wrong with a very long explanation ", 5)
+      html = render_dense_events([make_dense_event(:error, "coder", %{content: long_content})])
+      # Long error content is shown in body (not header), and uses break-words
+      assert html =~ "break-words"
     end
   end
 end
