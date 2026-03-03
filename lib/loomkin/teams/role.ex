@@ -13,7 +13,7 @@ defmodule Loomkin.Teams.Role do
   defstruct [:name, :model_tier, :tools, :system_prompt, :budget_limit]
 
   @type t :: %__MODULE__{
-          name: atom(),
+          name: atom() | String.t(),
           model_tier: atom(),
           tools: [module()],
           system_prompt: String.t(),
@@ -595,12 +595,13 @@ defmodule Loomkin.Teams.Role do
   end
 
   defp build_validated_role(name_str, prompt, tool_names) do
-    # Validate role name — must be a safe atom-compatible string
+    # Validate and sanitize role name — kept as a string to avoid
+    # exhausting the VM atom table from unbounded LLM output
     role_name =
       name_str
       |> String.downcase()
       |> String.replace(~r/[^a-z0-9_-]/, "_")
-      |> String.to_atom()
+      |> String.slice(0, 64)
 
     # Cap the role-specific prompt at ~2048 tokens
     capped_prompt =

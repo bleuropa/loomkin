@@ -87,7 +87,7 @@ defmodule Loomkin.Tools.TeamSpawnDynamicTest do
 
       agents = Manager.list_agents(team_id)
       agent = Enum.find(agents, &(&1.name == "migrator"))
-      assert agent.role == :"migration-specialist"
+      assert agent.role == "migration-specialist"
     end
 
     test "spawned agent with role_config has correct tools", %{team_id: team_id} do

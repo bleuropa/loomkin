@@ -78,6 +78,9 @@ defmodule Loomkin.Tools.TeamSpawn do
                   {:error, reason} -> "  - #{name} (#{fallback}): failed - #{inspect(reason)}"
                 end
             end
+
+          {:error, msg} ->
+            "  - #{name} (#{inspect(role)}): failed - #{msg}"
         end
       end)
 
@@ -108,7 +111,7 @@ defmodule Loomkin.Tools.TeamSpawn do
     end
   end
 
-  defp resolve_role(_), do: {:built_in, :researcher}
+  defp resolve_role(invalid), do: {:error, "Invalid role: expected a string or atom, got #{inspect(invalid)}"}
 
   # Keyword-based fuzzy match for descriptive role strings.
   # Returns the best matching built-in role atom, or nil if no match.

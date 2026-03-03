@@ -78,7 +78,7 @@ defmodule Loomkin.Teams.RoleGenerateTest do
         })
 
       assert {:ok, %Role{} = role} = Role.parse_and_validate_role(json)
-      assert role.name == :"migration-writer"
+      assert role.name == "migration-writer"
       assert role.model_tier == :default
       assert role.budget_limit == nil
       assert is_binary(role.system_prompt)
@@ -92,7 +92,7 @@ defmodule Loomkin.Teams.RoleGenerateTest do
       ```
       """
 
-      assert {:ok, %Role{name: :"api-tester"}} = Role.parse_and_validate_role(json)
+      assert {:ok, %Role{name: "api-tester"}} = Role.parse_and_validate_role(json)
     end
 
     test "filters out unknown tool names" do
@@ -191,9 +191,8 @@ defmodule Loomkin.Teams.RoleGenerateTest do
         })
 
       assert {:ok, %Role{} = role} = Role.parse_and_validate_role(json)
-      name_str = Atom.to_string(role.name)
       # Should be lowercased and special chars replaced
-      assert name_str == "my_fancy_role____2_0"
+      assert role.name == "my_fancy_role____2_0"
     end
 
     test "deduplicates tool names" do
