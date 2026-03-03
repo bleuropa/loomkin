@@ -10,6 +10,10 @@ defmodule LoomkinWeb.Router do
     plug :put_secure_browser_headers
   end
 
+  scope "/api/webhooks" do
+    post "/telegram", Loomkin.Channels.Telegram.Webhook, :handle
+  end
+
   scope "/", LoomkinWeb do
     pipe_through :browser
 

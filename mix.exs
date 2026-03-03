@@ -96,6 +96,10 @@ defmodule Loomkin.MixProject do
       {:dns_cluster, "~> 0.1"},
       {:bandit, "~> 1.6"},
 
+      # Channel adapters
+      {:telegex, "~> 1.8"},
+      {:nostrum, "~> 0.10", runtime: false},
+
       # Binary packaging
       {:burrito, "~> 1.0"},
 

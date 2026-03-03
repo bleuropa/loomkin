@@ -37,6 +37,29 @@ defmodule Loomkin.Config do
     shell: %{
       allowlist_enabled: false,
       allowlist: ~w(mix elixir iex git cat head tail ls find grep rg sed awk echo mkdir cp mv touch node npm npx yarn bun cargo rustc go python python3 pip ruby gem)
+    },
+    channels: %{
+      telegram: %{
+        enabled: false,
+        bot_token: nil,
+        webhook_url: nil,
+        # Path where the webhook is mounted in Phoenix router — must match router.ex.
+        # Used when registering the webhook with Telegram via Telegex.set_webhook/1.
+        webhook_path: "/api/webhooks/telegram",
+        secret_token: nil,
+        # "webhook" (default) or "polling" for local dev without ngrok
+        mode: "webhook",
+        # When set, auto-creates a binding for this chat on startup
+        chat_id: nil,
+        allowed_chat_ids: [],
+        allow_user_ids: []
+      },
+      discord: %{
+        enabled: false,
+        bot_token: nil,
+        guild_ids: [],
+        allow_user_ids: []
+      }
     }
   }
 
@@ -106,7 +129,7 @@ defmodule Loomkin.Config do
           @defaults
       end
 
-    store_config(config)
+    store_config(resolve_env_vars(config))
     :ets.insert(@table, {:project_path, project_path})
 
     Phoenix.PubSub.broadcast(
@@ -132,14 +155,15 @@ defmodule Loomkin.Config do
   end
 
   # Known config keys that may appear in .loomkin.toml
-  @known_keys ~w(model permissions context decisions mcp web lsp repo shell
+  @known_keys ~w(model permissions context decisions mcp web lsp repo shell channels
     default weak architect editor auto_approve max_repo_map_tokens max_decision_context_tokens
     reserved_output_tokens enabled enforce_pre_edit auto_log_commits
     allowlist_enabled allowlist
     servers name command args url port server_enabled watch_enabled
     teams budget max_per_team_usd max_per_agent_usd max_per_agent_tokens provider_limits
     models grunt standard expert architect escalation
-    templates agents role count)a
+    templates agents role count
+    telegram discord bot_token webhook_url webhook_path secret_token mode chat_id allowed_chat_ids allow_user_ids guild_ids)a
 
   # Pre-compute a string→atom lookup map so atomize_keys never raises
   @known_key_map Map.new(@known_keys, fn atom -> {Atom.to_string(atom), atom} end)
@@ -157,6 +181,20 @@ defmodule Loomkin.Config do
 
   defp atomize_keys(list) when is_list(list), do: Enum.map(list, &atomize_keys/1)
   defp atomize_keys(value), do: value
+
+  defp resolve_env_vars(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {key, resolve_env_vars(value)} end)
+  end
+
+  defp resolve_env_vars(list) when is_list(list), do: Enum.map(list, &resolve_env_vars/1)
+
+  defp resolve_env_vars("${" <> _ = value) do
+    Regex.replace(~r/\$\{(\w+)\}/, value, fn _, var_name ->
+      System.get_env(var_name) || ""
+    end)
+  end
+
+  defp resolve_env_vars(value), do: value
 
   defp deep_merge(base, override) when is_map(base) and is_map(override) do
     Map.merge(base, override, fn

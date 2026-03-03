@@ -47,7 +47,10 @@ defmodule Loomkin.Application do
         Loomkin.RepoIntel.Watcher,
 
         # MCP client connections (starts empty, reacts to :config_loaded)
-        Loomkin.MCP.ClientSupervisor
+        Loomkin.MCP.ClientSupervisor,
+
+        # Channel adapters (Telegram, Discord)
+        Loomkin.Channels.Supervisor
       ] ++
         maybe_start_mcp_server() ++
         maybe_start_endpoint()

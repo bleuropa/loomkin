@@ -40,7 +40,8 @@ defmodule LoomkinWeb.TeamActivityComponent do
     agent_spawn: %{label: "joined", bg: "bg-teal-400/20", text: "text-teal-400", border: "border-teal-500/40"},
     context_offload: %{label: "offload", bg: "bg-amber-400/20", text: "text-amber-400", border: "border-amber-500/40"},
     question: %{label: "question", bg: "bg-sky-400/20", text: "text-sky-400", border: "border-sky-500/40"},
-    answer: %{label: "answer", bg: "bg-sky-400/20", text: "text-sky-400", border: "border-sky-500/40"}
+    answer: %{label: "answer", bg: "bg-sky-400/20", text: "text-sky-400", border: "border-sky-500/40"},
+    channel_message: %{label: "channel", bg: "bg-cyan-400/20", text: "text-cyan-400", border: "border-cyan-500/40"}
   }
 
   @impl true
@@ -655,6 +656,38 @@ defmodule LoomkinWeb.TeamActivityComponent do
     """
   end
 
+  defp render_event_card(assigns, %{type: :channel_message} = event) do
+    meta = Map.get(event, :metadata, %{})
+    channel = meta[:channel]
+    direction = meta[:direction]
+
+    assigns =
+      assigns
+      |> assign(:event, event)
+      |> assign(:channel, channel)
+      |> assign(:direction, direction)
+
+    ~H"""
+    <div class="rounded-lg bg-gray-900/50 hover:bg-gray-900/80 transition border-l-2 border-cyan-500/40 overflow-hidden">
+      <div class="flex items-center gap-2 px-3 py-2">
+        <span class="w-2 h-2 rounded-full flex-shrink-0" style={"background-color: #{agent_color(@event.agent)}"}></span>
+        <span class="text-xs font-semibold text-gray-200">
+          {@event.agent}
+        </span>
+        <span class="text-xs px-1.5 py-0.5 rounded font-medium bg-cyan-400/20 text-cyan-400">
+          {channel_icon(@channel)} {if @direction == :inbound, do: "received", else: "sent"}
+        </span>
+        <span class="text-xs text-gray-500 ml-auto flex-shrink-0">
+          {relative_time(@event.timestamp)}
+        </span>
+      </div>
+      <div class="px-3 pb-2.5">
+        <p class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">{@event.content}</p>
+      </div>
+    </div>
+    """
+  end
+
   # Fallback for any unknown event type
   defp render_event_card(assigns, event) do
     config = Map.get(@type_config, event.type, %{label: to_string(event.type), bg: "bg-gray-400/20", text: "text-gray-400", border: "border-gray-500/40"})
@@ -761,6 +794,10 @@ defmodule LoomkinWeb.TeamActivityComponent do
 
   defp tool_icon(_), do: "&#9881;"
 
+  defp channel_icon(:telegram), do: Phoenix.HTML.raw("&#9992;")
+  defp channel_icon(:discord), do: Phoenix.HTML.raw("&#127918;")
+  defp channel_icon(_), do: Phoenix.HTML.raw("&#128172;")
+
   defp format_tokens(n) when is_integer(n) and n >= 1000, do: "#{Float.round(n / 1000, 1)}k"
   defp format_tokens(n) when is_integer(n), do: to_string(n)
   defp format_tokens(_), do: "?"
@@ -790,7 +827,8 @@ defmodule LoomkinWeb.TeamActivityComponent do
       {:thinking, @type_config.thinking},
       {:agent_spawn, @type_config.agent_spawn},
       {:context_offload, @type_config.context_offload},
-      {:question, @type_config.question}
+      {:question, @type_config.question},
+      {:channel_message, @type_config.channel_message}
     ]
   end
 end
