@@ -92,4 +92,51 @@ defmodule Loomkin.Tools.FileEditTest do
     assert {:error, msg} = FileEdit.run(params, %{project_path: proj})
     assert msg =~ "outside the project directory"
   end
+
+  @tag :tmp_dir
+  test "warns when editing a file not in read_files set", %{project_path: proj} do
+    params = %{
+      "file_path" => "editable.txt",
+      "old_string" => "Hello, Elixir!",
+      "new_string" => "Hello, Loomkin!"
+    }
+
+    context = %{project_path: proj, read_files: MapSet.new()}
+
+    assert {:ok, %{result: msg}} = FileEdit.run(params, context)
+    assert msg =~ "Warning: You are editing a file you haven't read yet"
+    assert msg =~ "1 occurrence"
+  end
+
+  @tag :tmp_dir
+  test "no warning when file is in read_files set", %{project_path: proj} do
+    full_path = Path.join(proj, "editable.txt")
+
+    params = %{
+      "file_path" => "editable.txt",
+      "old_string" => "Hello, Elixir!",
+      "new_string" => "Hello, Loomkin!"
+    }
+
+    context = %{project_path: proj, read_files: MapSet.new([full_path])}
+
+    assert {:ok, %{result: msg}} = FileEdit.run(params, context)
+    refute msg =~ "Warning"
+    assert msg =~ "1 occurrence"
+  end
+
+  @tag :tmp_dir
+  test "no warning when read_files is not in context", %{project_path: proj} do
+    params = %{
+      "file_path" => "editable.txt",
+      "old_string" => "Hello, Elixir!",
+      "new_string" => "Hello, Loomkin!"
+    }
+
+    context = %{project_path: proj}
+
+    assert {:ok, %{result: msg}} = FileEdit.run(params, context)
+    refute msg =~ "Warning"
+    assert msg =~ "1 occurrence"
+  end
 end

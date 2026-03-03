@@ -46,6 +46,8 @@ defmodule Loomkin.AgentLoop do
           | {:pending_permission, map(), [map()]}
   def run(messages, opts) do
     config = build_config(opts)
+    # Initialize read-file tracker for read-before-write enforcement
+    Process.put(:loomkin_read_files, MapSet.new())
     run_with_rate_limit_retry(messages, config, 0)
   end
 
@@ -340,7 +342,15 @@ defmodule Loomkin.AgentLoop do
                 context
               end
 
+            # Pass read_files set to tools for read-before-write enforcement
+            read_files = Process.get(:loomkin_read_files, MapSet.new())
+            context = Map.put(context, :read_files, read_files)
+
             result_text = run_tool(tool_module, tool_args, context, config)
+
+            # Track successful file_read calls
+            maybe_track_read_file(tool_name, tool_args, effective_path, result_text)
+
             messages = record_tool_result(messages, config, tool_name, tool_call_id, result_text)
             {:ok, messages}
 
@@ -494,6 +504,24 @@ defmodule Loomkin.AgentLoop do
         {:pending_permission, new_pending_info, messages}
     end
   end
+
+  # -- Read-file tracking (read-before-write enforcement) ----------------------
+
+  defp maybe_track_read_file(tool_name, tool_args, project_path, result_text)
+       when tool_name in ["file_read", :file_read] do
+    # Only track successful reads (result doesn't start with "Error:")
+    if result_text && not String.starts_with?(result_text, "Error:") do
+      file_path = tool_args["file_path"] || tool_args[:file_path]
+
+      if file_path && project_path do
+        full_path = Path.expand(file_path, project_path)
+        read_files = Process.get(:loomkin_read_files, MapSet.new())
+        Process.put(:loomkin_read_files, MapSet.put(read_files, full_path))
+      end
+    end
+  end
+
+  defp maybe_track_read_file(_tool_name, _tool_args, _project_path, _result_text), do: :ok
 
   # -- Helpers -----------------------------------------------------------------
 

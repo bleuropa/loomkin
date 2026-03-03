@@ -26,15 +26,31 @@ defmodule Loomkin.Tools.FileEdit do
 
     full_path = safe_path!(file_path, project_path)
 
+    warning = read_before_write_warning(full_path, context)
+
     with {:ok, content} <- read_file(full_path),
          :ok <- validate_match(content, old_string, replace_all),
          new_content <- apply_replacement(content, old_string, new_string, replace_all),
          :ok <- File.write(full_path, new_content) do
       count = occurrence_count(content, old_string)
-      {:ok, %{result: "Replaced #{count} occurrence(s) in #{full_path}"}}
+      result_msg = "Replaced #{count} occurrence(s) in #{full_path}"
+      {:ok, %{result: warning <> result_msg}}
     end
   rescue
     e in ArgumentError -> {:error, e.message}
+  end
+
+  defp read_before_write_warning(full_path, context) do
+    read_files = Map.get(context, :read_files, nil)
+
+    cond do
+      # No tracking available (e.g. direct tool call outside agent loop)
+      is_nil(read_files) -> ""
+      MapSet.member?(read_files, full_path) -> ""
+      true ->
+        "Warning: You are editing a file you haven't read yet. " <>
+          "Consider reading it first to understand the existing code.\n"
+    end
   end
 
   defp read_file(path) do
