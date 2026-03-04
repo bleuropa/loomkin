@@ -89,7 +89,7 @@ defmodule Loomkin.LLM do
     oauth_map = ProviderRegistry.oauth_provider_map()
 
     case String.split(model_spec, ":", parts: 2) do
-      [provider, model_id] ->
+      [provider, _model_id] ->
         case Map.get(oauth_map, provider) do
           nil ->
             # No OAuth variant for this provider
@@ -99,8 +99,20 @@ defmodule Loomkin.LLM do
             provider_atom = String.to_existing_atom(provider)
 
             if TokenStore.get_access_token(provider_atom) != nil do
-              Logger.debug("Upgrading #{provider}:#{model_id} to OAuth provider")
-              "#{oauth_provider}:#{model_id}"
+              Logger.debug("Upgrading #{provider} to OAuth provider")
+
+              # Resolve the model via the base provider (LLMDB knows "anthropic:*"
+              # but not "anthropic_oauth:*"), then override .provider so ReqLLM
+              # routes to the registered OAuth adapter module.
+              case ReqLLM.model(model_spec) do
+                {:ok, model} ->
+                  oauth_atom = String.to_existing_atom(oauth_provider)
+                  %{model | provider: oauth_atom}
+
+                {:error, _reason} ->
+                  # Model resolution failed — pass through unchanged
+                  model_spec
+              end
             else
               model_spec
             end
