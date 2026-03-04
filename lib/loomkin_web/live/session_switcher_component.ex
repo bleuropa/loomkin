@@ -19,11 +19,16 @@ defmodule LoomkinWeb.SessionSwitcherComponent do
       <button
         phx-click="toggle_dropdown"
         phx-target={@myself}
-        class="flex items-center gap-2 bg-gray-800/60 hover:bg-gray-800 border border-gray-700/50 rounded-lg px-3 py-1.5 text-xs text-gray-300 transition-all duration-200 max-w-[200px]"
+        class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-all duration-200 press-down max-w-[180px]"
+        style={"border: 1px solid " <> if(@dropdown_open, do: "var(--border-brand)", else: "var(--border-subtle)") <> "; color: var(--text-secondary);"}
       >
-        <.icon name="hero-clock-mini" class="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
+        <span style="color: var(--text-muted);"><.icon name="hero-clock-mini" class="w-3 h-3 flex-shrink-0" /></span>
         <span class="truncate">{current_session_label(@session_id, @sessions)}</span>
-        <svg class={"w-3 h-3 text-gray-500 flex-shrink-0 transition-transform duration-200 " <> if(@dropdown_open, do: "rotate-180", else: "")} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg
+          class={"w-3 h-3 flex-shrink-0 transition-transform duration-200 " <> if(@dropdown_open, do: "rotate-180", else: "")}
+          style="color: var(--text-muted);"
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
         </svg>
       </button>
@@ -31,13 +36,15 @@ defmodule LoomkinWeb.SessionSwitcherComponent do
       <%!-- Dropdown --%>
       <div
         :if={@dropdown_open}
-        class="absolute right-0 top-full mt-1 w-64 bg-gray-900 border border-gray-700/50 rounded-xl shadow-2xl z-30 overflow-hidden animate-scale-in"
+        class="absolute right-0 top-full mt-1.5 w-60 card-elevated overflow-hidden animate-scale-in"
+        style="z-index: 100;"
       >
         <%!-- New session option --%>
         <button
           phx-click="new_session"
           phx-target={@myself}
-          class="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-violet-400 hover:bg-violet-500/10 transition-colors border-b border-gray-800"
+          class="w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors interactive"
+          style="color: var(--text-brand); border-bottom: 1px solid var(--border-subtle);"
         >
           <.icon name="hero-plus-mini" class="w-3.5 h-3.5" />
           <span class="font-medium">New Session</span>
@@ -50,21 +57,19 @@ defmodule LoomkinWeb.SessionSwitcherComponent do
             phx-click="select_session"
             phx-value-id={session.id}
             phx-target={@myself}
-            class={"w-full flex items-center gap-2 px-4 py-2 text-xs transition-colors " <>
-              if(session.id == @session_id,
-                do: "bg-violet-500/10 text-violet-400",
-                else: "text-gray-400 hover:bg-gray-800/60 hover:text-gray-300")}
+            class="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors interactive"
+            style={if session.id == @session_id, do: "background: rgba(124, 58, 237, 0.1); color: var(--text-brand);", else: "color: var(--text-secondary);"}
           >
             <span :if={session.id == @session_id} class="flex-shrink-0">
-              <.icon name="hero-check-mini" class="w-3.5 h-3.5 text-violet-400" />
+              <span style="color: var(--text-brand);"><.icon name="hero-check-mini" class="w-3 h-3" /></span>
             </span>
-            <span :if={session.id != @session_id} class="w-3.5 flex-shrink-0" />
+            <span :if={session.id != @session_id} class="w-3 flex-shrink-0" />
             <span class="truncate flex-1 text-left">{session_label(session)}</span>
-            <span class="text-[10px] text-gray-600 flex-shrink-0">{relative_time(session)}</span>
+            <span class="text-[10px] flex-shrink-0" style="color: var(--text-muted);">{relative_time(session)}</span>
           </button>
         </div>
 
-        <div :if={@sessions == []} class="px-4 py-3 text-xs text-gray-600 text-center">
+        <div :if={@sessions == []} class="px-3 py-3 text-xs text-center" style="color: var(--text-muted);">
           No previous sessions
         </div>
       </div>

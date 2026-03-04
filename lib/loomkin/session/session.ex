@@ -161,7 +161,7 @@ defmodule Loomkin.Session do
 
   @impl true
   def handle_call({:send_message, text}, from, state) do
-    Logger.info("[Session] send_message session=#{state.id} model=#{state.model}")
+    Logger.debug("[Session] send_message session=#{state.id} model=#{state.model}")
     state = update_status(state, :thinking)
 
     # Run architect in an async Task so the GenServer stays responsive
@@ -226,7 +226,7 @@ defmodule Loomkin.Session do
 
   @impl true
   def handle_info({:team_created, team_id}, state) do
-    Logger.info("[Session] Backing team created: #{team_id} for session #{state.id}")
+    Logger.info("[Session] :team_created received team_id=#{team_id} session=#{state.id} — broadcasting :team_available")
     broadcast(state.id, {:team_available, state.id, team_id})
     {:noreply, Map.put(state, :team_id, team_id)}
   end

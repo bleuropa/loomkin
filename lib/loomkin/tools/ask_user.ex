@@ -11,7 +11,6 @@ defmodule Loomkin.Tools.AskUser do
         "The question appears in the mission control UI and the agent blocks until " <>
         "the user selects an answer. Use this when you need human input to proceed.",
     schema: [
-      team_id: [type: :string, required: true, doc: "Team ID"],
       question: [type: :string, required: true, doc: "The question to ask the user"],
       options: [type: {:list, :string}, required: true, doc: "List of answer options to present"]
     ]
@@ -23,7 +22,7 @@ defmodule Loomkin.Tools.AskUser do
   @doc false
   @impl true
   def run(params, context) do
-    team_id = param!(params, :team_id)
+    team_id = param!(context, :team_id)
     question = param!(params, :question)
     options = param!(params, :options)
     agent_name = param!(context, :agent_name)

@@ -1,9 +1,11 @@
 defmodule Loomkin.Models do
   @moduledoc """
-  Dynamic model discovery based on configured API keys and LLMDB catalog.
+  Dynamic model discovery based on configured API keys, OAuth connections,
+  and the LLMDB catalog.
 
-  Checks which provider API keys are present in the environment,
-  then queries LLMDB for chat-capable models from those providers.
+  Checks which provider API keys are present in the environment and which
+  providers have active OAuth connections, then queries LLMDB for
+  chat-capable models from those providers.
   Users can also type any `provider:model` string directly.
   """
 
@@ -27,15 +29,20 @@ defmodule Loomkin.Models do
     azure: {"Azure", "AZURE_API_KEY"}
   }
 
+  # Providers that support OAuth authentication.
+  # Derived from the central ProviderRegistry.
+  defp oauth_capable_providers do
+    Loomkin.Auth.ProviderRegistry.oauth_capable_providers()
+  end
+
   @doc """
   Returns `[{provider_name, [{model_label, "provider:model_id"}, ...]}]`
-  for all providers that have an API key set in the environment.
+  for all providers that have an API key set or an active OAuth connection.
   """
   def available_models do
     @providers
-    |> Enum.filter(fn {_provider, {_name, env_var}} ->
-      key = System.get_env(env_var)
-      key != nil and key != ""
+    |> Enum.filter(fn {provider, {_name, _env_var}} ->
+      provider_available?(provider)
     end)
     |> Enum.map(fn {provider, {display_name, _env_var}} ->
       models = fetch_provider_models(provider)
@@ -49,25 +56,48 @@ defmodule Loomkin.Models do
   def known_providers, do: @providers
 
   @doc """
-  Returns the API key status for a given provider atom.
+  Returns the authentication status for a given provider atom.
 
-  Returns `{:set, env_var_name}` if the key is present and non-empty,
-  or `{:missing, env_var_name}` if it is absent or empty.
+  Returns:
+  - `{:set, env_var_name}` if the API key is present and non-empty
+  - `{:oauth, :connected}` if no API key but an active OAuth token exists
+  - `{:oauth, :disconnected}` if the provider supports OAuth but no token is active
+  - `{:missing, env_var_name}` if no API key and provider doesn't support OAuth
   """
   def api_key_status(provider_atom) do
     case Map.get(@providers, provider_atom) do
       {_name, env_var} ->
         key = System.get_env(env_var)
 
-        if key != nil and key != "" do
-          {:set, env_var}
-        else
-          {:missing, env_var}
+        cond do
+          key != nil and key != "" ->
+            {:set, env_var}
+
+          oauth_connected?(provider_atom) ->
+            {:oauth, :connected}
+
+          oauth_capable?(provider_atom) ->
+            {:oauth, :disconnected}
+
+          true ->
+            {:missing, env_var}
         end
 
       nil ->
         {:missing, "UNKNOWN_API_KEY"}
     end
+  end
+
+  @doc "Returns true if the provider supports OAuth authentication."
+  def oauth_capable?(provider_atom) do
+    MapSet.member?(oauth_capable_providers(), provider_atom)
+  end
+
+  @doc "Returns true if the provider has an active OAuth connection."
+  def oauth_connected?(provider_atom) do
+    Loomkin.LLM.oauth_active?(Atom.to_string(provider_atom))
+  rescue
+    _ -> false
   end
 
   @doc "Returns the env var name for a given provider atom."
@@ -85,9 +115,8 @@ defmodule Loomkin.Models do
   """
   def available_models_enriched do
     @providers
-    |> Enum.filter(fn {_provider, {_name, env_var}} ->
-      key = System.get_env(env_var)
-      key != nil and key != ""
+    |> Enum.filter(fn {provider, {_name, _env_var}} ->
+      provider_available?(provider)
     end)
     |> Enum.map(fn {provider, {display_name, _env_var}} ->
       models = fetch_provider_models_enriched(provider)
@@ -98,10 +127,10 @@ defmodule Loomkin.Models do
   end
 
   @doc """
-  Returns ALL providers with their key status and models (including providers without keys).
+  Returns ALL providers with their auth status and models (including providers without keys).
 
   Returns `[{provider_atom, display_name, key_status, [{label, value, ctx_label}]}]`
-  sorted with keyed providers first, then alphabetical.
+  sorted with keyed/OAuth-connected providers first, then alphabetical.
   """
   def all_providers_enriched do
     @providers
@@ -111,19 +140,32 @@ defmodule Loomkin.Models do
       models =
         case status do
           {:set, _} -> fetch_provider_models_enriched(provider)
-          {:missing, _} -> []
+          {:oauth, :connected} -> fetch_provider_models_enriched(provider)
+          _ -> []
         end
 
       {provider, display_name, status, models}
     end)
     |> Enum.sort_by(fn {_p, name, status, _m} ->
-      # Providers with keys first, then alphabetical
-      priority = case status do
-        {:set, _} -> 0
-        {:missing, _} -> 1
-      end
+      # Providers with keys or OAuth first, then OAuth-capable, then rest
+      priority =
+        case status do
+          {:set, _} -> 0
+          {:oauth, :connected} -> 0
+          {:oauth, :disconnected} -> 1
+          {:missing, _} -> 2
+        end
+
       {priority, name}
     end)
+  end
+
+  defp provider_available?(provider) do
+    case api_key_status(provider) do
+      {:set, _} -> true
+      {:oauth, :connected} -> true
+      _ -> false
+    end
   end
 
   defp fetch_provider_models(provider) do
@@ -160,7 +202,8 @@ defmodule Loomkin.Models do
     {date, model.id}
   end
 
-  defp format_context_window(%{limits: %{context: ctx}}) when is_integer(ctx) and ctx >= 1_000_000 do
+  defp format_context_window(%{limits: %{context: ctx}})
+       when is_integer(ctx) and ctx >= 1_000_000 do
     "#{div(ctx, 1_000_000)}M ctx"
   end
 

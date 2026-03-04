@@ -54,39 +54,53 @@ defmodule LoomkinWeb.AgentRosterComponent do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-56 w-full flex-col border-b border-gray-800 bg-gray-950 xl:h-full xl:w-56 xl:border-b-0 xl:border-r">
+    <div class="flex h-56 w-full flex-col bg-surface-1 xl:h-full xl:w-64 xl:border-r border-subtle">
       <%!-- Team Header --%>
-      <div class="px-3 py-3 border-b border-gray-800 flex items-center justify-between">
-        <div class="flex items-center gap-1.5 min-w-0">
-          <span class="text-sm font-semibold text-violet-400 truncate">{@team_id}</span>
+      <div class="px-4 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="text-sm font-semibold text-brand truncate font-mono">{@team_id}</span>
           {channel_badges(assigns)}
         </div>
-        <span class="text-xs bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded-full font-mono">
+        <span class="badge text-[10px] tabular-nums">
           {length(@agents)}
         </span>
       </div>
 
+      <div class="divider"></div>
+
       <%!-- Agents Section --%>
       <div class="flex-1 overflow-y-auto">
-        <div class="px-3 py-2">
-          <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Agents</h3>
+        <div class="px-4 pt-3 pb-1">
+          <h3 class="text-[10px] font-semibold text-muted uppercase tracking-widest">Agents</h3>
         </div>
 
-        <div :if={@agents == []} class="px-3 py-4 text-center text-xs text-gray-600">
-          No agents spawned
+        <div :if={@agents == []} class="px-4 py-8 text-center">
+          <div class="text-muted text-xs">No agents spawned</div>
+          <div class="text-[10px] mt-1" style="color: var(--text-muted); opacity: 0.5;">
+            Waiting for team initialization...
+          </div>
         </div>
 
-        <div class="space-y-0.5 px-1.5">
+        <div class="space-y-1 px-2 pb-2">
           <div
             :for={agent <- @agents}
             phx-click="focus_agent"
             phx-value-agent={agent.name}
             phx-target={@myself}
-            class={"w-full text-left px-2 py-2 rounded-md transition cursor-pointer hover:bg-gray-900 #{if @focused_agent == agent.name, do: "bg-gray-900 border border-violet-500/50", else: "border border-transparent"}"}
+            class={[
+              "group rounded-lg px-3 py-2 cursor-pointer interactive press-down",
+              if(@focused_agent == agent.name,
+                do: "card-brand",
+                else: "border border-transparent hover:bg-surface-2"
+              )
+            ]}
           >
             <%!-- Row 1: status dot + name + role badge + reply button --%>
-            <div class="flex items-center gap-2">
-              <span class={"w-2 h-2 rounded-full flex-shrink-0 #{status_dot_class(agent.status)}"}>
+            <div class="flex items-center gap-2.5">
+              <span class={[
+                "w-2 h-2 rounded-full flex-shrink-0",
+                status_dot_class(agent.status)
+              ]}>
               </span>
               <span
                 class="text-sm font-medium truncate flex-1"
@@ -94,7 +108,9 @@ defmodule LoomkinWeb.AgentRosterComponent do
               >
                 {agent.name}
               </span>
-              <span class="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded font-medium">
+              <span class="text-[10px] px-1.5 py-0.5 rounded font-medium text-muted"
+                style="background: var(--brand-muted);"
+              >
                 {format_role(agent.role)}
               </span>
               <button
@@ -103,7 +119,8 @@ defmodule LoomkinWeb.AgentRosterComponent do
                 phx-value-team-id={agent.team_id}
                 phx-target={@myself}
                 title={"Reply to #{agent.name}"}
-                class="text-gray-600 hover:text-emerald-400 transition p-0.5 rounded hover:bg-gray-800/50 flex-shrink-0"
+                class="text-muted hover:text-brand opacity-0 group-hover:opacity-100 p-1 rounded-md hover:bg-surface-3 flex-shrink-0"
+                style="transition: opacity var(--transition-base), color var(--transition-base), background var(--transition-base);"
               >
                 <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
                   <path
@@ -115,8 +132,8 @@ defmodule LoomkinWeb.AgentRosterComponent do
               </button>
             </div>
             <%!-- Row 2: current task --%>
-            <div class="mt-0.5 pl-4">
-              <span class={"text-xs #{status_text_color(agent.status)}"}>
+            <div class="mt-1 pl-[18px]">
+              <span class={["text-xs font-mono", status_text_class(agent.status)]}>
                 {Map.get(agent, :current_task) || status_label(agent.status)}
               </span>
             </div>
@@ -124,60 +141,78 @@ defmodule LoomkinWeb.AgentRosterComponent do
         </div>
       </div>
 
-      <%!-- Divider --%>
-      <div class="border-t border-gray-800"></div>
+      <div class="divider"></div>
 
       <%!-- Tasks Section (collapsible) --%>
       <div class="flex-shrink-0">
         <button
           phx-click="toggle_tasks"
           phx-target={@myself}
-          class="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-900/50 transition cursor-pointer"
+          class="w-full flex items-center justify-between px-4 py-2.5 hover:bg-surface-2 cursor-pointer"
+          style="transition: background var(--transition-base);"
         >
-          <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Tasks</h3>
-          <span class={"text-xs text-gray-600 transition-transform #{if @tasks_collapsed, do: "-rotate-90", else: ""}"}>
-            {Phoenix.HTML.raw("&#9662;")}
-          </span>
+          <h3 class="text-[10px] font-semibold text-muted uppercase tracking-widest">Tasks</h3>
+          <svg
+            class={[
+              "w-3.5 h-3.5 text-muted chevron-rotate",
+              if(!@tasks_collapsed, do: "expanded", else: "")
+            ]}
+            viewBox="0 0 20 20"
+            fill="currentColor"
+          >
+            <path
+              fill-rule="evenodd"
+              d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+              clip-rule="evenodd"
+            />
+          </svg>
         </button>
 
         <div :if={!@tasks_collapsed} class="max-h-48 overflow-y-auto">
-          <div :if={@tasks == []} class="px-3 py-3 text-center text-xs text-gray-600">
-            No tasks
+          <div :if={@tasks == []} class="px-4 py-4 text-center">
+            <span class="text-xs text-muted">No tasks</span>
           </div>
 
-          <div class="space-y-0.5 px-1.5 pb-2">
+          <div class="space-y-0.5 px-2 pb-2">
             <div
               :for={task <- @tasks}
-              class="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-900/50"
+              class="flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-surface-2"
+              style="transition: background var(--transition-base);"
             >
               <span class="flex-shrink-0 w-4 text-center">{task_status_icon(task.status)}</span>
-              <span class="text-xs text-gray-300 truncate flex-1">{task.title}</span>
-              <span class="text-xs text-gray-600 truncate max-w-[4rem] text-right">
-                {task.owner || ""}
+              <span class="text-xs truncate flex-1" style="color: var(--text-secondary);">{task.title}</span>
+              <span
+                :if={task.owner not in [nil, ""]}
+                class="text-[10px] truncate max-w-[4rem] text-right font-mono text-muted"
+              >
+                {task.owner}
               </span>
             </div>
           </div>
         </div>
       </div>
 
-      <%!-- Divider --%>
-      <div class="border-t border-gray-800"></div>
+      <div class="divider"></div>
 
       <%!-- Budget Bar --%>
-      <div class="flex-shrink-0 px-3 py-3">
-        <div class="flex items-center justify-between mb-1.5">
-          <span class="text-xs text-gray-500">Budget</span>
-          <span class="text-xs text-gray-400 font-mono">
-            ${format_decimal(@budget.spent)}&nbsp;/&nbsp;${format_decimal(@budget.limit)}
-            <span class={"ml-1 #{budget_pct_color(@budget)}"}>{budget_percentage(@budget)}%</span>
+      <div class="flex-shrink-0 px-4 py-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] font-semibold text-muted uppercase tracking-widest">Budget</span>
+          <span class="text-[11px] font-mono tabular-nums" style="color: var(--text-secondary);">
+            <span>$</span>{format_decimal(@budget.spent)}<span class="text-muted">&nbsp;/&nbsp;$</span>{format_decimal(@budget.limit)}
           </span>
         </div>
-        <div class="w-full bg-gray-800 rounded-full h-1.5">
+        <div class="w-full rounded-full h-1.5 overflow-hidden" style="background: var(--surface-3);">
           <div
-            class={"h-1.5 rounded-full transition-all duration-300 #{budget_bar_color(@budget)}"}
-            style={"width: #{min(budget_percentage(@budget), 100)}%"}
+            class={["h-full rounded-full", budget_bar_class(@budget)]}
+            style={"width: #{min(budget_percentage(@budget), 100)}%; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);"}
           >
           </div>
+        </div>
+        <div class="text-right mt-1">
+          <span class={["text-[10px] font-mono tabular-nums", budget_pct_color(@budget)]}>
+            {budget_percentage(@budget)}%
+          </span>
         </div>
       </div>
     </div>
@@ -201,7 +236,7 @@ defmodule LoomkinWeb.AgentRosterComponent do
     ~H"""
     <span
       :if={@telegram_count > 0}
-      class="inline-flex items-center gap-0.5 text-[10px] text-sky-400 bg-sky-400/10 px-1.5 py-0.5 rounded-full"
+      class="badge-success text-[10px] gap-0.5"
       title={"#{@telegram_count} Telegram binding#{if @telegram_count > 1, do: "s", else: ""}"}
     >
       <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
@@ -211,7 +246,7 @@ defmodule LoomkinWeb.AgentRosterComponent do
     </span>
     <span
       :if={@discord_count > 0}
-      class="inline-flex items-center gap-0.5 text-[10px] text-indigo-400 bg-indigo-400/10 px-1.5 py-0.5 rounded-full"
+      class="badge text-[10px] gap-0.5"
       title={"#{@discord_count} Discord binding#{if @discord_count > 1, do: "s", else: ""}"}
     >
       <svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
@@ -231,19 +266,19 @@ defmodule LoomkinWeb.AgentRosterComponent do
 
   # --- Status helpers ---
 
-  defp status_dot_class(:working), do: "bg-green-400 animate-pulse"
-  defp status_dot_class(:idle), do: "bg-gray-500"
-  defp status_dot_class(:blocked), do: "bg-yellow-400"
-  defp status_dot_class(:error), do: "bg-red-400 animate-pulse"
-  defp status_dot_class(:waiting_permission), do: "bg-amber-400"
-  defp status_dot_class(_), do: "bg-gray-500"
+  defp status_dot_class(:working), do: "bg-green-400 agent-dot-working"
+  defp status_dot_class(:idle), do: "bg-zinc-500"
+  defp status_dot_class(:blocked), do: "bg-amber-400 agent-dot-thinking"
+  defp status_dot_class(:error), do: "bg-red-400 agent-dot-error"
+  defp status_dot_class(:waiting_permission), do: "bg-amber-400 agent-dot-thinking"
+  defp status_dot_class(_), do: "bg-zinc-500"
 
-  defp status_text_color(:working), do: "text-green-400"
-  defp status_text_color(:idle), do: "text-gray-500"
-  defp status_text_color(:blocked), do: "text-yellow-400"
-  defp status_text_color(:error), do: "text-red-400"
-  defp status_text_color(:waiting_permission), do: "text-amber-400"
-  defp status_text_color(_), do: "text-gray-500"
+  defp status_text_class(:working), do: "text-green-400"
+  defp status_text_class(:idle), do: "text-muted"
+  defp status_text_class(:blocked), do: "text-amber-400"
+  defp status_text_class(:error), do: "text-red-400"
+  defp status_text_class(:waiting_permission), do: "text-amber-400"
+  defp status_text_class(_), do: "text-muted"
 
   defp status_label(:working), do: "working"
   defp status_label(:idle), do: "idle"
@@ -259,19 +294,19 @@ defmodule LoomkinWeb.AgentRosterComponent do
 
   defp task_status_icon(:in_progress),
     do:
-      Phoenix.HTML.raw(~s(<span class="text-violet-400 animate-spin inline-block">&#9684;</span>))
+      Phoenix.HTML.raw(~s(<span class="text-brand animate-spin inline-block">&#9684;</span>))
 
   defp task_status_icon(:assigned),
-    do: Phoenix.HTML.raw(~s(<span class="text-blue-400">&#8594;</span>))
+    do: Phoenix.HTML.raw(~s[<span style="color: var(--accent-cyan);">&#8594;</span>])
 
   defp task_status_icon(:pending),
-    do: Phoenix.HTML.raw(~s(<span class="text-gray-500">&#9675;</span>))
+    do: Phoenix.HTML.raw(~s(<span class="text-muted">&#9675;</span>))
 
   defp task_status_icon(:failed),
     do: Phoenix.HTML.raw(~s(<span class="text-red-400">&#10007;</span>))
 
   defp task_status_icon(_),
-    do: Phoenix.HTML.raw(~s(<span class="text-gray-600">&#8226;</span>))
+    do: Phoenix.HTML.raw(~s(<span class="text-muted">&#8226;</span>))
 
   # --- Budget helpers ---
 
@@ -281,13 +316,13 @@ defmodule LoomkinWeb.AgentRosterComponent do
 
   defp budget_percentage(_), do: 0.0
 
-  defp budget_bar_color(budget) do
+  defp budget_bar_class(budget) do
     pct = budget_percentage(budget)
 
     cond do
-      pct >= 80 -> "bg-red-500"
-      pct >= 50 -> "bg-yellow-500"
-      true -> "bg-green-500"
+      pct >= 80 -> "bg-gradient-to-r from-red-500 to-rose-400"
+      pct >= 50 -> "bg-gradient-to-r from-amber-500 to-yellow-400"
+      true -> "bg-gradient-to-r from-emerald-500 to-green-400"
     end
   end
 
@@ -296,8 +331,8 @@ defmodule LoomkinWeb.AgentRosterComponent do
 
     cond do
       pct >= 80 -> "text-red-400"
-      pct >= 50 -> "text-yellow-400"
-      true -> "text-green-400"
+      pct >= 50 -> "text-amber-400"
+      true -> "text-emerald-400"
     end
   end
 

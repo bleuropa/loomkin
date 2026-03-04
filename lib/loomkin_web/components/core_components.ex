@@ -32,13 +32,14 @@ defmodule LoomkinWeb.CoreComponents do
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
       class={[
-        "fixed top-2 right-2 mr-2 w-80 sm:w-96 z-50 rounded-lg p-3 ring-1",
-        @kind == :info && "bg-emerald-900/80 text-emerald-200 ring-emerald-500/50 fill-emerald-400",
-        @kind == :error && "bg-rose-900/80 text-rose-200 ring-rose-500/50 fill-rose-400"
+        "fixed top-3 right-3 w-80 sm:w-96 z-50 rounded-xl p-3.5 shadow-lg backdrop-blur-sm animate-slide-in-right",
+        "border transition-all duration-200",
+        @kind == :info && "bg-emerald-950/80 text-emerald-200 border-emerald-500/30",
+        @kind == :error && "bg-rose-950/80 text-rose-200 border-rose-500/30"
       ]}
       {@rest}
     >
-      <p class="text-sm leading-5 font-semibold">
+      <p class="text-sm leading-5 font-medium">
         {msg}
       </p>
     </div>
@@ -125,13 +126,18 @@ defmodule LoomkinWeb.CoreComponents do
   def input(%{type: "textarea"} = assigns) do
     ~H"""
     <div>
-      <label :if={@label} for={@id} class="block text-sm font-semibold text-gray-300">
+      <label :if={@label} for={@id} class="block text-sm font-medium text-gray-400 mb-1.5">
         {@label}
       </label>
       <textarea
         id={@id}
         name={@name}
-        class="mt-1 block w-full rounded-lg bg-gray-800 border-gray-700 text-gray-100 focus:ring-violet-500 focus:border-violet-500 sm:text-sm"
+        class={[
+          "block w-full rounded-lg sm:text-sm",
+          "bg-surface-1 border border-white/10 text-gray-100 placeholder-gray-600",
+          "focus:ring-1 focus:ring-violet-500/50 focus:border-violet-500/50",
+          "transition-colors duration-200"
+        ]}
         {@rest}
       >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
       <.error :for={msg <- @errors}>{msg}</.error>
@@ -142,7 +148,7 @@ defmodule LoomkinWeb.CoreComponents do
   def input(assigns) do
     ~H"""
     <div>
-      <label :if={@label} for={@id} class="block text-sm font-semibold text-gray-300">
+      <label :if={@label} for={@id} class="block text-sm font-medium text-gray-400 mb-1.5">
         {@label}
       </label>
       <input
@@ -150,7 +156,12 @@ defmodule LoomkinWeb.CoreComponents do
         name={@name}
         id={@id}
         value={Phoenix.HTML.Form.normalize_value(@type, @value)}
-        class="mt-1 block w-full rounded-lg bg-gray-800 border-gray-700 text-gray-100 focus:ring-violet-500 focus:border-violet-500 sm:text-sm"
+        class={[
+          "block w-full rounded-lg sm:text-sm",
+          "bg-surface-1 border border-white/10 text-gray-100 placeholder-gray-600",
+          "focus:ring-1 focus:ring-violet-500/50 focus:border-violet-500/50",
+          "transition-colors duration-200"
+        ]}
         {@rest}
       />
       <.error :for={msg <- @errors}>{msg}</.error>
@@ -172,8 +183,12 @@ defmodule LoomkinWeb.CoreComponents do
     <button
       type={@type}
       class={[
-        "phx-submit-loading:opacity-75 rounded-lg bg-violet-600 hover:bg-violet-500",
-        "py-2 px-3 text-sm font-semibold text-white active:text-white/80",
+        "phx-submit-loading:opacity-75 rounded-lg",
+        "bg-violet-600 hover:bg-violet-500 active:bg-violet-700",
+        "py-2 px-3.5 text-sm font-medium text-white",
+        "transition-all duration-200 ease-out",
+        "shadow-sm hover:shadow-glow-sm active:scale-[0.97]",
+        "border border-violet-500/20",
         @class
       ]}
       {@rest}
@@ -210,7 +225,7 @@ defmodule LoomkinWeb.CoreComponents do
 
   def error(assigns) do
     ~H"""
-    <p class="mt-1 flex gap-2 text-sm text-rose-400">
+    <p class="mt-1.5 flex gap-1.5 text-xs text-rose-400/90">
       {render_slot(@inner_block)}
     </p>
     """

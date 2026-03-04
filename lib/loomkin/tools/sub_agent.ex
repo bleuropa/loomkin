@@ -84,7 +84,14 @@ defmodule Loomkin.Tools.SubAgent do
     end
   end
 
-  defp handle_classified(%{type: :tool_calls} = classified, messages, tool_defs, model, context, iteration) do
+  defp handle_classified(
+         %{type: :tool_calls} = classified,
+         messages,
+         tool_defs,
+         model,
+         context,
+         iteration
+       ) do
     # Add the assistant message with tool calls
     tool_calls_for_context =
       Enum.map(classified.tool_calls, fn tc ->
@@ -102,7 +109,9 @@ defmodule Loomkin.Tools.SubAgent do
       Enum.reduce(classified.tool_calls, messages, fn tool_call, acc ->
         tool_name = tool_call[:name] || tool_call["name"]
         tool_args = tool_call[:arguments] || tool_call["arguments"] || %{}
-        tool_call_id = tool_call[:id] || tool_call["id"] || "call_#{:erlang.unique_integer([:positive])}"
+
+        tool_call_id =
+          tool_call[:id] || tool_call["id"] || "call_#{:erlang.unique_integer([:positive])}"
 
         result = execute_read_tool(tool_name, tool_args, context)
 
@@ -119,7 +128,14 @@ defmodule Loomkin.Tools.SubAgent do
     run_sub_loop(messages, tool_defs, model, context, iteration + 1)
   end
 
-  defp handle_classified(%{type: :final_answer} = classified, _messages, _tool_defs, _model, _context, _iteration) do
+  defp handle_classified(
+         %{type: :final_answer} = classified,
+         _messages,
+         _tool_defs,
+         _model,
+         _context,
+         _iteration
+       ) do
     {:ok, classified.text || "No findings."}
   end
 
@@ -141,7 +157,7 @@ defmodule Loomkin.Tools.SubAgent do
     opts = if tool_defs != [], do: [tools: tool_defs], else: []
 
     try do
-      ReqLLM.generate_text(model, messages, opts)
+      Loomkin.LLM.generate_text(model, messages, opts)
     rescue
       e -> {:error, Exception.message(e)}
     end

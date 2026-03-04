@@ -14,6 +14,17 @@ defmodule LoomkinWeb.Router do
     post "/telegram", Loomkin.Channels.Telegram.Webhook, :handle
   end
 
+  # OAuth provider authentication routes — must be before the catch-all "/" scope
+  scope "/auth", LoomkinWeb do
+    pipe_through :browser
+
+    get "/:provider", AuthController, :authorize
+    get "/:provider/callback", AuthController, :callback
+    post "/:provider/paste", AuthController, :paste
+    delete "/:provider", AuthController, :disconnect
+    get "/:provider/status", AuthController, :status
+  end
+
   scope "/", LoomkinWeb do
     pipe_through :browser
 

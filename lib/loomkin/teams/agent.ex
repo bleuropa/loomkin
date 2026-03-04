@@ -1269,6 +1269,10 @@ defmodule Loomkin.Teams.Agent do
   defp handle_loop_event(team_id, agent_name, event_name, payload) do
     topic = "team:#{team_id}"
 
+    if event_name in [:tool_executing, :tool_complete] do
+      Logger.info("[Agent:#{agent_name}] Broadcasting #{event_name} on topic=#{topic}")
+    end
+
     case event_name do
       :stream_start ->
         Phoenix.PubSub.broadcast(Loomkin.PubSub, topic, {:agent_stream_start, agent_name, payload})

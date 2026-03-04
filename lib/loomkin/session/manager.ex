@@ -69,27 +69,33 @@ defmodule Loomkin.Session.Manager do
     project_path = Keyword.get(opts, :project_path)
     model = Keyword.get(opts, :model)
 
+    Logger.debug("[Session.Manager] maybe_create_backing_team session=#{session_id} model=#{inspect(model)}")
+
     Task.start(fn ->
       try do
         {:ok, team_id} = Loomkin.Teams.Manager.create_team(name: "session-#{String.slice(session_id, 0, 8)}", project_path: project_path)
+        Logger.info("[Session.Manager] Team created team_id=#{team_id} for session=#{session_id}")
 
         # Spawn the lead agent so the team actually has a member
         case Loomkin.Teams.Manager.spawn_agent(team_id, "lead", :lead, model: model, project_path: project_path) do
-          {:ok, _pid} ->
-            Logger.debug("[Session.Manager] Created backing team #{team_id} with lead agent for session #{session_id}")
+          {:ok, pid} ->
+            Logger.info("[Session.Manager] Lead agent spawned pid=#{inspect(pid)} team=#{team_id}")
 
           {:error, reason} ->
-            Logger.warning("[Session.Manager] Backing team #{team_id} created but lead agent failed: #{inspect(reason)}")
+            Logger.warning("[Session.Manager] Lead agent FAILED team=#{team_id}: #{inspect(reason)}")
         end
 
         # Notify the session process about its team
         case Registry.lookup(Loomkin.SessionRegistry, session_id) do
-          [{pid, _}] -> send(pid, {:team_created, team_id})
-          _ -> :ok
+          [{pid, _}] ->
+            Logger.info("[Session.Manager] Sending :team_created to session pid=#{inspect(pid)}")
+            send(pid, {:team_created, team_id})
+          [] ->
+            Logger.error("[Session.Manager] Session NOT FOUND in registry! session=#{session_id}")
         end
       rescue
         e ->
-          Logger.warning("[Session.Manager] Error creating backing team: #{Exception.message(e)}")
+          Logger.error("[Session.Manager] Error creating backing team: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}")
       end
     end)
   end

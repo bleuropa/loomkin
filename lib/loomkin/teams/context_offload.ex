@@ -24,7 +24,12 @@ defmodule Loomkin.Teams.ContextOffload do
       case offload_to_keeper(agent_state.team_id, agent_state.name, offload_msgs) do
         {:ok, _pid, index_entry} ->
           # Prepend index entry as a system note so agent knows context was saved
-          marker = %{role: :system, content: "[Context offloaded] #{index_entry}", priority: :high}
+          marker = %{
+            role: :system,
+            content: "[Context offloaded] #{index_entry}",
+            priority: :high
+          }
+
           {:offloaded, [marker | keep_msgs], index_entry}
 
         {:error, _reason} ->
@@ -76,12 +81,17 @@ defmodule Loomkin.Teams.ContextOffload do
         entry = ContextKeeper.index_entry(pid)
         keeper_state = ContextKeeper.get_state(pid)
 
-        Phoenix.PubSub.broadcast(Loomkin.PubSub, "team:#{team_id}", {:keeper_created, %{
-          id: keeper_state.id,
-          topic: topic,
-          source: to_string(agent_name),
-          tokens: keeper_state.token_count
-        }})
+        Phoenix.PubSub.broadcast(
+          Loomkin.PubSub,
+          "team:#{team_id}",
+          {:keeper_created,
+           %{
+             id: keeper_state.id,
+             topic: topic,
+             source: to_string(agent_name),
+             tokens: keeper_state.token_count
+           }}
+        )
 
         {:ok, pid, entry}
 
@@ -121,12 +131,16 @@ defmodule Loomkin.Teams.ContextOffload do
       model = Loomkin.Teams.ModelRouter.default_model()
 
       llm_messages = [
-        ReqLLM.Context.system("Summarize the main topic of the following conversation in 3-5 words. Reply with ONLY the topic, nothing else."),
+        ReqLLM.Context.system(
+          "Summarize the main topic of the following conversation in 3-5 words. Reply with ONLY the topic, nothing else."
+        ),
         ReqLLM.Context.user(content)
       ]
 
       # Single attempt only — topic generation is best-effort, not worth retrying
-      case Loomkin.LLMRetry.with_retry([max_retries: 0], fn -> ReqLLM.generate_text(model, llm_messages, []) end) do
+      case Loomkin.LLMRetry.with_retry([max_retries: 0], fn ->
+             Loomkin.LLM.generate_text(model, llm_messages, [])
+           end) do
         {:ok, response} ->
           topic = ReqLLM.Response.classify(response).text || ""
           topic = String.trim(topic)

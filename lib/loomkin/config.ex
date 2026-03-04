@@ -36,7 +36,8 @@ defmodule Loomkin.Config do
     },
     shell: %{
       allowlist_enabled: false,
-      allowlist: ~w(mix elixir iex git cat head tail ls find grep rg sed awk echo mkdir cp mv touch node npm npx yarn bun cargo rustc go python python3 pip ruby gem)
+      allowlist:
+        ~w(mix elixir iex git cat head tail ls find grep rg sed awk echo mkdir cp mv touch node npm npx yarn bun cargo rustc go python python3 pip ruby gem)
     },
     teams: %{
       consensus: %{
@@ -44,6 +45,24 @@ defmodule Loomkin.Config do
         max_rounds: 3,
         scope: "general",
         on_deadlock: "escalate_to_user"
+      }
+    },
+    auth: %{
+      anthropic: %{
+        client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+        mode: "max",
+        token_url: "https://console.anthropic.com/v1/oauth/token",
+        scopes: ["org:create_api_key", "user:profile", "user:inference"]
+      },
+      google: %{
+        client_id: nil,
+        client_secret: nil,
+        scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+        api_surface: "generative_language"
+      },
+      openai: %{
+        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+        scopes: ["openid", "profile", "email", "offline_access"]
       }
     },
     channels: %{
@@ -182,7 +201,7 @@ defmodule Loomkin.Config do
   end
 
   # Known config keys that may appear in .loomkin.toml
-  @known_keys ~w(model permissions context decisions mcp web lsp repo shell channels
+  @known_keys ~w(model permissions context decisions mcp web lsp repo shell channels auth
     default weak architect editor auto_approve max_repo_map_tokens max_decision_context_tokens
     reserved_output_tokens enabled enforce_pre_edit auto_log_commits
     allowlist_enabled allowlist
@@ -191,7 +210,8 @@ defmodule Loomkin.Config do
     models grunt standard expert architect escalation
     templates agents role count
     consensus quorum max_rounds scope on_deadlock
-    telegram discord bot_token webhook_url webhook_path secret_token mode chat_id allowed_chat_ids allow_user_ids guild_ids)a
+    anthropic google openai client_id client_secret authorize_url token_url scopes mode api_surface
+    telegram discord bot_token webhook_url webhook_path secret_token chat_id allowed_chat_ids allow_user_ids guild_ids)a
 
   # Pre-compute a string→atom lookup map so atomize_keys never raises
   @known_key_map Map.new(@known_keys, fn atom -> {Atom.to_string(atom), atom} end)

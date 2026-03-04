@@ -142,11 +142,12 @@ defmodule Loomkin.Teams.ContextKeeper do
     all_messages = state.messages ++ messages
     token_count = estimate_tokens(all_messages)
 
-    state = %{state |
-      messages: all_messages,
-      metadata: merged_metadata,
-      token_count: token_count,
-      dirty: true
+    state = %{
+      state
+      | messages: all_messages,
+        metadata: merged_metadata,
+        token_count: token_count,
+        dirty: true
     }
 
     update_registry_tokens(state)
@@ -226,7 +227,9 @@ defmodule Loomkin.Teams.ContextKeeper do
 
   @impl true
   def handle_call(:index_entry, _from, state) do
-    entry = "[Keeper:#{state.id}] topic=#{state.topic} source=#{state.source_agent} tokens=#{state.token_count}"
+    entry =
+      "[Keeper:#{state.id}] topic=#{state.topic} source=#{state.source_agent} tokens=#{state.token_count}"
+
     {:reply, entry, state}
   end
 
@@ -247,12 +250,18 @@ defmodule Loomkin.Teams.ContextKeeper do
               %{state | dirty: false}
 
             {:error, reason} ->
-              Logger.warning("[ContextKeeper:#{state.id}] Persist failed: #{inspect(reason)}, will retry")
+              Logger.warning(
+                "[ContextKeeper:#{state.id}] Persist failed: #{inspect(reason)}, will retry"
+              )
+
               schedule_persist(state)
           end
         rescue
           e ->
-            Logger.warning("[ContextKeeper:#{state.id}] Persist raised: #{Exception.message(e)}, will retry")
+            Logger.warning(
+              "[ContextKeeper:#{state.id}] Persist raised: #{Exception.message(e)}, will retry"
+            )
+
             schedule_persist(state)
         end
       else
@@ -269,13 +278,19 @@ defmodule Loomkin.Teams.ContextKeeper do
     if state.dirty do
       try do
         case do_persist(state) do
-          {:ok, _} -> :ok
+          {:ok, _} ->
+            :ok
+
           {:error, reason} ->
-            Logger.error("[ContextKeeper:#{state.id}] Final persist failed on terminate: #{inspect(reason)}")
+            Logger.error(
+              "[ContextKeeper:#{state.id}] Final persist failed on terminate: #{inspect(reason)}"
+            )
         end
       rescue
         e ->
-          Logger.error("[ContextKeeper:#{state.id}] Final persist raised on terminate: #{Exception.message(e)}")
+          Logger.error(
+            "[ContextKeeper:#{state.id}] Final persist raised on terminate: #{Exception.message(e)}"
+          )
       end
     end
 
@@ -304,7 +319,10 @@ defmodule Loomkin.Teams.ContextKeeper do
     end
   rescue
     e in DBConnection.OwnershipError ->
-      Logger.debug("[ContextKeeper:#{state.id}] DB not available during init: #{inspect(e.__struct__)}")
+      Logger.debug(
+        "[ContextKeeper:#{state.id}] DB not available during init: #{inspect(e.__struct__)}"
+      )
+
       state
   end
 
@@ -346,7 +364,14 @@ defmodule Loomkin.Teams.ContextKeeper do
     Registry.update_value(
       Loomkin.Teams.AgentRegistry,
       {state.team_id, "keeper:#{state.id}"},
-      fn _old -> %{type: :keeper, topic: state.topic, tokens: state.token_count, source_agent: state.source_agent} end
+      fn _old ->
+        %{
+          type: :keeper,
+          topic: state.topic,
+          tokens: state.token_count,
+          source_agent: state.source_agent
+        }
+      end
     )
   rescue
     _ -> :ok
@@ -395,7 +420,7 @@ defmodule Loomkin.Teams.ContextKeeper do
   end
 
   defp call_llm(model, messages) do
-    ReqLLM.generate_text(model, messages, [])
+    Loomkin.LLM.generate_text(model, messages, [])
   rescue
     e -> {:error, Exception.message(e)}
   end

@@ -188,7 +188,7 @@ defmodule Loomkin.Teams.ContextRetrieval do
   end
 
   defp call_llm(model, messages) do
-    ReqLLM.generate_text(model, messages, [])
+    Loomkin.LLM.generate_text(model, messages, [])
   rescue
     e -> {:error, Exception.message(e)}
   end

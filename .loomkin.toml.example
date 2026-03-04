@@ -14,3 +14,37 @@ reserved_output_tokens = 4096
 enabled = true
 enforce_pre_edit = false
 auto_log_commits = true
+
+# ── OAuth authentication ───────────────────────────────────────────
+# Use your existing provider subscriptions instead of API keys.
+# Visit the Settings page in the web UI to connect.
+
+# Anthropic (Claude) — uses a paste-back flow since Anthropic's OAuth
+# redirect goes to their own domain, not localhost.
+# Uses the shared Claude CLI client ID by default; no client_secret needed.
+#
+# [auth.anthropic]
+# client_id = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+# mode = "max"                                            # "max" (subscription inference) or "console" (API key creation)
+# scopes = "org:create_api_key user:profile user:inference"
+
+# Google (Gemini) — standard OAuth2 redirect flow.
+# Requires creating OAuth credentials in Google Cloud Console:
+#   1. Go to https://console.cloud.google.com/apis/credentials
+#   2. Create an "OAuth 2.0 Client ID" (Desktop or Web app)
+#   3. Add http://127.0.0.1:4000/auth/google/callback as an authorized redirect URI
+#   4. Enable the "Generative Language API" in APIs & Services
+#
+# [auth.google]
+# client_id = "your-client-id.apps.googleusercontent.com"
+# client_secret = "GOCSPX-..."
+# scopes = "https://www.googleapis.com/auth/cloud-platform"
+
+# OpenAI (ChatGPT Plus/Pro) — standard OAuth2 redirect flow via Codex backend.
+# Uses the shared Codex CLI client ID by default; no client_secret needed.
+# Targets chatgpt.com/backend-api (NOT api.openai.com). Requires an active
+# ChatGPT Plus, Pro, or Teams subscription.
+#
+# [auth.openai]
+# client_id = "app_EMoamEEZ73f0CkXaXp7hrann"
+# scopes = "openid profile email offline_access"

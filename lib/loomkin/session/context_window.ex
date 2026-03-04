@@ -247,7 +247,7 @@ defmodule Loomkin.Session.ContextWindow do
     #{content}
     """
 
-    case ReqLLM.generate_text(model, [
+    case Loomkin.LLM.generate_text(model, [
            ReqLLM.Context.system("You are a concise summarizer. Preserve technical details."),
            ReqLLM.Context.user(prompt)
          ]) do
@@ -296,9 +296,12 @@ defmodule Loomkin.Session.ContextWindow do
   defp select_recent(messages, available_tokens) do
     indexed = Enum.with_index(messages)
 
-    {high_indexed, normal_indexed} = Enum.split_with(indexed, fn {msg, _i} -> high_priority?(msg) end)
+    {high_indexed, normal_indexed} =
+      Enum.split_with(indexed, fn {msg, _i} -> high_priority?(msg) end)
 
-    high_tokens = high_indexed |> Enum.map(fn {msg, _} -> estimate_message_tokens(msg) end) |> Enum.sum()
+    high_tokens =
+      high_indexed |> Enum.map(fn {msg, _} -> estimate_message_tokens(msg) end) |> Enum.sum()
+
     remaining_budget = max(available_tokens - high_tokens, 0)
 
     # Select normal messages newest-first within remaining budget

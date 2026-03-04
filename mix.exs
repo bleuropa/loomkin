@@ -76,6 +76,9 @@ defmodule Loomkin.MixProject do
       {:toml, "~> 0.7"},
       {:yaml_elixir, "~> 2.12"},
 
+      # OAuth
+      {:assent, "~> 0.3.1"},
+
       # File watching
       {:file_system, "~> 1.1"},
 

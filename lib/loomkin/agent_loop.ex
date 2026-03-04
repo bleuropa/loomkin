@@ -336,8 +336,11 @@ defmodule Loomkin.AgentLoop do
                      Loomkin.Tool.resolve_path(tool_path, effective_path),
                      effective_path
                    ) do
-                Map.put(context, :allowed_external_path,
-                  Loomkin.Tool.resolve_path(tool_path, effective_path))
+                Map.put(
+                  context,
+                  :allowed_external_path,
+                  Loomkin.Tool.resolve_path(tool_path, effective_path)
+                )
               else
                 context
               end
@@ -568,8 +571,12 @@ defmodule Loomkin.AgentLoop do
   defp sanitize_utf8(nil), do: nil
 
   defp strip_invalid_utf8(<<>>, acc), do: acc
-  defp strip_invalid_utf8(<<c::utf8, rest::binary>>, acc), do: strip_invalid_utf8(rest, <<acc::binary, c::utf8>>)
-  defp strip_invalid_utf8(<<_byte, rest::binary>>, acc), do: strip_invalid_utf8(rest, <<acc::binary, "�"::utf8>>)
+
+  defp strip_invalid_utf8(<<c::utf8, rest::binary>>, acc),
+    do: strip_invalid_utf8(rest, <<acc::binary, c::utf8>>)
+
+  defp strip_invalid_utf8(<<_byte, rest::binary>>, acc),
+    do: strip_invalid_utf8(rest, <<acc::binary, "�"::utf8>>)
 
   defp parse_model(model_string) do
     case String.split(model_string, ":", parts: 2) do
@@ -592,7 +599,7 @@ defmodule Loomkin.AgentLoop do
 
     result =
       try do
-        with {:ok, stream_response} <- ReqLLM.stream_text(model_spec, messages, opts) do
+        with {:ok, stream_response} <- Loomkin.LLM.stream_text(model_spec, messages, opts) do
           ReqLLM.StreamResponse.process_stream(stream_response,
             on_result: fn text ->
               if config, do: emit(config, :stream_delta, %{text: text})

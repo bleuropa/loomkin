@@ -49,8 +49,9 @@ defmodule LoomkinWeb.ContextInspectorComponent do
           myself={@myself}
         />
       <% else %>
-        <%!-- Header / Tab bar --%>
-        <div class="flex items-center gap-1 overflow-x-auto px-3 py-2 border-b border-gray-800 bg-gray-900/80 flex-shrink-0">
+        <%!-- Tab bar --%>
+        <div class="flex items-center gap-0.5 overflow-x-auto px-1.5 py-1 flex-shrink-0"
+             style="background: var(--surface-1); border-bottom: 1px solid var(--border-subtle);">
           <button
             :for={tab <- @tabs}
             phx-click="switch_inspector_tab"
@@ -58,11 +59,11 @@ defmodule LoomkinWeb.ContextInspectorComponent do
             phx-target={@myself}
             class={tab_button_class(@active_inspector_tab, tab)}
           >
-            <span class="text-sm">{tab_icon(tab)}</span>
-            {tab_label(tab)}
+            <span>{tab_icon(tab)}</span>
+            <span class="text-[10px]">{tab_label(tab)}</span>
           </button>
 
-          <div class="ml-auto flex items-center gap-2">
+          <div class="ml-auto flex items-center gap-1.5 pl-1.5">
             <.follow_indicator
               inspector_mode={@inspector_mode}
               focused_agent={@focused_agent}
@@ -71,16 +72,17 @@ defmodule LoomkinWeb.ContextInspectorComponent do
             <button
               phx-click="toggle_collapse"
               phx-target={@myself}
-              class="text-gray-500 hover:text-gray-300 p-1 rounded hover:bg-gray-800/50 transition-colors"
+              class="interactive p-1 rounded-md"
+              style="color: var(--text-muted); transition: all var(--transition-base);"
               title="Collapse panel"
             >
-              <.icon name="hero-chevron-right-mini" class="w-3.5 h-3.5" />
+              <.icon name="hero-chevron-right-mini" class="w-3 h-3" />
             </button>
           </div>
         </div>
 
         <%!-- Content area --%>
-        <div class="flex-1 overflow-auto">
+        <div class="flex-1 overflow-auto tab-content-enter" style="background: var(--surface-0);">
           {render_inspector_tab(@active_inspector_tab, assigns)}
         </div>
       <% end %>
@@ -92,7 +94,10 @@ defmodule LoomkinWeb.ContextInspectorComponent do
 
   defp collapsed_strip(assigns) do
     ~H"""
-    <div class="flex h-full w-full items-center justify-center gap-1 px-2 py-2 xl:flex-col xl:items-center xl:justify-start xl:px-0">
+    <div
+      class="flex h-full w-full items-center justify-center gap-0.5 px-1 py-1 xl:flex-col xl:items-center xl:justify-start xl:px-0 xl:py-1.5"
+      style="background: var(--surface-1);"
+    >
       <button
         :for={tab <- @tabs}
         phx-click="switch_inspector_tab"
@@ -101,17 +106,18 @@ defmodule LoomkinWeb.ContextInspectorComponent do
         class={collapsed_tab_class(@active_inspector_tab, tab)}
         title={tab_label(tab)}
       >
-        <span class="text-sm">{tab_icon(tab)}</span>
+        <span>{tab_icon(tab)}</span>
       </button>
 
-      <div class="ml-1 xl:ml-0 xl:mt-auto">
+      <div class="xl:mt-auto xl:mb-1">
         <button
           phx-click="toggle_collapse"
           phx-target={@myself}
-          class="text-gray-500 hover:text-gray-300 p-1.5 rounded hover:bg-gray-800/50 transition-colors"
+          class="interactive p-1 rounded-md"
+          style="color: var(--text-muted); transition: all var(--transition-base);"
           title="Expand panel"
         >
-          <.icon name="hero-chevron-left-mini" class="w-3.5 h-3.5" />
+          <.icon name="hero-chevron-left-mini" class="w-3 h-3" />
         </button>
       </div>
     </div>
@@ -124,9 +130,9 @@ defmodule LoomkinWeb.ContextInspectorComponent do
 
   defp follow_indicator(%{inspector_mode: :auto_follow} = assigns) do
     ~H"""
-    <div class="flex items-center gap-1.5">
-      <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span>
-      <span class="text-xs text-green-400 truncate max-w-[120px]">Following {@focused_agent}</span>
+    <div class="badge-success gap-1.5">
+      <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0"></span>
+      <span class="truncate max-w-[100px]">Following {@focused_agent}</span>
     </div>
     """
   end
@@ -134,12 +140,15 @@ defmodule LoomkinWeb.ContextInspectorComponent do
   defp follow_indicator(%{inspector_mode: :pinned} = assigns) do
     ~H"""
     <div class="flex items-center gap-1.5">
-      <.icon name="hero-map-pin-mini" class="w-3 h-3 text-violet-400" />
-      <span class="text-xs text-violet-400 truncate max-w-[120px]">Pinned to {@focused_agent}</span>
+      <div class="badge gap-1.5">
+        <.icon name="hero-map-pin-mini" class="w-3 h-3 flex-shrink-0" />
+        <span class="truncate max-w-[100px]">Pinned to {@focused_agent}</span>
+      </div>
       <button
         phx-click="resume_follow"
         phx-target={@myself}
-        class="text-[10px] px-1.5 py-0.5 rounded bg-violet-600/20 text-violet-400 hover:bg-violet-600/30 transition-colors"
+        class="press-down text-[10px] px-2 py-0.5 rounded-full font-medium"
+        style="background: var(--brand-subtle); color: var(--text-brand); border: 1px solid var(--border-brand); transition: all var(--transition-fast);"
       >
         Resume
       </button>
@@ -163,14 +172,16 @@ defmodule LoomkinWeb.ContextInspectorComponent do
           selected={@selected_file}
         />
       </div>
-      <div :if={@selected_file} class="h-1/2 border-t border-gray-800 flex flex-col animate-fade-in">
-        <div class="flex items-center justify-between px-3 py-2 bg-gray-900/80 border-b border-gray-800">
+      <div :if={@selected_file} class="h-1/2 flex flex-col animate-fade-in-up"
+           style="border-top: 1px solid var(--border-subtle);">
+        <div class="flex items-center justify-between px-3 py-2 bg-surface-2 flex-shrink-0"
+             style="border-bottom: 1px solid var(--border-subtle);">
           <div class="flex items-center gap-2 truncate">
-            <.icon name="hero-document-text-mini" class="w-3.5 h-3.5 text-violet-400 flex-shrink-0" />
-            <span class="text-xs text-violet-400 font-mono truncate">{@selected_file}</span>
+            <.icon name="hero-document-text-mini" class="w-3.5 h-3.5 text-brand flex-shrink-0" />
+            <span class="text-xs text-brand font-mono truncate">{@selected_file}</span>
           </div>
         </div>
-        <pre class="flex-1 overflow-auto p-3 text-xs font-mono text-gray-300 whitespace-pre">{@file_content}</pre>
+        <pre class="flex-1 overflow-auto p-3 text-xs font-mono text-secondary whitespace-pre bg-surface-0">{@file_content}</pre>
       </div>
     </div>
     """
@@ -211,44 +222,46 @@ defmodule LoomkinWeb.ContextInspectorComponent do
 
   defp panel_class(true = _collapsed),
     do:
-      "w-full h-12 xl:w-10 xl:h-full flex flex-col bg-gray-900/50 border-t xl:border-t-0 xl:border-l border-gray-800 transition-all duration-200"
+      "inspector-panel inspector-collapsed w-full h-10 xl:w-9 xl:h-full flex flex-col bg-surface-1 transition-all duration-300 ease-in-out"
 
   defp panel_class(false = _collapsed),
     do:
-      "w-full h-[18rem] xl:w-80 xl:h-full flex flex-col bg-gray-900/50 border-t xl:border-t-0 xl:border-l border-gray-800 transition-all duration-200"
+      "inspector-panel w-full h-[20rem] xl:w-80 xl:h-full flex flex-col bg-surface-1 transition-all duration-300 ease-in-out"
 
   defp tab_button_class(active, tab) do
     base =
-      "flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 "
+      "relative flex shrink-0 items-center gap-1 whitespace-nowrap px-2 py-1.5 text-[11px] font-medium rounded-md transition-all duration-200 interactive "
 
     if active == tab do
-      base <> "bg-gray-800 text-violet-400"
+      base <> "after:absolute after:bottom-0 after:left-1 after:right-1 after:h-[1.5px] after:rounded-full"
+      |> Kernel.<>(" ")
+      |> Kernel.<>("text-brand after:bg-violet-500")
     else
-      base <> "text-gray-500 hover:text-gray-300 hover:bg-gray-800/40"
+      base <> "text-muted"
     end
   end
 
   defp collapsed_tab_class(active, tab) do
-    base = "p-1.5 rounded-lg transition-all duration-200 "
+    base = "p-1.5 rounded-md transition-all duration-200 interactive "
 
     if active == tab do
-      base <> "bg-gray-800 text-violet-400"
+      base <> "text-brand bg-white/[0.04]"
     else
-      base <> "text-gray-500 hover:text-gray-300 hover:bg-gray-800/40"
+      base <> "text-muted"
     end
   end
 
   defp tab_icon(:files),
-    do: raw("<span class=\"hero-folder-mini inline-block w-3.5 h-3.5\"></span>")
+    do: raw("<span class=\"hero-folder-mini inline-block w-4 h-4\"></span>")
 
   defp tab_icon(:diff),
-    do: raw("<span class=\"hero-code-bracket-mini inline-block w-3.5 h-3.5\"></span>")
+    do: raw("<span class=\"hero-code-bracket-mini inline-block w-4 h-4\"></span>")
 
   defp tab_icon(:terminal),
-    do: raw("<span class=\"hero-command-line-mini inline-block w-3.5 h-3.5\"></span>")
+    do: raw("<span class=\"hero-command-line-mini inline-block w-4 h-4\"></span>")
 
   defp tab_icon(:graph),
-    do: raw("<span class=\"hero-share-mini inline-block w-3.5 h-3.5\"></span>")
+    do: raw("<span class=\"hero-share-mini inline-block w-4 h-4\"></span>")
 
   defp tab_label(:files), do: "Files"
   defp tab_label(:diff), do: "Diff"

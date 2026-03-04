@@ -28,6 +28,12 @@ defmodule Loomkin.Application do
         # Telemetry metrics aggregation
         Loomkin.Telemetry.Metrics,
 
+        # OAuth token storage (encrypted persistence + auto-refresh)
+        Loomkin.Auth.TokenStore,
+
+        # OAuth flow management (in-flight state, PKCE)
+        Loomkin.Auth.OAuthServer,
+
         # Session registry for pid lookup by session_id
         {Registry, keys: :unique, name: Loomkin.SessionRegistry},
 
@@ -55,6 +61,11 @@ defmodule Loomkin.Application do
         maybe_start_mcp_server() ++
         maybe_start_endpoint()
 
+    # Register custom OAuth providers with ReqLLM (before supervisor starts,
+    # but after children list is defined — providers only call ReqLLM.Providers.register!
+    # which has no runtime dependencies on the supervision tree)
+    register_oauth_providers()
+
     opts = [strategy: :one_for_one, name: Loomkin.Supervisor]
     Supervisor.start_link(children, opts)
   end
@@ -80,6 +91,23 @@ defmodule Loomkin.Application do
     case :code.priv_dir(:loomkin) do
       {:error, _} -> false
       path -> path |> to_string() |> String.contains?("releases")
+    end
+  end
+
+  defp register_oauth_providers do
+    for module <- Loomkin.Auth.ProviderRegistry.reqllm_modules() do
+      if Code.ensure_loaded?(module) and function_exported?(module, :register!, 0) do
+        try do
+          module.register!()
+        rescue
+          e ->
+            require Logger
+
+            Logger.warning(
+              "Failed to register OAuth provider #{inspect(module)}: #{Exception.message(e)}"
+            )
+        end
+      end
     end
   end
 end

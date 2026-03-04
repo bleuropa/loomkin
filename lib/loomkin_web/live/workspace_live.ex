@@ -55,7 +55,13 @@ defmodule LoomkinWeb.WorkspaceLive do
         # Collaboration health score (0-100)
         collab_health: nil,
         # Channel bindings for the active team
-        channel_bindings: []
+        channel_bindings: [],
+        # Agent picker for composer
+        show_agent_picker: false,
+        # Cached roster data (recomputed on roster_version changes, not per render)
+        cached_agents: [],
+        cached_tasks: [],
+        cached_budget: %{spent: 0.0, limit: 5.0}
       )
 
     case socket.assigns.live_action do
@@ -74,6 +80,8 @@ defmodule LoomkinWeb.WorkspaceLive do
     tools = Loomkin.Tools.Registry.for_lead()
     project_path = File.cwd!()
 
+    Logger.debug("[WorkspaceLive] start_and_subscribe session=#{session_id} connected=#{connected?(socket)}")
+
     {:ok, pid} =
       Manager.start_session(
         session_id: session_id,
@@ -82,6 +90,8 @@ defmodule LoomkinWeb.WorkspaceLive do
         tools: tools,
         auto_approve: false
       )
+
+    Logger.info("[WorkspaceLive] Session started pid=#{inspect(pid)}")
 
     # Read the effective model back from the session — for resumed sessions
     # this will be the DB-persisted model, not the mount default.
@@ -95,6 +105,7 @@ defmodule LoomkinWeb.WorkspaceLive do
     if connected?(socket) do
       Session.subscribe(session_id)
       Phoenix.PubSub.subscribe(Loomkin.PubSub, "telemetry:updates")
+      Phoenix.PubSub.subscribe(Loomkin.PubSub, "auth:status")
       ensure_index_started(project_path)
 
       team_id = socket.assigns[:team_id]
@@ -191,6 +202,7 @@ defmodule LoomkinWeb.WorkspaceLive do
       nil ->
         # Normal flow: send through Architect pipeline
         session_id = socket.assigns.session_id
+        Logger.info("[WorkspaceLive] Sending message via Architect session=#{session_id} mode=#{socket.assigns.mode} active_team_id=#{inspect(socket.assigns[:active_team_id])}")
         task = Task.async(fn -> Session.send_message(session_id, trimmed) end)
 
         user_msg = %{role: :user, content: trimmed}
@@ -241,8 +253,8 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   def handle_event("reply_to_agent", %{"agent" => agent_name}, socket) do
-    # Find the agent's team_id from the roster data (use active_team_id for sub-team support)
-    agents = roster_agents(socket.assigns.active_team_id)
+    # Find the agent's team_id from the cached roster data
+    agents = socket.assigns.cached_agents
     team_id = Enum.find_value(agents, socket.assigns.active_team_id, fn a ->
       if a.name == agent_name, do: a.team_id
     end)
@@ -252,6 +264,26 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   def handle_event("cancel_reply", _params, socket) do
     {:noreply, assign(socket, reply_target: nil)}
+  end
+
+  def handle_event("toggle_agent_picker", _params, socket) do
+    {:noreply, assign(socket, show_agent_picker: !socket.assigns.show_agent_picker)}
+  end
+
+  def handle_event("select_reply_target", %{"agent" => agent_name, "team-id" => team_id}, socket) do
+    {:noreply,
+     assign(socket,
+       reply_target: %{agent: agent_name, team_id: team_id},
+       show_agent_picker: false
+     )}
+  end
+
+  def handle_event("select_reply_target", %{"agent" => "team"}, socket) do
+    {:noreply, assign(socket, reply_target: nil, show_agent_picker: false)}
+  end
+
+  def handle_event("close_agent_picker", _params, socket) do
+    {:noreply, assign(socket, show_agent_picker: false)}
   end
 
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
@@ -303,7 +335,9 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   def handle_event("switch_team", %{"team-id" => team_id}, socket) do
     bindings = load_channel_bindings(team_id)
-    {:noreply, assign(socket, active_team_id: team_id, channel_bindings: bindings, reply_target: nil)}
+
+    {:noreply,
+     assign(socket, active_team_id: team_id, channel_bindings: bindings, reply_target: nil)}
   end
 
   def handle_event("edit_explorer_path", _params, socket) do
@@ -358,28 +392,32 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   def handle_event("keyboard_shortcut", %{"key" => "escape"}, socket) do
-    if socket.assigns.command_palette_open do
-      {:noreply,
-       assign(socket,
-         command_palette_open: false,
-         command_palette_query: "",
-         command_palette_results: []
-       )}
-    else
-      {:noreply,
-       assign(socket,
-         focused_agent: nil,
-         inspector_mode: :auto_follow,
-         permission_request: nil,
-         reply_target: nil
-       )}
+    cond do
+      socket.assigns.command_palette_open ->
+        {:noreply,
+         assign(socket,
+           command_palette_open: false,
+           command_palette_query: "",
+           command_palette_results: []
+         )}
+
+      socket.assigns.show_agent_picker ->
+        {:noreply, assign(socket, show_agent_picker: false)}
+
+      true ->
+        {:noreply,
+         assign(socket,
+           focused_agent: nil,
+           inspector_mode: :auto_follow,
+           permission_request: nil,
+           reply_target: nil
+         )}
     end
   end
 
   def handle_event("keyboard_shortcut", %{"key" => "focus_input"}, socket) do
     {:noreply, push_event(socket, "focus-input", %{})}
   end
-
 
   def handle_event("keyboard_shortcut", %{"key" => "command_palette"}, socket) do
     if socket.assigns.command_palette_open do
@@ -405,7 +443,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   def handle_event("keyboard_shortcut", %{"key" => "jump_active_agent"}, socket) do
-    agents = roster_agents(socket.assigns[:active_team_id])
+    agents = socket.assigns.cached_agents
 
     active =
       Enum.find(agents, fn a -> a[:status] in [:thinking, :executing_tool] end) ||
@@ -426,8 +464,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   def handle_event("palette_search", %{"value" => query}, socket) do
     results = build_palette_results(socket, query)
 
-    {:noreply,
-     assign(socket, command_palette_query: query, command_palette_results: results)}
+    {:noreply, assign(socket, command_palette_query: query, command_palette_results: results)}
   end
 
   def handle_event("palette_select", %{"type" => "agent", "value" => agent_name}, socket) do
@@ -554,7 +591,7 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   def handle_info({:reply_to_agent, agent_name}, socket) do
     # Forwarded from roster component — same logic as the event handler
-    agents = roster_agents(socket.assigns.active_team_id)
+    agents = socket.assigns.cached_agents
     team_id = Enum.find_value(agents, socket.assigns.active_team_id, fn a ->
       if a.name == agent_name, do: a.team_id
     end)
@@ -570,7 +607,26 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   def handle_info({:new_message, _session_id, msg}, socket) do
+    Logger.info("[WorkspaceLive] :new_message role=#{msg.role} content_len=#{String.length(msg.content || "")}")
     socket = assign(socket, messages: socket.assigns.messages ++ [msg])
+
+    # Also add assistant messages to activity feed for mission control mode
+    socket =
+      if msg.role == :assistant do
+        event = %{
+          id: Ecto.UUID.generate(),
+          type: :message,
+          agent: "Architect",
+          content: msg.content,
+          timestamp: DateTime.utc_now(),
+          expanded: false,
+          metadata: %{from: "Architect", role: :assistant}
+        }
+
+        append_activity_event(socket, event)
+      else
+        socket
+      end
 
     # Clear architect plan when final assistant message arrives after execution
     socket =
@@ -604,6 +660,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   def handle_info({:tool_executing, source, %{tool_name: name}} = event, socket) do
+    Logger.info("[WorkspaceLive] :tool_executing source=#{inspect(source)} tool=#{name}")
     socket =
       socket
       |> forward_to_activity(event)
@@ -673,14 +730,22 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   def handle_info({:team_available, _session_id, team_id}, socket) do
-    # Auto-subscribe to backing team events when the team is created
-    if connected?(socket), do: subscribe_to_team(team_id)
+    Logger.info("[WorkspaceLive] :team_available received team_id=#{team_id}")
+    # Subscribe to backing team events (handle_info is always connected)
+    subscribe_to_team(team_id)
     bindings = load_channel_bindings(team_id)
-    {:noreply, assign(socket, team_id: team_id, active_team_id: team_id, mode: :mission_control, channel_bindings: bindings)}
+
+    socket =
+      socket
+      |> assign(team_id: team_id, active_team_id: team_id, mode: :mission_control, channel_bindings: bindings)
+      |> refresh_roster()
+
+    {:noreply, socket}
   end
 
   def handle_info({:child_team_available, _session_id, child_team_id}, socket) do
-    if connected?(socket), do: subscribe_to_team(child_team_id)
+    Logger.info("[WorkspaceLive] :child_team_available child_team_id=#{child_team_id}")
+    subscribe_to_team(child_team_id)
 
     child_teams =
       if child_team_id in socket.assigns.child_teams do
@@ -689,8 +754,13 @@ defmodule LoomkinWeb.WorkspaceLive do
         socket.assigns.child_teams ++ [child_team_id]
       end
 
-    socket = update(socket, :roster_version, &((&1 || 0) + 1))
-    {:noreply, assign(socket, child_teams: child_teams, mode: :mission_control)}
+    socket =
+      socket
+      |> assign(child_teams: child_teams, mode: :mission_control)
+      |> update(:roster_version, &((&1 || 0) + 1))
+      |> refresh_roster()
+
+    {:noreply, socket}
   end
 
   # --- Errors ---
@@ -726,6 +796,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   # --- Architect Steps ---
 
   def handle_info({:architect_phase, phase}, socket) do
+    Logger.info("[WorkspaceLive] :architect_phase phase=#{phase}")
     {:noreply, assign(socket, architect_phase: phase)}
   end
 
@@ -833,20 +904,26 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   # Team PubSub events -- forward to team components via send_update
-  def handle_info({:agent_status, _agent_name, _status} = event, socket) do
+  def handle_info({:agent_status, agent_name, status} = event, socket) do
+    Logger.debug("[WorkspaceLive] :agent_status agent=#{agent_name} status=#{status}")
     forward_to_team_components(socket)
-    socket = update(socket, :roster_version, &((&1 || 0) + 1))
+
+    socket =
+      socket
+      |> update(:roster_version, &((&1 || 0) + 1))
+      |> refresh_roster()
+
     {:noreply, forward_to_activity(socket, event)}
   end
 
   def handle_info({:task_created, _task_id, _title} = event, socket) do
     forward_to_dashboard(socket)
-    {:noreply, forward_to_activity(socket, event)}
+    {:noreply, socket |> refresh_roster() |> forward_to_activity(event)}
   end
 
   def handle_info({:task_assigned, _task_id, _agent_name} = event, socket) do
     forward_to_dashboard(socket)
-    {:noreply, forward_to_activity(socket, event)}
+    {:noreply, socket |> refresh_roster() |> forward_to_activity(event)}
   end
 
   def handle_info({:task_completed, _task_id, _agent_name, _result} = event, socket) do
@@ -954,7 +1031,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   def handle_info({:child_team_created, child_team_id}, socket) do
-    if connected?(socket), do: subscribe_to_team(child_team_id)
+    subscribe_to_team(child_team_id)
 
     child_teams =
       if child_team_id in socket.assigns.child_teams do
@@ -963,8 +1040,13 @@ defmodule LoomkinWeb.WorkspaceLive do
         socket.assigns.child_teams ++ [child_team_id]
       end
 
-    socket = update(socket, :roster_version, &((&1 || 0) + 1))
-    {:noreply, assign(socket, :child_teams, child_teams)}
+    socket =
+      socket
+      |> assign(:child_teams, child_teams)
+      |> update(:roster_version, &((&1 || 0) + 1))
+      |> refresh_roster()
+
+    {:noreply, socket}
   end
 
   def handle_info({:team_dissolved, team_id}, socket) do
@@ -1017,8 +1099,8 @@ defmodule LoomkinWeb.WorkspaceLive do
 
     socket =
       case result do
-        {:ok, _response} ->
-          Logger.debug("[WorkspaceLive] Async task completed successfully")
+        {:ok, response} ->
+          Logger.info("[WorkspaceLive] Async task completed OK response=#{inspect(response, limit: 200)}")
           socket
 
         {:error, reason} ->
@@ -1154,6 +1236,7 @@ defmodule LoomkinWeb.WorkspaceLive do
       case direction do
         :inbound ->
           {"[#{channel_label}] Incoming: #{String.slice(text, 0, 150)}", channel_label}
+
         :outbound ->
           {"[#{channel_label}] Sent by #{agent_name || "agent"}", agent_name || channel_label}
       end
@@ -1184,8 +1267,26 @@ defmodule LoomkinWeb.WorkspaceLive do
     {:noreply, forward_to_activity(socket, {:collab_event, payload})}
   end
 
+  # OAuth auth status changed — refresh model selector to reflect new provider availability
+  def handle_info({:auth_connected, _provider}, socket) do
+    {:noreply, send_update_to_model_selector(socket)}
+  end
+
+  def handle_info({:auth_disconnected, _provider}, socket) do
+    {:noreply, send_update_to_model_selector(socket)}
+  end
+
+  def handle_info({:auth_refreshed, _provider}, socket) do
+    {:noreply, socket}
+  end
+
+  def handle_info({:auth_refresh_failed, _provider, _reason}, socket) do
+    {:noreply, send_update_to_model_selector(socket)}
+  end
+
   # Catch-all for unhandled PubSub messages (team events, etc.)
-  def handle_info(_msg, socket) do
+  def handle_info(msg, socket) do
+    Logger.info("[WorkspaceLive] UNHANDLED message: #{inspect(msg, limit: 200)}")
     {:noreply, socket}
   end
 
@@ -1194,7 +1295,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   def render(assigns) do
     ~H"""
     <div
-      class="flex flex-col h-screen overflow-hidden bg-gray-950 text-gray-100"
+      class="flex flex-col h-screen overflow-hidden bg-surface-0 gradient-mesh text-gray-100"
       phx-hook="KeyboardShortcuts"
       id="workspace-shortcuts"
     >
@@ -1221,156 +1322,109 @@ defmodule LoomkinWeb.WorkspaceLive do
       {render_command_palette(assigns)}
 
       <%!-- ── Header ── --%>
-      <header class="flex flex-col gap-3 bg-gray-900 border-b border-gray-800 header-glow px-3 py-3 sm:px-4 lg:flex-row lg:items-center lg:justify-between lg:px-6">
-        <div class="flex min-w-0 flex-wrap items-center gap-3 lg:gap-4">
-          <%!-- Branding --%>
-          <div class="flex items-center gap-2">
-            <svg class="w-7 h-7" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <polygon points="10,2 6,10 15,7" fill="#5B21B6" />
-              <polygon points="22,2 26,10 17,7" fill="#5B21B6" />
-              <polygon points="6,10 4,20 12,15" fill="#4B0082" />
-              <polygon points="26,10 28,20 20,15" fill="#4B0082" />
-              <polygon points="12,15 16,7 20,15" fill="#7C3AED" />
-              <polygon points="12,15 16,24 20,15" fill="#4B0082" />
-              <circle cx="12" cy="14" r="3" fill="#F59E0B" />
-              <circle cx="20" cy="14" r="3" fill="#F59E0B" />
-            </svg>
-            <span class="text-xl font-bold bg-gradient-to-r from-violet-400 to-purple-400 bg-clip-text text-transparent tracking-tight">
-              Loomkin
+      <header
+        class="flex-shrink-0 flex items-center gap-2 px-3 py-2 sm:px-4 lg:px-5 relative"
+        style="background: var(--surface-1); border-bottom: 1px solid var(--border-subtle); z-index: 50;"
+      >
+        <%!-- Brand mark --%>
+        <a href="/" class="flex items-center gap-2 flex-shrink-0 group mr-1">
+          <svg class="w-5 h-5 transition-transform duration-200 group-hover:scale-110" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <polygon points="10,2 6,10 15,7" fill="#5B21B6" />
+            <polygon points="22,2 26,10 17,7" fill="#5B21B6" />
+            <polygon points="6,10 4,20 12,15" fill="#4B0082" />
+            <polygon points="26,10 28,20 20,15" fill="#4B0082" />
+            <polygon points="12,15 16,7 20,15" fill="#7C3AED" />
+            <polygon points="12,15 16,24 20,15" fill="#4B0082" />
+            <circle cx="12" cy="14" r="3" fill="#F59E0B" />
+            <circle cx="20" cy="14" r="3" fill="#F59E0B" />
+          </svg>
+          <span class="text-sm font-semibold bg-gradient-to-r from-violet-400 to-purple-400 bg-clip-text text-transparent tracking-tight hidden sm:inline">
+            Loomkin
+          </span>
+        </a>
+
+        <%!-- Separator --%>
+        <div class="hidden sm:block w-px h-4 flex-shrink-0" style="background: var(--border-default);"></div>
+
+        <%!-- Model selector --%>
+        <.live_component
+          module={LoomkinWeb.ModelSelectorComponent}
+          id="model-selector"
+          model={@model}
+        />
+
+        <%!-- Separator --%>
+        <div class="hidden md:block w-px h-4 flex-shrink-0" style="background: var(--border-default);"></div>
+
+        <%!-- Project pill --%>
+        <button
+          phx-click="initiate_switch_project"
+          class="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-md text-xs interactive press-down"
+          style="color: var(--text-secondary);"
+          title={@project_path}
+        >
+          <span class="relative flex h-1.5 w-1.5 flex-shrink-0">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-40"></span>
+            <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+          </span>
+          <span class="font-mono truncate max-w-[8rem]">{Path.basename(@project_path)}</span>
+        </button>
+
+        <%!-- Team indicator (mission control mode) --%>
+        <div
+          :if={@mode == :mission_control && @active_team_id}
+          class="hidden md:flex items-center gap-1.5"
+        >
+          <div class="w-px h-4 flex-shrink-0" style="background: var(--border-default);"></div>
+          <div class="flex items-center gap-1.5 px-2 py-1 rounded-md" style="background: var(--brand-subtle);">
+            <span style="color: var(--text-brand);"><.icon name="hero-user-group-mini" class="w-3 h-3" /></span>
+            <span class="text-xs font-medium" style="color: var(--text-brand);">
+              {short_team_id(@active_team_id)}
+            </span>
+            <span class="text-[10px]" style="color: var(--text-muted);">
+              {length(@cached_agents)}
             </span>
           </div>
 
-          <%!-- Model selector --%>
-          <.live_component
-            module={LoomkinWeb.ModelSelectorComponent}
-            id="model-selector"
-            model={@model}
-          />
-
-          <%!-- Project indicator + Switch button --%>
-          <div class="hidden items-center gap-2 text-sm text-gray-400 md:flex">
-            <div class="flex items-center gap-1.5">
-              <span class="relative flex h-2 w-2">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-50"></span>
-                <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-              </span>
-              <span class="text-xs text-gray-300 font-mono truncate max-w-[12rem]" title={@project_path}>
-                {Path.basename(@project_path)}
-              </span>
-            </div>
-            <button
-              phx-click="initiate_switch_project"
-              class="text-[10px] text-violet-400 hover:text-violet-300 border border-violet-500/30 rounded px-1.5 py-0.5 transition"
-            >
-              Switch
-            </button>
-          </div>
-
-          <%!-- File explorer path (browse only) --%>
-          <div class="hidden items-center gap-2 text-sm text-gray-400 md:flex">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              class="w-4 h-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-              />
-            </svg>
-            <%= if @editing_explorer_path do %>
-              <form phx-submit="set_explorer_path" class="flex items-center gap-1">
-                <input
-                  type="text"
-                  name="path"
-                  value={@explorer_path}
-                  class="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-sm text-gray-200 w-64"
-                  autofocus
-                />
-                <button type="submit" class="text-xs text-violet-400 hover:text-violet-300">
-                  Go
-                </button>
-                <button
-                  type="button"
-                  phx-click="cancel_edit_explorer"
-                  class="text-xs text-gray-500 hover:text-gray-400"
-                >
-                  Cancel
-                </button>
-              </form>
-            <% else %>
-              <button
-                phx-click="edit_explorer_path"
-                class="hover:text-gray-200 transition truncate max-w-xs"
-                title={@explorer_path}
-              >
-                {@explorer_path}
-              </button>
-            <% end %>
-          </div>
-
-          <%!-- Team indicator (mission control mode) --%>
-          <div
-            :if={@mode == :mission_control && @active_team_id}
-            class="flex items-center gap-2 min-w-0"
+          {render_header_channel_badges(assigns)}
+          <select
+            :if={@child_teams != []}
+            phx-change="switch_team"
+            name="team-id"
+            class="max-w-[8rem] truncate text-xs rounded-md px-2 py-1 focus:outline-none"
+            style="background: var(--surface-2); border: 1px solid var(--border-subtle); color: var(--text-secondary);"
           >
-            <span class="text-xs text-violet-400 font-medium">
-              Team: {short_team_id(@active_team_id)}
-            </span>
-            <span class="hidden text-xs text-gray-500 sm:inline">
-              {roster_agent_count(@active_team_id)} agents
-            </span>
-            {render_header_channel_badges(assigns)}
-            <select
-              :if={@child_teams != []}
-              phx-change="switch_team"
-              name="team-id"
-              class="max-w-[11rem] truncate text-xs bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-gray-300 focus:outline-none focus:ring-1 focus:ring-violet-500/50"
+            <option
+              :for={tid <- [@team_id | @child_teams]}
+              value={tid}
+              selected={tid == @active_team_id}
             >
-              <option
-                :for={tid <- [@team_id | @child_teams]}
-                value={tid}
-                selected={tid == @active_team_id}
-              >
-                {short_team_id(tid)}
-              </option>
-            </select>
-          </div>
+              {short_team_id(tid)}
+            </option>
+          </select>
         </div>
 
-        <div class="flex flex-wrap items-center gap-2 sm:gap-3 lg:justify-end">
-          <%!-- Mode toggle (visible when team exists) --%>
-          <button
-            :if={@team_id}
-            phx-click="toggle_mode"
-            class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 bg-gray-800/60 hover:bg-gray-800 text-gray-300 hover:text-violet-400"
-          >
-            <span :if={@mode == :solo} class="hero-user-group-mini inline-block w-3.5 h-3.5" />
-            <span
-              :if={@mode == :mission_control}
-              class="hero-chat-bubble-left-right-mini inline-block w-3.5 h-3.5"
-            />
-            {if @mode == :mission_control, do: "Solo", else: "Mission Control"}
-          </button>
+        <%!-- Spacer --%>
+        <div class="flex-1"></div>
 
+        <%!-- Right: Controls --%>
+        <div class="flex items-center gap-1.5">
           <%!-- Cost pill --%>
           <a
             href="/dashboard"
-            class="flex items-center gap-1.5 bg-gray-800/60 hover:bg-gray-800 rounded-full px-3 py-1.5 transition-colors group"
+            class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-all duration-200 interactive"
+            style="color: var(--text-muted);"
+            title="View dashboard"
           >
-            <.icon
-              name="hero-sparkles-mini"
-              class="w-3.5 h-3.5 text-violet-400 group-hover:text-violet-300"
-            />
-            <span class="text-xs font-mono text-gray-300">${format_cost(@session_cost)}</span>
-            <span class="text-[10px] text-gray-500 font-mono">
-              {format_tokens(@session_tokens)} tok
+            <span style="color: var(--text-brand); opacity: 0.7;"><.icon name="hero-sparkles-mini" class="w-3 h-3" /></span>
+            <span class="font-mono" style="color: var(--text-secondary);">${format_cost(@session_cost)}</span>
+            <span class="hidden font-mono sm:inline" style="color: var(--text-muted); font-size: 10px;">
+              {format_tokens(@session_tokens)}t
             </span>
           </a>
+
+          <%!-- Separator --%>
+          <div class="w-px h-4 flex-shrink-0" style="background: var(--border-default);"></div>
 
           <%!-- Session switcher --%>
           <.live_component
@@ -1379,10 +1433,10 @@ defmodule LoomkinWeb.WorkspaceLive do
             session_id={@session_id}
           />
 
-          <%!-- Status indicator --%>
-          <div class={"flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-300 " <> status_pill_class(@status)}>
+          <%!-- Status pill --%>
+          <div class={status_badge_class(@status)}>
             <span class={status_dot_class(@status)} />
-            {status_label(@status, @current_tool_name)}
+            <span class="hidden sm:inline">{status_label(@status, @current_tool_name)}</span>
           </div>
         </div>
       </header>
@@ -1400,22 +1454,24 @@ defmodule LoomkinWeb.WorkspaceLive do
   defp render_mode(:solo, assigns) do
     ~H"""
     <%!-- Left: Chat + Input --%>
-    <div class="flex-1 flex flex-col min-w-0 min-h-0">
-      <.live_component
-        module={LoomkinWeb.ChatComponent}
-        id="chat"
-        messages={@messages}
-        status={@status}
-        current_tool={@current_tool}
-        streaming={@streaming}
-        streaming_content={@streaming_content}
-        architect_phase={@architect_phase}
-        plan_steps={@plan_steps}
-        current_step={@current_step}
-      />
+    <div class="flex-1 flex flex-col min-w-0 min-h-0 bg-surface-0">
+      <div class="flex-1 overflow-auto min-h-0">
+        <.live_component
+          module={LoomkinWeb.ChatComponent}
+          id="chat"
+          messages={@messages}
+          status={@status}
+          current_tool={@current_tool}
+          streaming={@streaming}
+          streaming_content={@streaming_content}
+          architect_phase={@architect_phase}
+          plan_steps={@plan_steps}
+          current_step={@current_step}
+        />
+      </div>
 
       <%!-- Pending ask_user questions (also shown in solo mode) --%>
-      <div :if={@pending_questions != []} class="border-t border-violet-500/20 bg-gray-900/90 px-3 py-2">
+      <div :if={@pending_questions != []} class="flex-shrink-0 px-3 py-2" style="border-top: 1px solid var(--border-brand); background: var(--surface-1);">
         <.live_component
           module={LoomkinWeb.AskUserComponent}
           id="ask-user-questions-solo"
@@ -1427,26 +1483,27 @@ defmodule LoomkinWeb.WorkspaceLive do
     </div>
 
     <%!-- Right: Sidebar --%>
-    <div class="h-[18rem] w-full border-t border-gray-800 bg-gray-900/50 flex flex-col xl:h-auto xl:w-96 xl:border-l xl:border-t-0">
-      <%!-- Sidebar tab bar (no :team tab — that's in mission control) --%>
-      <div class="flex items-center gap-1 px-3 py-2 border-b border-gray-800 bg-gray-900/80 overflow-x-auto flex-shrink-0">
+    <div class="h-[20rem] w-full flex flex-col xl:h-auto xl:w-80 bg-surface-1" style="border-top: 1px solid var(--border-subtle);">
+      <%!-- Sidebar tab bar --%>
+      <div class="flex items-center gap-0.5 px-1.5 py-1 overflow-x-auto flex-shrink-0" style="border-bottom: 1px solid var(--border-subtle);">
         <button
           :for={tab <- [:files, :diff, :terminal, :graph]}
           phx-click="switch_tab"
           phx-value-tab={tab}
-          class={"flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 " <>
+          class={"relative flex items-center gap-1 px-2 py-1.5 text-[11px] font-medium rounded-md transition-all duration-200 interactive " <>
             if(@active_tab == tab,
-              do: "bg-gray-800 text-violet-400",
-              else: "text-gray-500 hover:text-gray-300 hover:bg-gray-800/40")}
+              do: "text-brand after:absolute after:bottom-0 after:left-1 after:right-1 after:h-[1.5px] after:rounded-full after:bg-violet-500",
+              else: "text-muted")}
         >
-          <span class="text-sm">{tab_icon(tab)}</span>
-          {tab_label(tab)}
+          <span>{tab_icon(tab)}</span>
+          <span class="text-[10px]">{tab_label(tab)}</span>
         </button>
       </div>
 
-      <%!-- Sidebar content with transition --%>
+      <%!-- Sidebar content --%>
       <div
-        class="flex-1 overflow-auto p-4 tab-content-enter"
+        class="flex-1 overflow-auto p-3 tab-content-enter"
+        style="background: var(--surface-0);"
         phx-hook="TabTransition"
         id={"tab-content-#{@active_tab}"}
       >
@@ -1460,32 +1517,35 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   defp render_mode(:mission_control, assigns) do
     ~H"""
-    <%!-- Left: Agent Roster (w-56) --%>
+    <%!-- Left: Agent Roster (xl:w-64) --%>
     <.live_component
       module={LoomkinWeb.AgentRosterComponent}
       id="agent-roster"
       team_id={@active_team_id}
-      agents={roster_agents(@active_team_id)}
-      tasks={roster_tasks(@active_team_id)}
-      budget={roster_budget(@active_team_id)}
+      agents={@cached_agents}
+      tasks={@cached_tasks}
+      budget={@cached_budget}
       focused_agent={@focused_agent}
       roster_version={@roster_version}
       channel_bindings={@channel_bindings}
     />
 
-    <%!-- Center: Activity Feed (flex-1) + Input Bar --%>
-    <div class="flex-1 flex flex-col min-w-0 min-h-0">
-      <.live_component
-        module={LoomkinWeb.TeamActivityComponent}
-        id="activity-feed"
-        team_id={@active_team_id}
-        events={filter_high_signal_events(@activity_events)}
-        known_agents={@activity_known_agents}
-        focused_agent={@focused_agent}
-      />
+    <%!-- Center: Activity Feed (flex-1) + Composer --%>
+    <div class="flex-1 flex flex-col min-w-0 min-h-0 bg-surface-0" style="border-left: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle);">
+      <%!-- Scrollable feed area --%>
+      <div class="flex-1 overflow-auto min-h-0">
+        <.live_component
+          module={LoomkinWeb.TeamActivityComponent}
+          id="activity-feed"
+          team_id={@active_team_id}
+          events={filter_high_signal_events(@activity_events)}
+          known_agents={@activity_known_agents}
+          focused_agent={@focused_agent}
+        />
+      </div>
 
       <%!-- Pending ask_user questions --%>
-      <div :if={@pending_questions != []} class="border-t border-violet-500/20 bg-gray-900/90 px-3 py-2">
+      <div :if={@pending_questions != []} class="flex-shrink-0 px-3 py-2" style="border-top: 1px solid var(--border-brand); background: var(--surface-1);">
         <.live_component
           module={LoomkinWeb.AskUserComponent}
           id="ask-user-questions"
@@ -1502,6 +1562,7 @@ defmodule LoomkinWeb.WorkspaceLive do
         />
       </div>
 
+      <%!-- Sticky composer --%>
       {render_input_bar(assigns)}
     </div>
 
@@ -1535,76 +1596,145 @@ defmodule LoomkinWeb.WorkspaceLive do
   # --- Shared input bar (used by both modes) ---
 
   defp render_input_bar(assigns) do
+    agents = assigns[:cached_agents] || []
+    assigns = assign(assigns, :picker_agents, agents)
+
     ~H"""
-    <form phx-submit="send_message" class="border-t border-gray-800 bg-gray-900/80 p-3 sm:p-4">
-      <div :if={@reply_target} class="flex items-center gap-2 mb-2 px-2 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-        <span class="text-xs text-emerald-400 font-medium">Replying to {@reply_target.agent}</span>
-        <button type="button" phx-click="cancel_reply" class="ml-auto text-xs text-gray-500 hover:text-gray-300">&#10005;</button>
-      </div>
-      <div class="flex gap-3 items-end">
-        <div class="flex-1 relative">
-          <textarea
-            name="text"
-            rows="1"
-            placeholder={if @reply_target, do: "Reply to #{@reply_target.agent}...", else: "What should we work on?"}
-            class="w-full bg-gray-800/60 border border-gray-700/50 rounded-xl px-4 py-3 text-sm text-gray-100 resize-none placeholder-gray-500 placeholder:italic focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500/50 transition-shadow"
-            phx-hook="ShiftEnterSubmit"
-            id="message-input"
-          ><%= @input_text %></textarea>
-        </div>
-        <button
-          :if={@status != :thinking}
-          type="submit"
-          class={"flex items-center justify-center w-10 h-10 rounded-xl transition-all duration-200 " <>
-            if(@status == :idle, do: "bg-violet-600 hover:bg-violet-500 text-white send-btn-ready", else: "bg-gray-800 text-gray-600 cursor-not-allowed")}
-          disabled={@status != :idle}
+    <div class="flex-shrink-0" style="background: var(--surface-1); border-top: 1px solid var(--border-subtle);">
+      <form phx-submit="send_message" class="px-3 py-2.5 sm:px-4 sm:py-3">
+        <%!-- Reply indicator --%>
+        <div
+          :if={@reply_target}
+          class="flex items-center gap-2 mb-2 px-2.5 py-1.5 rounded-lg animate-fade-in"
+          style="background: var(--brand-subtle); border: 1px solid var(--border-brand);"
         >
-          <svg
-            class="w-4 h-4"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.5"
-            viewBox="0 0 24 24"
+          <span class="badge" style="padding: 1px 6px; font-size: 10px;">
+            {@reply_target.agent}
+          </span>
+          <span class="text-[11px]" style="color: var(--text-muted);">Replying</span>
+          <button
+            type="button"
+            phx-click="cancel_reply"
+            class="ml-auto rounded-full p-0.5 transition-colors interactive"
+            style="color: var(--text-muted);"
           >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
-            />
-          </svg>
-        </button>
-        <button
-          :if={@status == :thinking}
-          type="button"
-          phx-click="cancel"
-          class="flex items-center justify-center w-10 h-10 rounded-xl bg-red-600 hover:bg-red-500 text-white transition-all duration-200"
-        >
-          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-            <rect x="6" y="6" width="12" height="12" rx="2" />
-          </svg>
-        </button>
-      </div>
-      <p class="text-[10px] text-gray-600 mt-1.5 pl-1">
-        <kbd class="px-1 py-0.5 bg-gray-800/60 rounded text-gray-500 font-mono text-[9px]">
-          Shift+Enter
-        </kbd>
-        for new line
-      </p>
-    </form>
+            <.icon name="hero-x-mark-mini" class="w-3 h-3" />
+          </button>
+        </div>
+
+        <div class="flex gap-1.5 items-end">
+          <%!-- Agent picker button --%>
+          <div class="relative flex-shrink-0">
+            <button
+              type="button"
+              phx-click="toggle_agent_picker"
+              class="flex items-center justify-center h-9 px-2 rounded-lg transition-all duration-200 press-down"
+              style={"border: 1px solid " <> if(@reply_target, do: "var(--border-brand)", else: "var(--border-subtle)") <> "; color: " <> if(@reply_target, do: "var(--text-brand)", else: "var(--text-muted)") <> "; background: transparent;"}
+              title={if @reply_target, do: @reply_target.agent, else: "Send to team"}
+            >
+              <.icon name="hero-at-symbol-mini" class="w-3.5 h-3.5" />
+              <span :if={@reply_target} class="text-[11px] font-medium ml-1 max-w-[4rem] truncate">{@reply_target.agent}</span>
+            </button>
+
+            <%!-- Agent picker dropdown --%>
+            <div
+              :if={@show_agent_picker}
+              class="card-elevated absolute bottom-full left-0 mb-2 w-52 max-h-60 overflow-y-auto py-1 z-50 animate-scale-in"
+              phx-click-away="close_agent_picker"
+            >
+              <div class="px-2.5 py-1.5" style="border-bottom: 1px solid var(--border-subtle);">
+                <span class="text-[10px] font-medium uppercase tracking-wider" style="color: var(--text-muted);">Send to</span>
+              </div>
+              <button
+                type="button"
+                phx-click="select_reply_target"
+                phx-value-agent="team"
+                class={"flex items-center gap-2 w-full px-2.5 py-1.5 text-left text-xs transition-colors interactive " <> if(!@reply_target, do: "bg-surface-3", else: "")}
+                style="color: var(--text-primary);"
+              >
+                <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-emerald-400" />
+                <span class="font-medium">Entire Team</span>
+              </button>
+              <button
+                :for={agent <- @picker_agents}
+                type="button"
+                phx-click="select_reply_target"
+                phx-value-agent={agent.name}
+                phx-value-team-id={agent.team_id}
+                class={"flex items-center gap-2 w-full px-2.5 py-1.5 text-left text-xs transition-colors interactive " <> if(@reply_target && @reply_target.agent == agent.name, do: "bg-surface-3", else: "")}
+              >
+                <span class={"w-1.5 h-1.5 rounded-full flex-shrink-0 " <> agent_picker_dot_class(agent[:status])} />
+                <span class="truncate" style={"color: #{agent_color(agent.name)};"}>{agent.name}</span>
+                <span class="ml-auto text-[10px]" style="color: var(--text-muted);">{agent[:role] || agent[:status]}</span>
+              </button>
+            </div>
+          </div>
+
+          <%!-- Textarea --%>
+          <div class="flex-1 relative">
+            <textarea
+              name="text"
+              rows="1"
+              placeholder={if @reply_target, do: "Reply to #{@reply_target.agent}...", else: "What should we work on?"}
+              class="w-full rounded-lg px-3 py-2 text-sm resize-none focus:outline-none transition-all duration-200"
+              style="background: var(--surface-0); border: 1px solid var(--border-subtle); color: var(--text-primary); caret-color: var(--brand);"
+              onfocus="this.style.borderColor='var(--border-brand)'; this.style.boxShadow='0 0 0 1px rgba(124, 58, 237, 0.2)';"
+              onblur="this.style.borderColor='var(--border-subtle)'; this.style.boxShadow='none';"
+              phx-hook="ShiftEnterSubmit"
+              id="message-input"
+            ><%= @input_text %></textarea>
+          </div>
+
+          <%!-- Send/Cancel buttons --%>
+          <button
+            :if={@status != :thinking}
+            type="submit"
+            class={"flex items-center justify-center w-9 h-9 rounded-lg transition-all duration-200 press-down " <>
+              if(@status == :idle, do: "text-white", else: "cursor-not-allowed")}
+            style={if @status == :idle, do: "background: var(--brand);", else: "background: var(--surface-2); color: var(--text-muted);"}
+            disabled={@status != :idle}
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+            </svg>
+          </button>
+          <button
+            :if={@status == :thinking}
+            type="button"
+            phx-click="cancel"
+            class="flex items-center justify-center w-9 h-9 rounded-lg transition-all duration-200 press-down"
+            style="background: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3);"
+          >
+            <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+              <rect x="6" y="6" width="12" height="12" rx="2" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="flex items-center gap-3 mt-1 pl-0.5">
+          <span class="text-[10px]" style="color: var(--text-muted); opacity: 0.6;">
+            <kbd class="font-mono text-[9px]">&#8679;&#9166;</kbd> new line
+          </span>
+          <span class="text-[10px]" style="color: var(--text-muted); opacity: 0.6;">
+            <kbd class="font-mono text-[9px]">/</kbd> focus
+          </span>
+        </div>
+      </form>
+    </div>
     """
   end
 
   # --- Helpers ---
 
-  defp status_pill_class(:idle), do: "bg-green-900/30 text-green-400"
-  defp status_pill_class(:thinking), do: "bg-violet-900/30 text-violet-400"
-  defp status_pill_class(:executing_tool), do: "bg-blue-900/30 text-blue-400"
-  defp status_pill_class(_), do: "bg-gray-800/60 text-gray-400"
+  defp status_badge_class(:idle), do: "badge-success flex items-center gap-1.5"
+  defp status_badge_class(:thinking), do: "badge flex items-center gap-1.5"
+  defp status_badge_class(:executing_tool), do: "badge flex items-center gap-1.5"
+  defp status_badge_class(_), do: "badge flex items-center gap-1.5"
 
-  defp status_dot_class(:idle), do: "w-2 h-2 rounded-full bg-green-400 status-dot-idle"
-  defp status_dot_class(:thinking), do: "w-2 h-2 rounded-full bg-violet-400 status-dot-thinking"
-  defp status_dot_class(:executing_tool), do: "w-2 h-2 rounded-full bg-blue-400 animate-spin"
-  defp status_dot_class(_), do: "w-2 h-2 rounded-full bg-gray-500"
+  defp status_dot_class(:idle), do: "w-1.5 h-1.5 rounded-full bg-emerald-400 status-dot-idle"
+  defp status_dot_class(:thinking), do: "w-1.5 h-1.5 rounded-full bg-violet-400 status-dot-thinking"
+  defp status_dot_class(:executing_tool), do: "w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"
+  defp status_dot_class(_), do: "w-1.5 h-1.5 rounded-full bg-zinc-500"
 
   defp status_label(:idle, _tool), do: "Ready"
   defp status_label(:thinking, _tool), do: "Thinking..."
@@ -1753,7 +1883,11 @@ defmodule LoomkinWeb.WorkspaceLive do
         >
           {team_sub_tab_label(sub)}
         </button>
-        <span :if={@collab_health} class="ml-auto flex items-center gap-1 text-xs" title={"Collaboration health: #{@collab_health}/100"}>
+        <span
+          :if={@collab_health}
+          class="ml-auto flex items-center gap-1 text-xs"
+          title={"Collaboration health: #{@collab_health}/100"}
+        >
           <span class={"inline-block w-2 h-2 rounded-full " <> collab_health_color(@collab_health)} />
           <span class="text-gray-500">{@collab_health}</span>
         </span>
@@ -1821,15 +1955,47 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   defp subscribe_to_team(team_id) do
+    Logger.info("[WorkspaceLive] subscribe_to_team(#{team_id}) self=#{inspect(self())}")
     Phoenix.PubSub.subscribe(Loomkin.PubSub, "team:#{team_id}")
     Phoenix.PubSub.subscribe(Loomkin.PubSub, "team:#{team_id}:tasks")
     Phoenix.PubSub.subscribe(Loomkin.PubSub, "team:#{team_id}:context")
     Phoenix.PubSub.subscribe(Loomkin.PubSub, "team:#{team_id}:decisions")
   end
 
+  defp send_update_to_model_selector(socket) do
+    # Bump auth_version so the component knows to reload providers,
+    # even when the model string hasn't changed
+    auth_version = (socket.assigns[:auth_version] || 0) + 1
+
+    send_update(LoomkinWeb.ModelSelectorComponent,
+      id: "model-selector",
+      model: socket.assigns.model,
+      auth_version: auth_version
+    )
+
+    assign(socket, auth_version: auth_version)
+  end
+
+  # Recompute cached roster data and ensure child team subscriptions are active.
+  # Called when roster_version bumps — avoids per-render Registry queries.
+  defp refresh_roster(socket) do
+    team_id = socket.assigns[:active_team_id]
+    agents = roster_agents(team_id)
+    tasks = roster_tasks(team_id)
+    budget = roster_budget(team_id)
+
+    # Ensure we're subscribed to all known child teams (defensive re-subscribe)
+    for child_id <- socket.assigns[:child_teams] || [] do
+      subscribe_to_team(child_id)
+    end
+
+    assign(socket, cached_agents: agents, cached_tasks: tasks, cached_budget: budget)
+  end
+
   defp forward_to_activity(socket, pubsub_event) do
     case activity_event_from(pubsub_event) do
       nil ->
+        Logger.debug("[WorkspaceLive] forward_to_activity: DROPPED event=#{inspect(elem(pubsub_event, 0))}")
         socket
 
       :merge_tool_result ->
@@ -2026,10 +2192,32 @@ defmodule LoomkinWeb.WorkspaceLive do
   # tool_complete is handled specially — not via activity_event_from, see forward_to_activity
   defp activity_event_from({:tool_complete, _agent, _payload}), do: :merge_tool_result
 
-  # --- Agent status: only surface meaningful transitions, skip noisy ones ---
+  # --- Agent status: surface spawn and working transitions ---
 
-  defp activity_event_from({:agent_status, _agent, status}) when status in [:idle, :working],
-    do: nil
+  defp activity_event_from({:agent_status, agent, :idle}) do
+    # Agent just spawned (initial status broadcast) — show as spawn event
+    %{
+      id: Ecto.UUID.generate(),
+      type: :agent_spawn,
+      agent: agent,
+      content: "#{agent} joined",
+      timestamp: DateTime.utc_now(),
+      expanded: false,
+      metadata: %{agent_name: agent}
+    }
+  end
+
+  defp activity_event_from({:agent_status, agent, :working}) do
+    %{
+      id: Ecto.UUID.generate(),
+      type: :status,
+      agent: agent,
+      content: "Started working",
+      timestamp: DateTime.utc_now(),
+      expanded: false,
+      metadata: %{}
+    }
+  end
 
   defp activity_event_from({:agent_status, agent, :blocked}) do
     %{
@@ -2394,18 +2582,22 @@ defmodule LoomkinWeb.WorkspaceLive do
   defp roster_agents(nil), do: []
 
   defp roster_agents(team_id) do
-    parent_agents =
+    all_parent =
       case Loomkin.Teams.Manager.list_agents(team_id) do
         agents when is_list(agents) -> agents
         {:ok, agents} when is_list(agents) -> agents
         _other -> []
       end
+
+    parent_agents =
+      all_parent
       |> Enum.map(&Map.put(&1, :team_id, team_id))
       |> Enum.reject(fn a -> a.name == "lead" end)
 
+    sub_teams = Loomkin.Teams.Manager.list_sub_teams(team_id)
+
     child_agents =
-      team_id
-      |> Loomkin.Teams.Manager.list_sub_teams()
+      sub_teams
       |> Enum.flat_map(fn child_id ->
         case Loomkin.Teams.Manager.list_agents(child_id) do
           agents when is_list(agents) -> agents
@@ -2415,10 +2607,10 @@ defmodule LoomkinWeb.WorkspaceLive do
         |> Enum.map(&Map.put(&1, :team_id, child_id))
       end)
 
-    parent_agents ++ child_agents
+    result = parent_agents ++ child_agents
+    # Debug-level logging removed — roster_agents is now cached and called less frequently
+    result
   end
-
-  defp roster_agent_count(team_id), do: team_id |> roster_agents() |> length()
 
   defp roster_tasks(nil), do: []
 
@@ -2479,6 +2671,25 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   defp trackable_agent_name(_), do: nil
+
+  defp agent_picker_dot_class(:idle), do: "bg-green-400"
+  defp agent_picker_dot_class(:thinking), do: "bg-violet-400 status-dot-thinking"
+  defp agent_picker_dot_class(:executing_tool), do: "bg-blue-400"
+  defp agent_picker_dot_class(:error), do: "bg-red-400"
+  defp agent_picker_dot_class(:blocked), do: "bg-amber-400"
+  defp agent_picker_dot_class(_), do: "bg-gray-400"
+
+  @agent_colors [
+    "#818cf8", "#f472b6", "#34d399", "#fb923c", "#22d3ee",
+    "#a78bfa", "#fbbf24", "#f87171", "#4ade80", "#60a5fa"
+  ]
+
+  defp agent_color(name) when is_binary(name) do
+    idx = :erlang.phash2(name, length(@agent_colors))
+    Enum.at(@agent_colors, idx)
+  end
+
+  defp agent_color(_), do: "#a1a1aa"
 
   defp short_team_id(id) when is_binary(id), do: String.slice(id, 0, 8)
   defp short_team_id(_), do: "?"
@@ -2662,30 +2873,48 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   defp build_palette_results(socket, query) do
     q = String.downcase(String.trim(query))
-    team_id = socket.assigns[:active_team_id]
 
     agents =
-      team_id
-      |> roster_agents()
+      (socket.assigns[:cached_agents] || [])
       |> Enum.map(fn a ->
         %{type: :agent, label: a[:name] || "unknown", detail: "Agent", value: a[:name] || ""}
       end)
 
     tabs =
       Enum.map([:files, :diff, :terminal, :graph], fn tab ->
-        %{type: :tab, label: Atom.to_string(tab), detail: "Inspector Tab", value: Atom.to_string(tab)}
+        %{
+          type: :tab,
+          label: Atom.to_string(tab),
+          detail: "Inspector Tab",
+          value: Atom.to_string(tab)
+        }
       end)
 
     sub_tabs =
       Enum.map([:activity, :cost, :graph], fn tab ->
-        %{type: :sub_tab, label: Atom.to_string(tab), detail: "Team Sub-tab", value: Atom.to_string(tab)}
+        %{
+          type: :sub_tab,
+          label: Atom.to_string(tab),
+          detail: "Team Sub-tab",
+          value: Atom.to_string(tab)
+        }
       end)
 
     actions = [
-      %{type: :action, label: "Toggle Mode (Solo/Mission Control)", detail: "Action", value: "toggle_mode"},
+      %{
+        type: :action,
+        label: "Toggle Mode (Solo/Mission Control)",
+        detail: "Action",
+        value: "toggle_mode"
+      },
       %{type: :action, label: "Switch Project", detail: "Action", value: "switch_project"},
       %{type: :action, label: "Focus Input", detail: "Action", value: "focus_input"},
-      %{type: :action, label: "Refresh Channel Bindings", detail: "Channels", value: "refresh_channels"}
+      %{
+        type: :action,
+        label: "Refresh Channel Bindings",
+        detail: "Channels",
+        value: "refresh_channels"
+      }
     ]
 
     all = agents ++ tabs ++ sub_tabs ++ actions
@@ -2709,13 +2938,14 @@ defmodule LoomkinWeb.WorkspaceLive do
     >
       <div class="fixed inset-0 bg-black/60" />
       <div
-        class="relative w-full max-w-lg bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden"
+        class="relative w-full max-w-lg card-elevated overflow-hidden"
+        style="box-shadow: 0 16px 64px rgba(0,0,0,0.6), 0 0 0 1px var(--border-default);"
         phx-click-away="close_command_palette"
         phx-hook="CommandPalette"
         id="command-palette"
       >
-        <div class="flex items-center gap-2 px-4 py-3 border-b border-gray-800">
-          <svg class="w-5 h-5 text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <div class="flex items-center gap-2 px-4 py-3" style="border-bottom: 1px solid var(--border-subtle);">
+          <svg class="w-4 h-4 flex-shrink-0" style="color: var(--text-muted);" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
@@ -2725,15 +2955,16 @@ defmodule LoomkinWeb.WorkspaceLive do
             value={@command_palette_query}
             phx-keyup="palette_search"
             name="query"
-            class="flex-1 bg-transparent text-sm text-gray-100 placeholder-gray-500 outline-none"
+            class="flex-1 bg-transparent text-sm outline-none"
+            style="color: var(--text-primary); caret-color: var(--brand);"
             autocomplete="off"
             phx-debounce="100"
           />
-          <kbd class="px-1.5 py-0.5 text-[10px] font-mono text-gray-500 bg-gray-800 rounded">Esc</kbd>
+          <kbd class="px-1.5 py-0.5 text-[10px] font-mono rounded" style="background: var(--surface-2); color: var(--text-muted);">Esc</kbd>
         </div>
 
-        <div class="max-h-72 overflow-y-auto py-2">
-          <div :if={@command_palette_results == []} class="px-4 py-6 text-center text-sm text-gray-500">
+        <div class="max-h-72 overflow-y-auto py-1">
+          <div :if={@command_palette_results == []} class="px-4 py-6 text-center text-sm" style="color: var(--text-muted);">
             No results found
           </div>
           <button
@@ -2742,25 +2973,25 @@ defmodule LoomkinWeb.WorkspaceLive do
             phx-click="palette_select"
             phx-value-type={item.type}
             phx-value-value={item.value}
-            class="flex items-center justify-between w-full px-4 py-2 text-left text-sm hover:bg-gray-800 focus:bg-gray-800 focus:outline-none transition-colors"
+            class="flex items-center justify-between w-full px-4 py-2 text-left text-sm transition-colors interactive"
           >
             <div class="flex items-center gap-2 min-w-0">
               <span class={palette_icon_class(item.type)} />
-              <span class="text-gray-200 truncate">{item.label}</span>
+              <span class="truncate" style="color: var(--text-secondary);">{item.label}</span>
             </div>
-            <span class="text-xs text-gray-500 flex-shrink-0 ml-2">{item.detail}</span>
+            <span class="text-xs flex-shrink-0 ml-2" style="color: var(--text-muted);">{item.detail}</span>
           </button>
         </div>
 
-        <div class="flex items-center gap-4 px-4 py-2 border-t border-gray-800 text-[10px] text-gray-600">
+        <div class="flex items-center gap-4 px-4 py-2 text-[10px]" style="border-top: 1px solid var(--border-subtle); color: var(--text-muted); opacity: 0.7;">
           <span>
-            <kbd class="px-1 py-0.5 bg-gray-800 rounded font-mono">↑↓</kbd> navigate
+            <kbd class="px-1 py-0.5 rounded font-mono" style="background: var(--surface-2);">↑↓</kbd> navigate
           </span>
           <span>
-            <kbd class="px-1 py-0.5 bg-gray-800 rounded font-mono">Enter</kbd> select
+            <kbd class="px-1 py-0.5 rounded font-mono" style="background: var(--surface-2);">Enter</kbd> select
           </span>
           <span>
-            <kbd class="px-1 py-0.5 bg-gray-800 rounded font-mono">Esc</kbd> close
+            <kbd class="px-1 py-0.5 rounded font-mono" style="background: var(--surface-2);">Esc</kbd> close
           </span>
         </div>
       </div>
@@ -2816,5 +3047,4 @@ defmodule LoomkinWeb.WorkspaceLive do
       _ -> []
     end
   end
-
 end
