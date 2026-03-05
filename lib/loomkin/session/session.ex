@@ -3,7 +3,8 @@ defmodule Loomkin.Session do
 
   use GenServer
 
-  alias Loomkin.Session.{Architect, Persistence}
+  alias Loomkin.Session.Architect
+  alias Loomkin.Session.Persistence
 
   require Logger
 
@@ -116,6 +117,24 @@ defmodule Loomkin.Session do
     end
   end
 
+  @doc "Get the current model for a running session."
+  @spec get_model(pid()) :: String.t()
+  def get_model(pid) when is_pid(pid) do
+    GenServer.call(pid, :get_model, 5_000)
+  end
+
+  @doc "Get the current fast model for a running session."
+  @spec get_fast_model(pid()) :: String.t()
+  def get_fast_model(pid) when is_pid(pid) do
+    GenServer.call(pid, :get_fast_model, 5_000)
+  end
+
+  @doc "Get the team_id for a running session."
+  @spec get_team_id(pid()) :: String.t() | nil
+  def get_team_id(pid) when is_pid(pid) do
+    GenServer.call(pid, :get_team_id, 5_000)
+  end
+
   @doc "Update the project path for a running session."
   @spec update_project_path(pid() | String.t(), String.t()) :: :ok | {:error, term()}
   def update_project_path(pid, path) when is_pid(pid) do
@@ -183,8 +202,41 @@ defmodule Loomkin.Session do
 
     # Try routing to Concierge first (bootstrap agent pattern)
     case maybe_route_to_concierge(state, text) do
-      {:routed, result} ->
-        {:reply, result, state}
+      {:routed, concierge_pid} ->
+        # Persist and broadcast the user message
+        {:ok, _} =
+          Persistence.save_message(%{session_id: state.id, role: :user, content: text})
+
+        user_msg = %{role: :user, content: text}
+        state = %{state | messages: state.messages ++ [user_msg]}
+        broadcast(state.id, {:new_message, state.id, user_msg})
+
+        state = update_status(state, :thinking)
+
+        # Run concierge call in an async Task so the Session stays responsive
+        task =
+          Task.Supervisor.async_nolink(Loomkin.Teams.TaskSupervisor, fn ->
+            case Loomkin.Teams.Agent.send_message(concierge_pid, text) do
+              {:ok, response_text} ->
+                # Persist and broadcast the assistant response
+                {:ok, _} =
+                  Persistence.save_message(%{
+                    session_id: state.id,
+                    role: :assistant,
+                    content: response_text
+                  })
+
+                assistant_msg = %{role: :assistant, content: response_text}
+                updated_messages = state.messages ++ [assistant_msg]
+                broadcast(state.id, {:new_message, state.id, assistant_msg})
+                {:ok, response_text, %{state | messages: updated_messages}}
+
+              {:error, reason} ->
+                {:error, reason, state}
+            end
+          end)
+
+        {:noreply, %{state | architect_task: {task, from}}}
 
       :not_routed ->
         state = update_status(state, :thinking)
@@ -487,14 +539,13 @@ defmodule Loomkin.Session do
   defp broadcast(session_id, event) do
     Phoenix.PubSub.broadcast(Loomkin.PubSub, "session:#{session_id}", event)
   rescue
-    _ -> :ok
+    e -> Logger.warning("[Session] Broadcast failed: #{Exception.message(e)}")
   end
 
-  defp maybe_route_to_concierge(state, text) do
+  defp maybe_route_to_concierge(state, _text) do
     with team_id when is_binary(team_id) <- state.team_id,
          {:ok, pid} <- Loomkin.Session.Manager.find_agent(team_id, "concierge") do
-      result = Loomkin.Teams.Agent.send_message(pid, text)
-      {:routed, result}
+      {:routed, pid}
     else
       _ -> :not_routed
     end

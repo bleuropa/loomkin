@@ -136,7 +136,12 @@ defmodule Loomkin.Teams.ConsensusPolicy do
   defp to_keyword(attrs) when is_list(attrs), do: attrs
 
   defp safe_to_atom(k) when is_atom(k), do: k
-  defp safe_to_atom(k) when is_binary(k), do: String.to_atom(k)
+
+  defp safe_to_atom(k) when is_binary(k) do
+    String.to_existing_atom(k)
+  rescue
+    ArgumentError -> k
+  end
 
   defp validate_quorum(errors, quorum) when quorum in @valid_quorum_atoms, do: errors
 
@@ -194,14 +199,14 @@ defmodule Loomkin.Teams.ConsensusPolicy do
   defp quorum_string_to_atom(other) do
     case Integer.parse(other) do
       {n, ""} when n > 0 -> n
-      _ -> String.to_atom(other)
+      _ -> other
     end
   end
 
   defp deadlock_string_to_atom("escalate_to_user"), do: :escalate_to_user
   defp deadlock_string_to_atom("leader_decides"), do: :leader_decides
   defp deadlock_string_to_atom("random_tiebreak"), do: :random_tiebreak
-  defp deadlock_string_to_atom(other), do: String.to_atom(other)
+  defp deadlock_string_to_atom(other), do: other
 
   defp get_config_val(map, key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

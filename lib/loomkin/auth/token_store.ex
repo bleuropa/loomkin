@@ -323,7 +323,7 @@ defmodule Loomkin.Auth.TokenStore do
     known = ProviderRegistry.provider_id_strings()
 
     if provider_str in known do
-      {:ok, String.to_atom(provider_str)}
+      {:ok, String.to_existing_atom(provider_str)}
     else
       :error
     end

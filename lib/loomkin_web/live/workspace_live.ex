@@ -70,14 +70,20 @@ defmodule LoomkinWeb.WorkspaceLive do
 
     case socket.assigns.live_action do
       :index ->
-        # Auto-resume the latest active session for this project
-        case Loomkin.Session.Persistence.find_latest_active_session(project_path) do
-          %{id: existing_id} ->
-            {:ok, push_navigate(socket, to: ~p"/sessions/#{existing_id}")}
+        if params["new"] == "true" do
+          # Explicit new session — skip auto-resume
+          session_id = Ecto.UUID.generate()
+          {:ok, start_and_subscribe(socket, session_id)}
+        else
+          # Auto-resume the latest active session for this project
+          case Loomkin.Session.Persistence.find_latest_active_session(project_path) do
+            %{id: existing_id} ->
+              {:ok, push_navigate(socket, to: ~p"/sessions/#{existing_id}")}
 
-          nil ->
-            session_id = Ecto.UUID.generate()
-            {:ok, start_and_subscribe(socket, session_id)}
+            nil ->
+              session_id = Ecto.UUID.generate()
+              {:ok, start_and_subscribe(socket, session_id)}
+          end
         end
 
       :show ->
@@ -111,14 +117,14 @@ defmodule LoomkinWeb.WorkspaceLive do
     # this will be the DB-persisted model, not the mount default.
     effective_model =
       try do
-        GenServer.call(pid, :get_model, 5_000)
+        Session.get_model(pid)
       catch
         _, _ -> socket.assigns.model
       end
 
     effective_fast_model =
       try do
-        GenServer.call(pid, :get_fast_model, 5_000)
+        Session.get_fast_model(pid)
       catch
         _, _ -> effective_model
       end
@@ -204,10 +210,7 @@ defmodule LoomkinWeb.WorkspaceLive do
 
             events = socket.assigns.activity_events ++ [reply_event]
 
-            events =
-              if length(events) > @max_activity_events,
-                do: Enum.drop(events, length(events) - @max_activity_events),
-                else: events
+            events = cap_events(events)
 
             {:noreply,
              socket
@@ -252,10 +255,7 @@ defmodule LoomkinWeb.WorkspaceLive do
 
             events = socket.assigns.activity_events ++ [user_event]
 
-            events =
-              if length(events) > @max_activity_events,
-                do: Enum.drop(events, length(events) - @max_activity_events),
-                else: events
+            events = cap_events(events)
 
             assign(socket, activity_events: events)
           else
@@ -329,7 +329,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   def handle_event("new_session", _params, socket) do
-    {:noreply, push_navigate(socket, to: ~p"/")}
+    {:noreply, push_navigate(socket, to: ~p"/?new=true")}
   end
 
   def handle_event("select_session", %{"id" => id}, socket) do
@@ -1855,6 +1855,10 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   # --- Helpers ---
 
+  defp cap_events(events, max \\ @max_activity_events) do
+    if length(events) > max, do: Enum.take(events, -max), else: events
+  end
+
   defp status_badge_class(:idle), do: "badge-success flex items-center gap-1.5"
   defp status_badge_class(:thinking), do: "badge flex items-center gap-1.5"
   defp status_badge_class(:executing_tool), do: "badge flex items-center gap-1.5"
@@ -2152,10 +2156,7 @@ defmodule LoomkinWeb.WorkspaceLive do
       event ->
         events = socket.assigns.activity_events ++ [event]
 
-        events =
-          if length(events) > @max_activity_events,
-            do: Enum.drop(events, length(events) - @max_activity_events),
-            else: events
+        events = cap_events(events)
 
         agents = socket.assigns.activity_known_agents
 
@@ -2173,10 +2174,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   defp append_activity_event(socket, event) do
     events = socket.assigns.activity_events ++ [event]
 
-    events =
-      if length(events) > @max_activity_events,
-        do: Enum.drop(events, length(events) - @max_activity_events),
-        else: events
+    events = cap_events(events)
 
     agents = socket.assigns.activity_known_agents
 

@@ -37,9 +37,9 @@ defmodule Loomkin.Session.Manager do
       {:error, {:already_started, pid}} ->
         # Ensure secondary callers also get team wiring by re-broadcasting
         # the team_id if the session already has one.
-        spawn(fn ->
+        Task.start(fn ->
           try do
-            case GenServer.call(pid, :get_team_id, 5_000) do
+            case Session.get_team_id(pid) do
               nil -> :ok
               team_id -> broadcast(session_id, {:team_available, session_id, team_id})
             end
@@ -84,69 +84,64 @@ defmodule Loomkin.Session.Manager do
       "[Session.Manager] maybe_create_backing_team session=#{session_id} model=#{inspect(model)}"
     )
 
-    Task.start(fn ->
-      try do
-        {:ok, team_id} =
-          Loomkin.Teams.Manager.create_team(
-            name: "session-#{String.slice(session_id, 0, 8)}",
-            project_path: project_path
-          )
+    try do
+      {:ok, team_id} =
+        Loomkin.Teams.Manager.create_team(
+          name: "session-#{String.slice(session_id, 0, 8)}",
+          project_path: project_path
+        )
 
-        Logger.info("[Session.Manager] Team created team_id=#{team_id} for session=#{session_id}")
+      Logger.info("[Session.Manager] Team created team_id=#{team_id} for session=#{session_id}")
 
-        # Spawn Concierge (thinking model) — the primary user-facing agent
-        case Loomkin.Teams.Manager.spawn_agent(team_id, "concierge", :concierge,
-               model: model,
-               project_path: project_path
-             ) do
-          {:ok, pid} ->
-            Logger.info("[Session.Manager] Concierge spawned pid=#{inspect(pid)} team=#{team_id}")
+      # Spawn Concierge (thinking model) — the primary user-facing agent
+      case Loomkin.Teams.Manager.spawn_agent(team_id, "concierge", :concierge,
+             model: model,
+             project_path: project_path
+           ) do
+        {:ok, pid} ->
+          Logger.info("[Session.Manager] Concierge spawned pid=#{inspect(pid)} team=#{team_id}")
 
-          {:error, reason} ->
-            Logger.warning(
-              "[Session.Manager] Concierge FAILED team=#{team_id}: #{inspect(reason)}"
-            )
-        end
-
-        # Spawn Orienter (fast model) — silent background scanner
-        case Loomkin.Teams.Manager.spawn_agent(team_id, "orienter", :orienter,
-               model: fast_model,
-               project_path: project_path
-             ) do
-          {:ok, pid} ->
-            Logger.info("[Session.Manager] Orienter spawned pid=#{inspect(pid)} team=#{team_id}")
-
-          {:error, reason} ->
-            Logger.warning(
-              "[Session.Manager] Orienter FAILED team=#{team_id}: #{inspect(reason)}"
-            )
-        end
-
-        # Persist team_id to the session DB record
-        persist_team_id(session_id, team_id)
-
-        # Notify the session process about its team
-        case Registry.lookup(Loomkin.SessionRegistry, session_id) do
-          [{pid, _}] ->
-            Logger.info("[Session.Manager] Sending :team_created to session pid=#{inspect(pid)}")
-            send(pid, {:team_created, team_id})
-
-          [] ->
-            Logger.error("[Session.Manager] Session NOT FOUND in registry! session=#{session_id}")
-        end
-      rescue
-        e ->
-          Logger.error(
-            "[Session.Manager] Error creating backing team: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
+        {:error, reason} ->
+          Logger.warning(
+            "[Session.Manager] Concierge FAILED team=#{team_id}: #{inspect(reason)}"
           )
       end
-    end)
+
+      # Spawn Orienter (fast model) — silent background scanner
+      case Loomkin.Teams.Manager.spawn_agent(team_id, "orienter", :orienter,
+             model: fast_model,
+             project_path: project_path
+           ) do
+        {:ok, pid} ->
+          Logger.info("[Session.Manager] Orienter spawned pid=#{inspect(pid)} team=#{team_id}")
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Session.Manager] Orienter FAILED team=#{team_id}: #{inspect(reason)}"
+          )
+      end
+
+      # Persist team_id to the session DB record
+      persist_team_id(session_id, team_id)
+
+      # Notify the session process about its team
+      case Registry.lookup(Loomkin.SessionRegistry, session_id) do
+        [{pid, _}] ->
+          Logger.info("[Session.Manager] Sending :team_created to session pid=#{inspect(pid)}")
+          send(pid, {:team_created, team_id})
+
+        [] ->
+          Logger.error("[Session.Manager] Session NOT FOUND in registry! session=#{session_id}")
+      end
+    rescue
+      e ->
+        Logger.error(
+          "[Session.Manager] Error creating backing team: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
+        )
+    end
   end
 
   defp persist_team_id(session_id, team_id) do
-    # Small delay to avoid write contention with session creation
-    Process.sleep(50)
-
     case Loomkin.Session.Persistence.get_session(session_id) do
       nil ->
         Logger.warning(
@@ -172,7 +167,7 @@ defmodule Loomkin.Session.Manager do
         # Retrieve team_id before stopping the session process
         team_id =
           try do
-            GenServer.call(pid, :get_team_id, 5_000)
+            Session.get_team_id(pid)
           catch
             _, _ -> nil
           end

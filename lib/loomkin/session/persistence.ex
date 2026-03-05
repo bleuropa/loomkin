@@ -2,7 +2,8 @@ defmodule Loomkin.Session.Persistence do
   @moduledoc "Database operations for sessions and messages."
 
   alias Loomkin.Repo
-  alias Loomkin.Schemas.{Session, Message}
+  alias Loomkin.Schemas.Message
+  alias Loomkin.Schemas.Session
   import Ecto.Query
 
   @spec create_session(map()) :: {:ok, Session.t()} | {:error, Ecto.Changeset.t()}

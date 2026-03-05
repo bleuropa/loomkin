@@ -409,7 +409,8 @@ defmodule Loomkin.Teams.ContextKeeper do
       end
     )
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[ContextKeeper] Registry token update failed: #{Exception.message(e)}")
   end
 
   defp keyword_match(messages, query) do

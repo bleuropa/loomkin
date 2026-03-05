@@ -166,7 +166,7 @@ defmodule Loomkin.Teams.Templates do
     try do
       String.to_existing_atom(role)
     rescue
-      ArgumentError -> String.to_atom(role)
+      ArgumentError -> :custom
     end
   end
 

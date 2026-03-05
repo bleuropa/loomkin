@@ -11,17 +11,15 @@ defmodule Loomkin.Teams.Agent do
 
   alias Loomkin.AgentLoop
 
-  alias Loomkin.Teams.{
-    Comms,
-    Context,
-    ContextRetrieval,
-    CostTracker,
-    Manager,
-    ModelRouter,
-    PriorityRouter,
-    RateLimiter,
-    Role
-  }
+  alias Loomkin.Teams.Comms
+  alias Loomkin.Teams.Context
+  alias Loomkin.Teams.ContextRetrieval
+  alias Loomkin.Teams.CostTracker
+  alias Loomkin.Teams.Manager
+  alias Loomkin.Teams.ModelRouter
+  alias Loomkin.Teams.PriorityRouter
+  alias Loomkin.Teams.RateLimiter
+  alias Loomkin.Teams.Role
 
   require Logger
 

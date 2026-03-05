@@ -165,7 +165,12 @@ defmodule Loomkin.MCP.Client do
       Logger.warning("[MCP Client] Server config missing :name, skipping: #{inspect(server_config)}")
       state
     else
-      endpoint_id = String.to_atom(name)
+      endpoint_id =
+        try do
+          String.to_existing_atom(name)
+        rescue
+          ArgumentError -> :"mcp_#{name}"
+        end
       transport = build_transport(server_config)
 
       endpoint_config = %{
