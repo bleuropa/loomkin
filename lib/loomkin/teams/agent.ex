@@ -100,7 +100,7 @@ defmodule Loomkin.Teams.Agent do
 
   @doc "Inject steering guidance and resume a paused agent."
   def steer(pid, guidance) when is_binary(guidance) do
-    GenServer.call(pid, {:resume, redirect: guidance}, 15_000)
+    GenServer.call(pid, {:resume, guidance: guidance}, 15_000)
   end
 
   @doc "Send a permission response to this agent."
@@ -325,7 +325,7 @@ defmodule Loomkin.Teams.Agent do
     {:reply, {:error, :not_paused}, state}
   end
 
-  def handle_call({:resume, opts}, from, %{status: :paused} = state) do
+  def handle_call({:resume, opts}, _from, %{status: :paused} = state) do
     Logger.info("[Agent:#{state.name}] Resuming from pause")
 
     paused = state.paused_state
@@ -333,7 +333,7 @@ defmodule Loomkin.Teams.Agent do
 
     # If user provided steering guidance, inject it as a user message
     messages =
-      case Keyword.get(opts, :redirect) do
+      case Keyword.get(opts, :guidance) do
         nil ->
           messages
 
@@ -360,7 +360,7 @@ defmodule Loomkin.Teams.Agent do
         run_loop_with_escalation(messages, loop_opts, snapshot)
       end)
 
-    {:reply, :ok, %{state | loop_task: {task, from}}}
+    {:reply, :ok, %{state | loop_task: {task, nil}}}
   end
 
   # --- handle_cast ---
@@ -941,7 +941,7 @@ defmodule Loomkin.Teams.Agent do
       Loomkin.Teams.Tasks.complete_task(task_id, response_text)
     end
 
-    {:noreply, state}
+    {:noreply, drain_queues(state)}
   end
 
   @impl true
@@ -950,14 +950,14 @@ defmodule Loomkin.Teams.Agent do
     state = %{state | messages: messages}
     state = set_status(state, :idle)
     broadcast_team(state, {:agent_status, state.name, :idle})
-    {:noreply, state}
+    {:noreply, drain_queues(state)}
   end
 
   @impl true
   def handle_info({:loop_resumed, {:pending_permission, new_pending, messages}}, state) do
     state = %{state | messages: messages, pending_permission: new_pending}
     state = set_status(state, :waiting_permission)
-    {:noreply, state}
+    {:noreply, drain_queues(state)}
   end
 
   @impl true
@@ -973,7 +973,7 @@ defmodule Loomkin.Teams.Agent do
 
     state = set_status(state, :paused)
     broadcast_team(state, {:agent_status, state.name, :paused})
-    {:noreply, state}
+    {:noreply, drain_queues(state)}
   end
 
   @impl true

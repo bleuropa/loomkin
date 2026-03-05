@@ -563,6 +563,9 @@ defmodule Loomkin.AgentLoop do
         emit_usage(config, pending_info.response)
         do_loop(messages, config, pending_info.iteration + 1)
 
+      {:paused, reason, messages} ->
+        {:paused, reason, messages, pending_info.iteration}
+
       {:pending, remaining, messages, new_pending_data} ->
         new_pending_info = %{
           remaining_tool_calls: remaining,

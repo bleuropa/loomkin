@@ -34,18 +34,18 @@ defmodule LoomkinWeb.AgentRosterComponent do
     {:noreply, socket}
   end
 
-  def handle_event("pause_agent", %{"agent" => agent_name}, socket) do
-    send(self(), {:pause_agent, agent_name})
+  def handle_event("pause_agent", %{"agent" => agent_name, "team-id" => team_id}, socket) do
+    send(self(), {:pause_agent, agent_name, team_id})
     {:noreply, socket}
   end
 
-  def handle_event("resume_agent", %{"agent" => agent_name}, socket) do
-    send(self(), {:resume_agent, agent_name})
+  def handle_event("resume_agent", %{"agent" => agent_name, "team-id" => team_id}, socket) do
+    send(self(), {:resume_agent, agent_name, team_id})
     {:noreply, socket}
   end
 
-  def handle_event("steer_agent", %{"agent" => agent_name}, socket) do
-    send(self(), {:steer_agent, agent_name})
+  def handle_event("steer_agent", %{"agent" => agent_name, "team-id" => team_id}, socket) do
+    send(self(), {:steer_agent, agent_name, team_id})
     {:noreply, socket}
   end
 
@@ -140,6 +140,7 @@ defmodule LoomkinWeb.AgentRosterComponent do
                 :if={agent.status == :working}
                 phx-click="pause_agent"
                 phx-value-agent={agent.name}
+                phx-value-team-id={agent.team_id}
                 phx-target={@myself}
                 title={"Pause #{agent.name}"}
                 class="text-muted hover:text-amber-400 opacity-0 group-hover:opacity-100 p-1 rounded-md hover:bg-surface-3 flex-shrink-0"
@@ -158,6 +159,7 @@ defmodule LoomkinWeb.AgentRosterComponent do
                 :if={agent.status == :paused}
                 phx-click="resume_agent"
                 phx-value-agent={agent.name}
+                phx-value-team-id={agent.team_id}
                 phx-target={@myself}
                 title={"Resume #{agent.name}"}
                 class="text-muted hover:text-green-400 p-1 rounded-md hover:bg-surface-3 flex-shrink-0"
@@ -176,6 +178,7 @@ defmodule LoomkinWeb.AgentRosterComponent do
                 :if={agent.status == :paused}
                 phx-click="steer_agent"
                 phx-value-agent={agent.name}
+                phx-value-team-id={agent.team_id}
                 phx-target={@myself}
                 title={"Steer #{agent.name}"}
                 class="text-muted hover:text-brand p-1 rounded-md hover:bg-surface-3 flex-shrink-0"
@@ -325,7 +328,7 @@ defmodule LoomkinWeb.AgentRosterComponent do
   defp status_dot_class(:working), do: "bg-green-400 agent-dot-working"
   defp status_dot_class(:idle), do: "bg-zinc-500"
   defp status_dot_class(:blocked), do: "bg-amber-400 agent-dot-thinking"
-  defp status_dot_class(:paused), do: "bg-blue-400"
+  defp status_dot_class(:paused), do: "bg-blue-400 animate-pulse"
   defp status_dot_class(:error), do: "bg-red-400 agent-dot-error"
   defp status_dot_class(:waiting_permission), do: "bg-amber-400 agent-dot-thinking"
   defp status_dot_class(_), do: "bg-zinc-500"

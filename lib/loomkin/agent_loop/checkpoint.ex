@@ -8,6 +8,26 @@ defmodule Loomkin.AgentLoop.Checkpoint do
 
   The checkpoint callback receives a `%Checkpoint{}` and returns either
   `:continue` or `{:pause, reason}`.
+
+  ## Checkpoint types and their fields
+
+  ### `:post_llm`
+
+  Emitted after the LLM responds but before any tool calls are executed.
+
+    * `planned_tools` — list of tool call maps the LLM wants to execute
+    * `tool_name` — always `nil`
+    * `tool_result` — always `nil`
+
+  ### `:post_tool`
+
+  Emitted after a single tool call has been executed.
+
+    * `tool_name` — the name of the tool that just ran
+    * `tool_result` — the string result returned by the tool
+    * `planned_tools` — always `nil`
+
+  Both types always carry `agent_name`, `team_id`, `iteration`, and `messages`.
   """
 
   @type checkpoint_type :: :post_llm | :post_tool

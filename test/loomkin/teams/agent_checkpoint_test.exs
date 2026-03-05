@@ -87,8 +87,8 @@ defmodule Loomkin.Teams.AgentCheckpointTest do
         %{state | loop_task: {task, nil}, status: :working}
       end)
 
-      # Wait for the task result to be processed
-      Process.sleep(100)
+      # Wait for the status broadcast with a timeout
+      assert_receive {:agent_status, _, :paused}, 500
       state = :sys.get_state(pid)
 
       assert state.status == :paused
@@ -97,9 +97,6 @@ defmodule Loomkin.Teams.AgentCheckpointTest do
       assert state.paused_state.iteration == 3
       assert state.paused_state.reason == :user_requested
       assert state.paused_state.messages == [%{role: :user, content: "test"}]
-
-      # Verify the status broadcast was sent
-      assert_received {:agent_status, _, :paused}
     end
   end
 
@@ -204,7 +201,8 @@ defmodule Loomkin.Teams.AgentCheckpointTest do
         {:context_update, "peer-1", %{info: "test"}}
       )
 
-      Process.sleep(50)
+      # Synchronize: get_state forces the GenServer to process all pending messages
+      _ = :sys.get_state(pid)
       state = :sys.get_state(pid)
       assert length(state.pending_updates) > 0
     end
