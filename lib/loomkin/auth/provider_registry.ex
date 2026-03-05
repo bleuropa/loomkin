@@ -124,7 +124,9 @@ defmodule Loomkin.Auth.ProviderRegistry do
   """
   @spec oauth_provider_map() :: %{String.t() => String.t()}
   def oauth_provider_map do
-    Map.new(@providers, fn p -> {p.base_prefix, p.oauth_prefix} end)
+    @providers
+    |> Enum.reject(&(&1.id == :anthropic))
+    |> Map.new(fn p -> {p.base_prefix, p.oauth_prefix} end)
   end
 
   # ── OAuth-capable set (replaces Models.@oauth_capable_providers) ────
@@ -132,7 +134,11 @@ defmodule Loomkin.Auth.ProviderRegistry do
   @doc "MapSet of provider atoms that support OAuth."
   @spec oauth_capable_providers() :: MapSet.t(atom())
   def oauth_capable_providers do
-    MapSet.new(@providers, & &1.id)
+    # Anthropic blocks OAuth credentials used outside Claude Code (Jan 2026).
+    # Hide their OAuth option from the UI until/unless this restriction lifts.
+    @providers
+    |> Enum.reject(&(&1.id == :anthropic))
+    |> MapSet.new(& &1.id)
   end
 
   # ── Flow type helpers ──────────────────────────────────────────────
