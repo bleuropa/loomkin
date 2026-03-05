@@ -618,7 +618,11 @@ defmodule Loomkin.Teams.Agent do
 
   @impl true
   def handle_info({:signal, %Jido.Signal{} = sig}, state) do
-    handle_info(sig, state)
+    if signal_for_this_team?(sig, state) do
+      handle_info(sig, state)
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info(%Jido.Signal{type: "context.update"} = sig, state) do
@@ -640,67 +644,13 @@ defmodule Loomkin.Teams.Agent do
   end
 
   def handle_info(%Jido.Signal{type: "collaboration.peer.message"} = sig, state) do
-    msg = sig.data[:message]
+    # Skip messages targeted at a different agent
+    target = sig.data[:target]
 
-    case msg do
-      {:peer_message, from, content} ->
-        handle_info({:peer_message, from, content}, state)
-
-      {:context_update, from, payload} ->
-        handle_info({:context_update, from, payload}, state)
-
-      {:inject_system_message, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:debate_start, _, _, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:debate_propose, _, _, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:debate_critique, _, _, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:debate_revise, _, _, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:debate_vote, _, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:pair_started, _, _, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:pair_stopped, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:pair_broadcast, _, _, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:discovery_relevant, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:rebalance_needed, _, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:conflict_detected, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:query, _, _, _, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:query_answer, _, _, _, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:confidence_warning, _} = tuple ->
-        handle_info(tuple, state)
-
-      {:sub_team_completed, _} = tuple ->
-        handle_info(tuple, state)
-
-      _ ->
-        from = sig.data[:from] || "unknown"
-        content = if is_binary(msg), do: msg, else: inspect(msg)
-        handle_info({:peer_message, from, content}, state)
+    if target && target != to_string(state.name) do
+      {:noreply, state}
+    else
+      handle_peer_message_signal(sig, state)
     end
   end
 
@@ -730,6 +680,19 @@ defmodule Loomkin.Teams.Agent do
 
   def handle_info(%Jido.Signal{type: "context.discovery.relevant"} = sig, state) do
     handle_info({:discovery_relevant, sig.data}, state)
+  end
+
+  def handle_info(%Jido.Signal{type: "collaboration.pair.event"} = sig, state) do
+    msg = sig.data
+    name = to_string(state.name)
+
+    cond do
+      msg[:coder] == name or msg[:reviewer] == name ->
+        handle_info({:pair_broadcast, msg[:from], msg[:event], msg[:payload] || %{}}, state)
+
+      true ->
+        {:noreply, state}
+    end
   end
 
   def handle_info(%Jido.Signal{type: "team.dissolved"}, state) do
@@ -1918,6 +1881,82 @@ defmodule Loomkin.Teams.Agent do
     Context.update_agent_status(state.team_id, state.name, new_status)
 
     %{state | status: new_status}
+  end
+
+  defp handle_peer_message_signal(sig, state) do
+    msg = sig.data[:message]
+
+    case msg do
+      {:peer_message, from, content} ->
+        handle_info({:peer_message, from, content}, state)
+
+      {:context_update, from, payload} ->
+        handle_info({:context_update, from, payload}, state)
+
+      {:inject_system_message, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:debate_start, _, _, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:debate_propose, _, _, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:debate_critique, _, _, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:debate_revise, _, _, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:debate_vote, _, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:pair_started, _, _, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:pair_stopped, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:pair_broadcast, _, _, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:discovery_relevant, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:rebalance_needed, _, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:conflict_detected, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:query, _, _, _, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:query_answer, _, _, _, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:confidence_warning, _} = tuple ->
+        handle_info(tuple, state)
+
+      {:sub_team_completed, _} = tuple ->
+        handle_info(tuple, state)
+
+      _ ->
+        from = sig.data[:from] || "unknown"
+        content = if is_binary(msg), do: msg, else: inspect(msg)
+        handle_info({:peer_message, from, content}, state)
+    end
+  end
+
+  # Check if a signal belongs to this agent's team by inspecting the signal's data or
+  # causality extensions for a team_id field. Signals without team_id are accepted
+  # (they may be system-level signals).
+  defp signal_for_this_team?(sig, state) do
+    signal_team_id =
+      get_in(sig.data, [:team_id]) ||
+        get_in(sig, [Access.key(:extensions, %{}), "loomkin", "team_id"])
+
+    signal_team_id == nil or signal_team_id == state.team_id
   end
 
   defp broadcast_team(state, {:agent_status, agent_name, status}) do

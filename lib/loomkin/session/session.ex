@@ -29,6 +29,7 @@ defmodule Loomkin.Session do
 
   @doc "Subscribe to session events via Jido Signal Bus."
   def subscribe(_session_id) do
+    # Subscribes to all session signals; consumers must filter by session_id
     Loomkin.Signals.subscribe("session.**")
   end
 

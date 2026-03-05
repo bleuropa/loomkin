@@ -761,7 +761,11 @@ defmodule LoomkinWeb.WorkspaceLive do
   # signals, eventually the tuple clauses will be removed.
 
   def handle_info({:signal, %Jido.Signal{} = sig}, socket) do
-    handle_info(sig, socket)
+    if signal_for_workspace?(sig, socket) do
+      handle_info(sig, socket)
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info(%Jido.Signal{type: "agent.status"} = sig, socket) do
@@ -894,13 +898,23 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   def handle_info(%Jido.Signal{type: "session.message.new"} = sig, socket) do
     %{session_id: sid} = sig.data
-    msg = Map.get(sig.data, :message, sig.data)
-    handle_info({:new_message, sid, msg}, socket)
+
+    if sid == socket.assigns.session_id do
+      msg = Map.get(sig.data, :message, sig.data)
+      handle_info({:new_message, sid, msg}, socket)
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info(%Jido.Signal{type: "session.status.changed"} = sig, socket) do
     %{session_id: sid, status: status} = sig.data
-    handle_info({:session_status, sid, status}, socket)
+
+    if sid == socket.assigns.session_id do
+      handle_info({:session_status, sid, status}, socket)
+    else
+      {:noreply, socket}
+    end
   end
 
   # Catch-all for unhandled signal types — log and ignore
@@ -2718,6 +2732,19 @@ defmodule LoomkinWeb.WorkspaceLive do
   # Subscribe to a team's PubSub topics, but only once per team.
   # Also synthesizes "joined" events for agents that already exist (race condition fix).
   # Returns the updated socket with the team tracked in :subscribed_teams.
+  # Check if a signal belongs to this workspace's team(s) or session.
+  # Session signals are filtered separately in their specific handlers.
+  # Signals without team_id are accepted (system-level signals).
+  defp signal_for_workspace?(sig, socket) do
+    signal_team_id =
+      get_in(sig.data, [:team_id]) ||
+        get_in(sig, [Access.key(:extensions, %{}), "loomkin", "team_id"])
+
+    subscribed_teams = socket.assigns[:subscribed_teams] || MapSet.new()
+
+    signal_team_id == nil or MapSet.member?(subscribed_teams, signal_team_id)
+  end
+
   defp subscribe_to_team(socket, team_id) do
     subscribed = socket.assigns[:subscribed_teams] || MapSet.new()
 

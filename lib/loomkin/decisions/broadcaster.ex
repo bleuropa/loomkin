@@ -39,7 +39,17 @@ defmodule Loomkin.Decisions.Broadcaster do
   end
 
   @impl true
-  def handle_info({:signal, %Jido.Signal{} = sig}, state), do: handle_info(sig, state)
+  def handle_info({:signal, %Jido.Signal{} = sig}, state) do
+    signal_team_id =
+      get_in(sig.data, [:team_id]) ||
+        get_in(sig, [Access.key(:extensions, %{}), "loomkin", "team_id"])
+
+    if signal_team_id == nil or signal_team_id == state.team_id do
+      handle_info(sig, state)
+    else
+      {:noreply, state}
+    end
+  end
 
   def handle_info(%Jido.Signal{type: "decision.node.added", data: data}, state) do
     node = Map.get(data, :node)

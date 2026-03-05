@@ -232,7 +232,10 @@ defmodule Loomkin.Channels.BridgeTest do
   end
 
   describe "permission_request forwarding" do
-    test "registers in PermissionRegistry and sends approval instructions", %{pid: pid} do
+    test "registers in PermissionRegistry and sends approval instructions", %{
+      pid: pid,
+      team_id: team_id
+    } do
       test_pid = self()
 
       expect(Loomkin.MockAdapter, :send_text, fn _binding, text, _opts ->
@@ -241,7 +244,7 @@ defmodule Loomkin.Channels.BridgeTest do
       end)
 
       send_signal(pid, "team.permission.request", %{
-        team_id: "team-x",
+        team_id: team_id,
         tool_name: "write_file",
         tool_path: "/a.ex",
         agent_name: "coder"
@@ -311,38 +314,48 @@ defmodule Loomkin.Channels.BridgeTest do
   end
 
   describe "session event forwarding" do
-    test "forwards session_cancelled with monospace session_id", %{pid: pid} do
+    test "forwards session_cancelled with monospace session_id", %{pid: pid, binding: binding} do
       test_pid = self()
+      session_id = "sess-cancel-#{System.unique_integer([:positive])}"
+      Bridge.subscribe_session(binding.channel, binding.channel_id, session_id)
+      Process.sleep(50)
 
       expect(Loomkin.MockAdapter, :send_text, fn _binding, text, _opts ->
         send(test_pid, {:text_sent, text})
         :ok
       end)
 
-      send_signal(pid, "session.cancelled", %{session_id: "sess-1"})
+      send_signal(pid, "session.cancelled", %{session_id: session_id})
 
       assert_receive {:text_sent, text}, 500
-      assert text =~ "`sess-1`"
+      assert text =~ "`#{session_id}`"
       assert text =~ "cancelled"
     end
 
-    test "forwards llm_error", %{pid: pid} do
+    test "forwards llm_error", %{pid: pid, binding: binding} do
       test_pid = self()
+      session_id = "sess-llm-#{System.unique_integer([:positive])}"
+      Bridge.subscribe_session(binding.channel, binding.channel_id, session_id)
+      Process.sleep(50)
 
       expect(Loomkin.MockAdapter, :send_text, fn _binding, text, _opts ->
         send(test_pid, {:text_sent, text})
         :ok
       end)
 
-      send_signal(pid, "session.llm.error", %{session_id: "sess-1", error: "API timeout"})
+      send_signal(pid, "session.llm.error", %{session_id: session_id, error: "API timeout"})
 
       assert_receive {:text_sent, text}, 500
       assert text =~ "LLM Error"
       assert text =~ "API timeout"
     end
 
-    test "suppresses session_status at default levels", %{pid: pid} do
-      send_signal(pid, "session.status.changed", %{session_id: "sess-1", status: :running})
+    test "suppresses session_status at default levels", %{pid: pid, binding: binding} do
+      session_id = "sess-status-#{System.unique_integer([:positive])}"
+      Bridge.subscribe_session(binding.channel, binding.channel_id, session_id)
+      Process.sleep(50)
+
+      send_signal(pid, "session.status.changed", %{session_id: session_id, status: :running})
       Process.sleep(50)
 
       state = :sys.get_state(pid)
@@ -350,8 +363,16 @@ defmodule Loomkin.Channels.BridgeTest do
       assert count == 0
     end
 
-    test "suppresses team_available at default levels", %{pid: pid} do
-      send_signal(pid, "session.team.available", %{session_id: "sess-1", team_id: "team-1"})
+    test "suppresses team_available at default levels", %{pid: pid, binding: binding} do
+      session_id = "sess-avail-#{System.unique_integer([:positive])}"
+      Bridge.subscribe_session(binding.channel, binding.channel_id, session_id)
+      Process.sleep(50)
+
+      send_signal(pid, "session.team.available", %{
+        session_id: session_id,
+        team_id: "team-1"
+      })
+
       Process.sleep(50)
 
       state = :sys.get_state(pid)

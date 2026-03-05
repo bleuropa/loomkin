@@ -41,7 +41,13 @@ defmodule Loomkin.Decisions.AutoLogger do
   end
 
   @impl true
-  def handle_info({:signal, %Jido.Signal{} = sig}, state), do: handle_info(sig, state)
+  def handle_info({:signal, %Jido.Signal{} = sig}, state) do
+    if signal_for_team?(sig, state.team_id) do
+      handle_info(sig, state)
+    else
+      {:noreply, state}
+    end
+  end
 
   # Agent joins (first time only)
   def handle_info(
@@ -207,4 +213,12 @@ defmodule Loomkin.Decisions.AutoLogger do
 
   defp truncate(str, max) when byte_size(str) <= max, do: str
   defp truncate(str, max), do: String.slice(str, 0, max) <> "..."
+
+  defp signal_for_team?(sig, team_id) do
+    signal_team_id =
+      get_in(sig.data, [:team_id]) ||
+        get_in(sig, [Access.key(:extensions, %{}), "loomkin", "team_id"])
+
+    signal_team_id == nil or signal_team_id == team_id
+  end
 end

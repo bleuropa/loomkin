@@ -74,7 +74,7 @@ defmodule Loomkin.AgentLoop.Strategies do
 
     result =
       LoomkinTelemetry.span_llm_request(telemetry_meta, fn ->
-        Jido.AI.ask(prompt,
+        Jido.AI.generate_text(prompt,
           model: config.model,
           system_prompt: system_prompt,
           max_tokens: 4096,
@@ -83,7 +83,10 @@ defmodule Loomkin.AgentLoop.Strategies do
       end)
 
     case result do
-      {:ok, response_text} ->
+      {:ok, response} ->
+        response_text = Jido.AI.Turn.extract_text(response)
+        usage = extract_usage(response)
+
         config.on_event.(:strategy_complete, %{
           strategy: effective_strategy,
           response_length: String.length(response_text)
@@ -93,8 +96,7 @@ defmodule Loomkin.AgentLoop.Strategies do
         updated_messages = messages ++ [assistant_msg]
         config.on_event.(:new_message, assistant_msg)
 
-        {:ok, response_text, updated_messages,
-         %{usage: %{input_tokens: 0, output_tokens: 0, total_cost: 0}}}
+        {:ok, response_text, updated_messages, %{usage: usage}}
 
       {:error, reason} ->
         Logger.error("Strategy #{effective_strategy} LLM error: #{inspect(reason)}")
@@ -196,4 +198,17 @@ defmodule Loomkin.AgentLoop.Strategies do
 
   defp maybe_acquire_rate_limit(%{rate_limiter: nil}, _provider), do: :ok
   defp maybe_acquire_rate_limit(%{rate_limiter: callback}, provider), do: callback.(provider)
+
+  defp extract_usage(response) when is_map(response) do
+    usage = response["usage"] || response[:usage] || %{}
+
+    %{
+      input_tokens: usage["input_tokens"] || usage[:input_tokens] || usage["prompt_tokens"] || 0,
+      output_tokens:
+        usage["output_tokens"] || usage[:output_tokens] || usage["completion_tokens"] || 0,
+      total_cost: 0
+    }
+  end
+
+  defp extract_usage(_), do: %{input_tokens: 0, output_tokens: 0, total_cost: 0}
 end

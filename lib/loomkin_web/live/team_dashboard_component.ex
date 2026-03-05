@@ -118,7 +118,7 @@ defmodule LoomkinWeb.TeamDashboardComponent do
 
   def handle_info(
         %Jido.Signal{
-          type: "agent.role_changed",
+          type: "agent.role.changed",
           data: %{agent_name: agent_name, new_role: new_role}
         },
         socket

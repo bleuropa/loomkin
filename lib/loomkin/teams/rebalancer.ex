@@ -62,7 +62,13 @@ defmodule Loomkin.Teams.Rebalancer do
   end
 
   # Unwrap signal bus delivery tuples
-  def handle_info({:signal, %Jido.Signal{} = sig}, state), do: handle_info(sig, state)
+  def handle_info({:signal, %Jido.Signal{} = sig}, state) do
+    if signal_for_team?(sig, state.team_id) do
+      handle_info(sig, state)
+    else
+      {:noreply, state}
+    end
+  end
 
   # Track agent status transitions
   def handle_info(
@@ -193,5 +199,13 @@ defmodule Loomkin.Teams.Rebalancer do
 
   defp schedule_check(interval) do
     Process.send_after(self(), :check_stuck, interval)
+  end
+
+  defp signal_for_team?(sig, team_id) do
+    signal_team_id =
+      get_in(sig.data, [:team_id]) ||
+        get_in(sig, [Access.key(:extensions, %{}), "loomkin", "team_id"])
+
+    signal_team_id == nil or signal_team_id == team_id
   end
 end

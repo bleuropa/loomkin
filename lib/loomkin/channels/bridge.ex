@@ -109,7 +109,13 @@ defmodule Loomkin.Channels.Bridge do
   # --- Signal event handlers (severity-gated) ---
 
   @impl true
-  def handle_info({:signal, %Jido.Signal{} = sig}, state), do: handle_info(sig, state)
+  def handle_info({:signal, %Jido.Signal{} = sig}, state) do
+    if signal_for_bridge?(sig, state) do
+      handle_info(sig, state)
+    else
+      {:noreply, state}
+    end
+  end
 
   def handle_info(%Jido.Signal{type: "team.ask_user.question", data: data} = msg, state) do
     if should_notify?(msg, state) do
@@ -523,6 +529,30 @@ defmodule Loomkin.Channels.Bridge do
       nil -> Severity.default_levels()
       levels when is_list(levels) -> levels
       _ -> Severity.default_levels()
+    end
+  end
+
+  # Check if signal belongs to this bridge's team or tracked sessions.
+  # Session signals must match a subscribed session; team signals must match the binding's team.
+  defp signal_for_bridge?(sig, state) do
+    signal_team_id =
+      get_in(sig.data, [:team_id]) ||
+        get_in(sig, [Access.key(:extensions, %{}), "loomkin", "team_id"])
+
+    signal_session_id = get_in(sig.data, [:session_id])
+
+    cond do
+      # Session-scoped signals: must match a subscribed session
+      signal_session_id != nil ->
+        MapSet.member?(state.subscribed_sessions, signal_session_id)
+
+      # Team-scoped signals: must match the binding's team
+      signal_team_id != nil ->
+        signal_team_id == state.binding.team_id
+
+      # Unscoped signals (system-level): accept
+      true ->
+        true
     end
   end
 

@@ -62,6 +62,10 @@ defmodule Loomkin.AgentLoop do
 
       strategy when strategy in [:cot, :cod, :tot, :adaptive] ->
         Loomkin.AgentLoop.Strategies.run(strategy, messages, config)
+
+      unknown ->
+        Logger.warning("Unknown reasoning strategy #{inspect(unknown)}, falling back to :react")
+        run_with_rate_limit_retry(messages, config, 0)
     end
   end
 

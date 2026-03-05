@@ -137,10 +137,19 @@ defmodule Loomkin.Teams.PairMode do
   """
   @spec broadcast_event(String.t(), String.t(), pair_event(), String.t(), map()) :: :ok
   def broadcast_event(team_id, pair_id, event_type, from, payload \\ %{}) do
+    # Include coder/reviewer names so agents can filter for their own pair signals
+    {coder, reviewer} =
+      case get_pair(team_id, pair_id) do
+        {:ok, info} -> {info.coder, info.reviewer}
+        :error -> {nil, nil}
+      end
+
     message = %{
       event: event_type,
       from: from,
       pair_id: pair_id,
+      coder: coder,
+      reviewer: reviewer,
       payload: payload,
       timestamp: System.monotonic_time(:millisecond)
     }

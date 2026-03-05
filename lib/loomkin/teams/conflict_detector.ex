@@ -125,7 +125,13 @@ defmodule Loomkin.Teams.ConflictDetector do
   # --- File edit tracking ---
 
   @impl true
-  def handle_info({:signal, %Jido.Signal{} = sig}, state), do: handle_info(sig, state)
+  def handle_info({:signal, %Jido.Signal{} = sig}, state) do
+    if signal_for_team?(sig, state.team_id) do
+      handle_info(sig, state)
+    else
+      {:noreply, state}
+    end
+  end
 
   def handle_info(
         %Jido.Signal{
@@ -400,4 +406,12 @@ defmodule Loomkin.Teams.ConflictDetector do
 
   defp truncate(text, max) when byte_size(text) <= max, do: text
   defp truncate(text, max), do: String.slice(text, 0, max) <> "..."
+
+  defp signal_for_team?(sig, team_id) do
+    signal_team_id =
+      get_in(sig.data, [:team_id]) ||
+        get_in(sig, [Access.key(:extensions, %{}), "loomkin", "team_id"])
+
+    signal_team_id == nil or signal_team_id == team_id
+  end
 end
