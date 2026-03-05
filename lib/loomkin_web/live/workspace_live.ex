@@ -40,7 +40,9 @@ defmodule LoomkinWeb.WorkspaceLive do
         current_step: nil,
         activity_events: [],
         activity_known_agents: [],
-        # Mission control assigns
+        # Mission control assigns — agent cards + comms
+        agent_cards: %{},
+        comms_events: [],
         roster_version: 0,
         mode: :mission_control,
         focused_agent: nil,
@@ -706,6 +708,33 @@ defmodule LoomkinWeb.WorkspaceLive do
     end
   end
 
+  # --- Agent Card action buttons — forward to existing info handlers to avoid duplication ---
+
+  def handle_event("focus_card_agent", %{"agent" => agent_name}, socket) do
+    send(self(), {:focus_agent, agent_name})
+    {:noreply, socket}
+  end
+
+  def handle_event("reply_to_card_agent", %{"agent" => agent_name, "team-id" => team_id}, socket) do
+    send(self(), {:reply_to_agent, agent_name, team_id})
+    {:noreply, socket}
+  end
+
+  def handle_event("pause_card_agent", %{"agent" => agent_name, "team-id" => team_id}, socket) do
+    send(self(), {:pause_agent, agent_name, team_id})
+    {:noreply, socket}
+  end
+
+  def handle_event("resume_card_agent", %{"agent" => agent_name, "team-id" => team_id}, socket) do
+    send(self(), {:resume_agent, agent_name, team_id})
+    {:noreply, socket}
+  end
+
+  def handle_event("steer_card_agent", %{"agent" => agent_name, "team-id" => team_id}, socket) do
+    send(self(), {:steer_agent, agent_name, team_id})
+    {:noreply, socket}
+  end
+
   # --- Component Info Messages ---
 
   def handle_info({:reply_to_agent, agent_name}, socket) do
@@ -749,7 +778,13 @@ defmodule LoomkinWeb.WorkspaceLive do
           metadata: %{from: agent_name, role: :assistant}
         }
 
-        append_activity_event(socket, event)
+        socket
+        |> append_activity_event(event)
+        |> update_agent_card(agent_name, %{
+          content_type: :message,
+          latest_content: msg.content,
+          updated_at: DateTime.utc_now()
+        })
       else
         socket
       end
@@ -779,6 +814,7 @@ defmodule LoomkinWeb.WorkspaceLive do
     socket =
       socket
       |> forward_to_activity(event)
+      |> forward_to_cards_and_comms(event)
       |> maybe_auto_follow(source, %{tool_name: name, path: target})
       |> assign(current_tool: display, current_tool_name: name)
 
@@ -791,6 +827,7 @@ defmodule LoomkinWeb.WorkspaceLive do
     socket =
       socket
       |> forward_to_activity(event)
+      |> forward_to_cards_and_comms(event)
       |> maybe_auto_follow(source, %{tool_name: name})
       |> assign(current_tool: name, current_tool_name: name)
 
@@ -806,6 +843,7 @@ defmodule LoomkinWeb.WorkspaceLive do
     socket =
       socket
       |> forward_to_activity(event)
+      |> forward_to_cards_and_comms(event)
       |> assign(current_tool: nil)
 
     {:noreply, socket}
@@ -1057,46 +1095,94 @@ defmodule LoomkinWeb.WorkspaceLive do
       socket
       |> update(:roster_version, &((&1 || 0) + 1))
       |> refresh_roster()
+      |> sync_cards_with_roster()
+      |> update_card_status(agent_name, status)
+      |> forward_to_cards_and_comms(event)
 
     {:noreply, forward_to_activity(socket, event)}
   end
 
   def handle_info({:task_created, _task_id, _title} = event, socket) do
     forward_to_dashboard(socket)
-    {:noreply, socket |> refresh_roster() |> forward_to_activity(event)}
+
+    {:noreply,
+     socket |> refresh_roster() |> forward_to_activity(event) |> forward_to_cards_and_comms(event)}
   end
 
-  def handle_info({:task_assigned, _task_id, _agent_name} = event, socket) do
+  def handle_info({:task_assigned, task_id, agent_name} = event, socket) do
     forward_to_dashboard(socket)
-    {:noreply, socket |> refresh_roster() |> forward_to_activity(event)}
+
+    # Look up task title from cached_tasks
+    task_title =
+      Enum.find_value(socket.assigns.cached_tasks, "Assigned task", fn t ->
+        if t.id == task_id, do: t.title
+      end)
+
+    socket =
+      socket
+      |> refresh_roster()
+      |> forward_to_activity(event)
+      |> forward_to_cards_and_comms(event)
+      |> update_card_task(agent_name, task_title)
+
+    {:noreply, socket}
   end
 
-  def handle_info({:task_completed, _task_id, _agent_name, _result} = event, socket) do
+  def handle_info({:task_completed, _task_id, agent_name, _result} = event, socket) do
     forward_to_dashboard(socket)
     forward_to_cost(socket)
-    {:noreply, forward_to_activity(socket, event)}
+
+    socket =
+      socket
+      |> forward_to_activity(event)
+      |> forward_to_cards_and_comms(event)
+      |> update_card_task(agent_name, nil)
+
+    {:noreply, socket}
   end
 
-  def handle_info({:task_started, _task_id, _owner} = event, socket) do
+  def handle_info({:task_started, _task_id, owner} = event, socket) do
     forward_to_dashboard(socket)
-    {:noreply, forward_to_activity(socket, event)}
+
+    socket =
+      socket
+      |> forward_to_activity(event)
+      |> forward_to_cards_and_comms(event)
+      |> update_card_status(owner, :working)
+
+    {:noreply, socket}
   end
 
-  def handle_info({:task_failed, _task_id, _owner, _reason} = event, socket) do
+  def handle_info({:task_failed, _task_id, owner, _reason} = event, socket) do
     forward_to_dashboard(socket)
-    {:noreply, forward_to_activity(socket, event)}
+
+    socket =
+      socket
+      |> forward_to_activity(event)
+      |> forward_to_cards_and_comms(event)
+      |> update_card_status(owner, :error)
+
+    {:noreply, socket}
   end
 
-  def handle_info({:role_changed, _agent_name, _old, _new} = event, socket) do
+  def handle_info({:role_changed, agent_name, _old, new_role} = event, socket) do
     forward_to_dashboard(socket)
-    socket = update(socket, :roster_version, &((&1 || 0) + 1))
-    {:noreply, forward_to_activity(socket, event)}
+
+    socket =
+      socket
+      |> update(:roster_version, &((&1 || 0) + 1))
+      |> forward_to_activity(event)
+      |> forward_to_cards_and_comms(event)
+      |> update_agent_card(agent_name, %{role: new_role})
+
+    {:noreply, socket}
   end
 
   def handle_info({:agent_escalation, _agent_name, _old, _new} = event, socket) do
     forward_to_dashboard(socket)
     forward_to_cost(socket)
-    {:noreply, forward_to_activity(socket, event)}
+
+    {:noreply, socket |> forward_to_activity(event) |> forward_to_cards_and_comms(event)}
   end
 
   def handle_info({:usage, _agent_name, _payload}, socket) do
@@ -1105,14 +1191,28 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   # Agent error events (max iterations exceeded, tool failures, etc.)
-  def handle_info({:agent_error, _agent_name, _payload} = event, socket) do
-    {:noreply, forward_to_activity(socket, event)}
+  def handle_info({:agent_error, agent_name, _payload} = event, socket) do
+    socket =
+      socket
+      |> forward_to_activity(event)
+      |> forward_to_cards_and_comms(event)
+      |> update_card_status(agent_name, :error)
+
+    {:noreply, socket}
   end
 
-  # Agent streaming events — show thoughts live in activity feed
+  # Agent streaming events — show thoughts live in activity feed + agent cards
   def handle_info({:agent_stream_start, agent_name, _payload}, socket) do
-    # Start accumulating this agent's thoughts
-    {:noreply, assign(socket, streaming_agent: agent_name, streaming_thoughts: "")}
+    socket =
+      socket
+      |> assign(streaming_agent: agent_name, streaming_thoughts: "")
+      |> update_agent_card(agent_name, %{
+        content_type: :thinking,
+        latest_content: "",
+        updated_at: DateTime.utc_now()
+      })
+
+    {:noreply, socket}
   end
 
   def handle_info({:agent_stream_delta, agent_name, payload}, socket) do
@@ -1154,7 +1254,17 @@ defmodule LoomkinWeb.WorkspaceLive do
           ]
       end
 
-    {:noreply, assign(socket, activity_events: events, streaming_thoughts: updated)}
+    # Also update the agent card with streaming content
+    socket =
+      socket
+      |> assign(activity_events: events, streaming_thoughts: updated)
+      |> update_agent_card(agent_name, %{
+        latest_content: updated,
+        content_type: :thinking,
+        updated_at: DateTime.utc_now()
+      })
+
+    {:noreply, socket}
   end
 
   def handle_info({:agent_stream_end, agent_name, _payload}, socket) do
@@ -1163,8 +1273,15 @@ defmodule LoomkinWeb.WorkspaceLive do
     thinking_id = "thinking-#{agent_name}"
     events = Enum.reject(socket.assigns.activity_events, &(&1.id == thinking_id))
 
-    {:noreply,
-     assign(socket, activity_events: events, streaming_agent: nil, streaming_thoughts: "")}
+    socket =
+      socket
+      |> assign(activity_events: events, streaming_agent: nil, streaming_thoughts: "")
+      |> update_agent_card(agent_name, %{
+        content_type: :idle,
+        updated_at: DateTime.utc_now()
+      })
+
+    {:noreply, socket}
   end
 
   def handle_info({:child_team_created, child_team_id}, socket) do
@@ -1295,17 +1412,17 @@ defmodule LoomkinWeb.WorkspaceLive do
     end
   end
 
-  # Team decision and context events — buffer for activity feed
+  # Team decision and context events — buffer for activity feed + comms
   def handle_info({:decision_logged, _node_id, _agent_name} = event, socket) do
-    {:noreply, forward_to_activity(socket, event)}
+    {:noreply, socket |> forward_to_activity(event) |> forward_to_cards_and_comms(event)}
   end
 
   def handle_info({:context_update, _from_agent, _payload} = event, socket) do
-    {:noreply, forward_to_activity(socket, event)}
+    {:noreply, socket |> forward_to_activity(event) |> forward_to_cards_and_comms(event)}
   end
 
   def handle_info({:context_offloaded, _agent_name, _payload} = event, socket) do
-    {:noreply, forward_to_activity(socket, event)}
+    {:noreply, socket |> forward_to_activity(event) |> forward_to_cards_and_comms(event)}
   end
 
   # Messages from AgentRosterComponent
@@ -1379,11 +1496,11 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   # New event types for activity feed
   def handle_info({:keeper_created, _payload} = event, socket) do
-    {:noreply, forward_to_activity(socket, event)}
+    {:noreply, socket |> forward_to_activity(event) |> forward_to_cards_and_comms(event)}
   end
 
   def handle_info({:tasks_unblocked, _task_ids} = event, socket) do
-    {:noreply, forward_to_activity(socket, event)}
+    {:noreply, socket |> forward_to_activity(event) |> forward_to_cards_and_comms(event)}
   end
 
   # --- Ask User questions from agents ---
@@ -1405,12 +1522,33 @@ defmodule LoomkinWeb.WorkspaceLive do
       socket
       |> assign(pending_questions: questions)
       |> append_activity_event(event)
+      |> update_agent_card(question.agent_name, %{
+        pending_question: %{
+          question_id: question.question_id,
+          question: question.question,
+          options: question.options,
+          agent_name: question.agent_name
+        }
+      })
 
     {:noreply, socket}
   end
 
   def handle_info({:ask_user_answered, question_id, answer}, socket) do
     remaining = Enum.reject(socket.assigns.pending_questions, &(&1.question_id == question_id))
+
+    # Clear pending_question from the agent's card
+    agent_name =
+      Enum.find_value(socket.assigns.pending_questions, fn q ->
+        if q.question_id == question_id, do: q.agent_name
+      end)
+
+    socket =
+      if agent_name do
+        update_agent_card(socket, agent_name, %{pending_question: nil})
+      else
+        socket
+      end
 
     event = %{
       id: Ecto.UUID.generate(),
@@ -1471,7 +1609,9 @@ defmodule LoomkinWeb.WorkspaceLive do
         socket
       end
 
-    {:noreply, forward_to_activity(socket, {:collab_event, payload})}
+    event = {:collab_event, payload}
+
+    {:noreply, socket |> forward_to_activity(event) |> forward_to_cards_and_comms(event)}
   end
 
   # OAuth auth status changed — refresh model selector to reflect new provider availability
@@ -1763,58 +1903,44 @@ defmodule LoomkinWeb.WorkspaceLive do
   # --- Mission Control Mode (three-panel layout) ---
 
   defp render_mode(:mission_control, assigns) do
-    ~H"""
-    <%!-- Left: Agent Roster (xl:w-64) --%>
-    <.live_component
-      module={LoomkinWeb.AgentRosterComponent}
-      id="agent-roster"
-      team_id={@active_team_id}
-      agents={@cached_agents}
-      tasks={@cached_tasks}
-      budget={@cached_budget}
-      focused_agent={@focused_agent}
-      roster_version={@roster_version}
-      channel_bindings={@channel_bindings}
-    />
+    sorted_cards =
+      assigns.agent_cards
+      |> Enum.sort_by(fn {_, c} -> c.updated_at end, DateTime)
+      |> Enum.map(fn {_name, card} -> card end)
 
-    <%!-- Center: Activity Feed (flex-1) + Composer --%>
+    assigns = assign(assigns, :sorted_cards, sorted_cards)
+
+    ~H"""
+    <%!-- Left: Agent Cards + Comms + Composer (flex-1) --%>
     <div
       class="flex-1 flex flex-col min-w-0 min-h-0 bg-surface-0"
-      style="border-left: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle);"
+      style="border-right: 1px solid var(--border-subtle);"
     >
-      <%!-- Scrollable feed area --%>
-      <div class="flex-1 overflow-auto min-h-0">
-        <.live_component
-          module={LoomkinWeb.TeamActivityComponent}
-          id="activity-feed"
-          team_id={@active_team_id}
-          events={filter_high_signal_events(@activity_events)}
-          known_agents={@activity_known_agents}
-          focused_agent={@focused_agent}
-        />
+      <%!-- Agent Cards Grid --%>
+      <div class="flex-shrink-0 p-3 pb-0">
+        <div :if={@sorted_cards == []} class="text-center py-8">
+          <div class="text-muted text-xs">Waiting for agents to spawn...</div>
+        </div>
+        <div class={["grid gap-3", card_grid_cols(length(@sorted_cards))]}>
+          <LoomkinWeb.AgentCardComponent.agent_card
+            :for={card <- @sorted_cards}
+            card={card}
+            focused={@focused_agent == card.name}
+            team_id={@active_team_id}
+          />
+        </div>
       </div>
 
-      <%!-- Pending ask_user questions --%>
+      <%!-- Comms Feed (scrollable, takes remaining space) --%>
       <div
-        :if={@pending_questions != []}
-        class="flex-shrink-0 px-3 py-2"
-        style="border-top: 1px solid var(--border-brand); background: var(--surface-1);"
+        class="flex-1 overflow-auto min-h-0"
+        style="border-top: 1px solid var(--border-subtle);"
       >
-        <.live_component
-          module={LoomkinWeb.AskUserComponent}
-          id="ask-user-questions"
-          questions={@pending_questions}
-        />
+        <LoomkinWeb.AgentCommsComponent.comms_feed events={@comms_events} id="agent-comms" />
       </div>
 
-      <%!-- Collapsible tool calls feed --%>
-      <div class="flex-shrink-0">
-        <.live_component
-          module={LoomkinWeb.ToolCallsComponent}
-          id="tool-calls-feed"
-          events={@activity_events}
-        />
-      </div>
+      <%!-- Budget bar --%>
+      {render_budget_bar(assigns)}
 
       <%!-- Sticky composer --%>
       {render_input_bar(assigns)}
@@ -1846,6 +1972,61 @@ defmodule LoomkinWeb.WorkspaceLive do
     />
     """
   end
+
+  defp card_grid_cols(n) when n <= 1, do: "grid-cols-1"
+  defp card_grid_cols(n) when n <= 4, do: "grid-cols-2"
+  defp card_grid_cols(_), do: "grid-cols-3"
+
+  defp render_budget_bar(assigns) do
+    budget = assigns[:cached_budget] || %{spent: 0.0, limit: 5.0}
+    assigns = assign(assigns, :budget, budget)
+
+    ~H"""
+    <div
+      class="flex-shrink-0 px-4 py-2 flex items-center gap-3"
+      style="border-top: 1px solid var(--border-subtle); background: var(--surface-1);"
+    >
+      <span class="text-[10px] font-semibold text-muted uppercase tracking-widest flex-shrink-0">
+        Budget
+      </span>
+      <div class="flex-1 rounded-full h-1.5 overflow-hidden" style="background: var(--surface-3);">
+        <div
+          class={["h-full rounded-full", budget_bar_color(@budget)]}
+          style={"width: #{min(budget_pct(@budget), 100)}%; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);"}
+        >
+        </div>
+      </div>
+      <span
+        class="text-[11px] font-mono tabular-nums flex-shrink-0"
+        style="color: var(--text-secondary);"
+      >
+        ${format_decimal_cost(@budget.spent)}
+        <span class="text-muted">/ ${format_decimal_cost(@budget.limit)}</span>
+      </span>
+    </div>
+    """
+  end
+
+  defp budget_pct(%{spent: spent, limit: limit}) when limit > 0,
+    do: round(spent / limit * 100)
+
+  defp budget_pct(_), do: 0
+
+  defp budget_bar_color(%{spent: spent, limit: limit}) when limit > 0 do
+    pct = spent / limit * 100
+
+    cond do
+      pct >= 90 -> "bg-red-500"
+      pct >= 70 -> "bg-amber-500"
+      true -> "bg-emerald-500"
+    end
+  end
+
+  defp budget_bar_color(_), do: "bg-emerald-500"
+
+  defp format_decimal_cost(n) when is_float(n), do: :erlang.float_to_binary(n, decimals: 2)
+  defp format_decimal_cost(n) when is_integer(n), do: "#{n}.00"
+  defp format_decimal_cost(_), do: "0.00"
 
   # --- Shared input bar (used by both modes) ---
 
@@ -2853,12 +3034,170 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   defp activity_event_from(_), do: nil
 
-  # Filter out low-signal events from the primary activity feed.
-  # Tool calls and context offloads go to the collapsible ToolCallsComponent instead.
-  @low_signal_event_types [:tool_call, :context_offload, :status]
+  # --- Agent Cards + Comms routing (mission control v2) ---
 
-  defp filter_high_signal_events(events) do
-    Enum.reject(events, fn event -> event.type in @low_signal_event_types end)
+  # Event types that belong in the inter-agent comms feed
+  @comms_event_types [
+    :message,
+    :discovery,
+    :decision,
+    :agent_spawn,
+    :question,
+    :answer,
+    :tasks_unblocked,
+    :role_changed,
+    :escalation,
+    :channel_message,
+    :task_created,
+    :task_assigned,
+    :task_complete,
+    :error
+  ]
+
+  @max_comms_events 200
+
+  defp forward_to_cards_and_comms(socket, pubsub_event) do
+    case activity_event_from(pubsub_event) do
+      nil -> socket
+      :merge_tool_result -> update_card_tool_result(socket, pubsub_event)
+      :maybe_agent_spawn -> maybe_spawn_card(socket, pubsub_event)
+      event -> route_event_to_cards_or_comms(socket, event)
+    end
+  end
+
+  defp route_event_to_cards_or_comms(socket, event) do
+    socket =
+      if event.type in @comms_event_types do
+        comms = socket.assigns.comms_events ++ [event]
+        comms = if length(comms) > @max_comms_events, do: tl(comms), else: comms
+        assign(socket, comms_events: comms)
+      else
+        socket
+      end
+
+    # Tool calls and status updates go to agent cards
+    case event.type do
+      :tool_call ->
+        update_agent_card(socket, event.agent, %{
+          content_type: :tool_call,
+          last_tool: %{
+            name: (event.metadata || %{})[:tool_name] || "tool",
+            target: (event.metadata || %{})[:file_path]
+          },
+          latest_content: event.content,
+          updated_at: event.timestamp
+        })
+
+      _ ->
+        socket
+    end
+  end
+
+  defp maybe_spawn_card(socket, {:agent_status, agent, :idle}) do
+    cards = socket.assigns.agent_cards
+
+    if Map.has_key?(cards, agent) do
+      socket
+    else
+      card = default_agent_card(agent, socket)
+
+      comms_event = %{
+        id: Ecto.UUID.generate(),
+        type: :agent_spawn,
+        agent: agent,
+        content: "#{agent} joined",
+        timestamp: DateTime.utc_now(),
+        expanded: false,
+        metadata: %{}
+      }
+
+      comms = socket.assigns.comms_events ++ [comms_event]
+
+      assign(socket, agent_cards: Map.put(cards, agent, card), comms_events: comms)
+    end
+  end
+
+  defp update_card_tool_result(socket, {:tool_complete, agent, %{result: result} = payload}) do
+    result_str = String.slice(to_string(result), 0, 200)
+    tool_name = payload[:tool_name]
+
+    update_agent_card(socket, agent, %{
+      last_tool: %{name: tool_name || "tool", target: nil, result: result_str},
+      updated_at: DateTime.utc_now()
+    })
+  end
+
+  defp update_card_tool_result(socket, _), do: socket
+
+  defp update_agent_card(socket, agent_name, updates) when is_binary(agent_name) do
+    cards = socket.assigns.agent_cards
+    card = Map.get(cards, agent_name, default_agent_card(agent_name, socket))
+    card = Map.merge(card, updates)
+    assign(socket, agent_cards: Map.put(cards, agent_name, card))
+  end
+
+  defp update_agent_card(socket, _, _), do: socket
+
+  defp update_card_status(socket, agent_name, status) do
+    update_agent_card(socket, agent_name, %{
+      status: status,
+      updated_at: DateTime.utc_now()
+    })
+  end
+
+  defp update_card_task(socket, agent_name, task_desc) do
+    update_agent_card(socket, agent_name, %{
+      current_task: task_desc,
+      updated_at: DateTime.utc_now()
+    })
+  end
+
+  defp default_agent_card(agent_name, socket) do
+    # Try to find role from cached_agents
+    role =
+      Enum.find_value(socket.assigns.cached_agents, :agent, fn a ->
+        if a.name == agent_name, do: a.role
+      end)
+
+    team_id =
+      Enum.find_value(socket.assigns.cached_agents, socket.assigns[:active_team_id], fn a ->
+        if a.name == agent_name, do: a.team_id
+      end)
+
+    %{
+      name: agent_name,
+      role: role,
+      team_id: team_id,
+      status: :idle,
+      current_task: nil,
+      latest_content: nil,
+      content_type: :idle,
+      last_tool: nil,
+      pending_question: nil,
+      updated_at: DateTime.utc_now()
+    }
+  end
+
+  # Sync agent cards with roster data (status, role, task, team_id)
+  defp sync_cards_with_roster(socket) do
+    agents = socket.assigns.cached_agents
+    cards = socket.assigns.agent_cards
+
+    updated_cards =
+      Enum.reduce(agents, cards, fn agent, acc ->
+        card = Map.get(acc, agent.name, default_agent_card(agent.name, socket))
+
+        card =
+          card
+          |> Map.put(:status, agent.status)
+          |> Map.put(:role, agent.role)
+          |> Map.put(:team_id, agent.team_id)
+          |> Map.put(:current_task, Map.get(agent, :current_task) || card.current_task)
+
+        Map.put(acc, agent.name, card)
+      end)
+
+    assign(socket, agent_cards: updated_cards)
   end
 
   # --- Human-readable tool descriptions ---
