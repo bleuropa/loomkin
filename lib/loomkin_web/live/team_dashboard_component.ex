@@ -13,6 +13,8 @@ defmodule LoomkinWeb.TeamDashboardComponent do
 
   @impl true
   def update(%{team_id: _team_id} = assigns, socket) do
+    prev_team_id = socket.assigns[:team_id]
+
     if !socket.assigns[:subscribed] do
       Loomkin.Signals.subscribe("agent.status")
       Loomkin.Signals.subscribe("agent.escalation")
@@ -20,11 +22,16 @@ defmodule LoomkinWeb.TeamDashboardComponent do
       Loomkin.Signals.subscribe("team.task.*")
     end
 
-    {:ok,
-     socket
-     |> assign(assigns)
-     |> assign(:subscribed, true)
-     |> load_team_data()}
+    socket =
+      socket
+      |> assign(assigns)
+      |> assign(:subscribed, true)
+
+    if prev_team_id != socket.assigns.team_id do
+      {:ok, load_team_data(socket)}
+    else
+      {:ok, socket}
+    end
   end
 
   def update(assigns, socket) do

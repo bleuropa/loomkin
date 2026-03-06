@@ -425,8 +425,62 @@ Hooks.AutoResizeTextarea = {
   }
 }
 
+// LocalTime: formats UTC timestamps in the user's local timezone,
+// and live-updates countdowns and relative times every second.
+Hooks.LocalTime = {
+  mounted() {
+    this.updateTime()
+    this.timer = setInterval(() => this.updateTime(), 1000)
+  },
+  updated() {
+    this.updateTime()
+  },
+  destroyed() {
+    if (this.timer) clearInterval(this.timer)
+  },
+  updateTime() {
+    const utcTime = this.el.dataset.utcTime
+    if (!utcTime) return
+
+    const format = this.el.dataset.format || "time"
+    const dt = new Date(utcTime)
+    const now = new Date()
+
+    if (format === "time") {
+      this.el.textContent = dt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    } else if (format === "countdown") {
+      const diffSec = Math.floor((dt - now) / 1000)
+      if (diffSec <= 0) {
+        this.el.textContent = "delivering..."
+      } else if (diffSec < 60) {
+        this.el.textContent = `in ${diffSec}s`
+      } else if (diffSec < 3600) {
+        this.el.textContent = `in ${Math.floor(diffSec / 60)}m`
+      } else {
+        const h = Math.floor(diffSec / 3600)
+        const m = Math.floor((diffSec % 3600) / 60)
+        this.el.textContent = `in ${h}h ${m}m`
+      }
+    } else if (format === "relative") {
+      const diffSec = Math.floor((now - dt) / 1000)
+      if (diffSec < 60) {
+        this.el.textContent = `${diffSec}s ago`
+      } else if (diffSec < 3600) {
+        this.el.textContent = `${Math.floor(diffSec / 60)}m ago`
+      } else if (diffSec < 86400) {
+        this.el.textContent = `${Math.floor(diffSec / 3600)}h ago`
+      } else {
+        this.el.textContent = `${Math.floor(diffSec / 86400)}d ago`
+      }
+    }
+  }
+}
+
 Hooks.SortableQueue = {
   mounted() {
+    this.initSortable()
+  },
+  updated() {
     this.initSortable()
   },
   initSortable() {
@@ -462,7 +516,7 @@ Hooks.SortableQueue = {
       const ordered = allItems.map(el => el.dataset.id)
       const agent = this.el.dataset.agent
 
-      this.pushEvent("reorder_queue", {agent: agent, ordered_ids: ordered})
+      this.pushEvent("reorder_queue", {agent: agent, ids: ordered})
     })
   }
 }

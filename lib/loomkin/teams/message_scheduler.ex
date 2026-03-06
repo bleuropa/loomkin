@@ -120,6 +120,7 @@ defmodule Loomkin.Teams.MessageScheduler do
     end
   end
 
+  @impl true
   def handle_call({:cancel, message_id}, _from, state) do
     case Map.fetch(state.scheduled, message_id) do
       {:ok, %ScheduledMessage{status: :pending} = msg} ->
@@ -137,6 +138,7 @@ defmodule Loomkin.Teams.MessageScheduler do
     end
   end
 
+  @impl true
   def handle_call({:edit, message_id, changes}, _from, state) do
     case Map.fetch(state.scheduled, message_id) do
       {:ok, %ScheduledMessage{status: :pending} = msg} ->
@@ -157,6 +159,7 @@ defmodule Loomkin.Teams.MessageScheduler do
     end
   end
 
+  @impl true
   def handle_call({:list, opts}, _from, state) do
     status_filter = Keyword.get(opts, :status, :pending)
 
@@ -175,6 +178,7 @@ defmodule Loomkin.Teams.MessageScheduler do
     {:reply, messages, state}
   end
 
+  @impl true
   def handle_call({:time_remaining, message_id}, _from, state) do
     case Map.fetch(state.scheduled, message_id) do
       {:ok, %ScheduledMessage{status: :pending, deliver_at: deliver_at}} ->
@@ -202,6 +206,7 @@ defmodule Loomkin.Teams.MessageScheduler do
     end
   end
 
+  @impl true
   def handle_info({:retry_deliver, message_id}, state) do
     case Map.fetch(state.scheduled, message_id) do
       {:ok, %ScheduledMessage{status: :pending} = msg} ->
@@ -213,6 +218,7 @@ defmodule Loomkin.Teams.MessageScheduler do
     end
   end
 
+  @impl true
   def handle_info(_msg, state) do
     {:noreply, state}
   end

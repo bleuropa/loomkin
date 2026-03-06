@@ -65,10 +65,22 @@ defmodule LoomkinWeb.DecisionGraphComponent do
 
   @impl true
   def update(assigns, socket) do
-    socket = assign(socket, assigns)
-    session_id = assigns[:session_id]
-    team_id = assigns[:team_id]
+    prev_session_id = socket.assigns[:session_id]
+    prev_team_id = socket.assigns[:team_id]
 
+    socket = assign(socket, assigns)
+
+    session_id = socket.assigns[:session_id]
+    team_id = socket.assigns[:team_id]
+
+    if session_id != prev_session_id or team_id != prev_team_id do
+      do_load_graph(socket, session_id, team_id)
+    else
+      {:ok, socket}
+    end
+  end
+
+  defp do_load_graph(socket, session_id, team_id) do
     {nodes, edges, pulse} = load_graph_data(session_id, team_id, socket)
     node_ids = MapSet.new(nodes, & &1.id)
 

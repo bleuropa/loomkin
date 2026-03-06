@@ -102,7 +102,7 @@ defmodule LoomkinWeb.ScheduleMessageComponent do
                   else: "text-muted border border-transparent hover:bg-surface-3"
                 )
               ]}
-              style="border-color: var(--border-subtle);"
+              style={unless(@delay_minutes == minutes, do: "border-color: var(--border-subtle);")}
             >
               {label}
             </button>
@@ -114,7 +114,13 @@ defmodule LoomkinWeb.ScheduleMessageComponent do
             <span class="text-[11px]" style="color: var(--text-secondary);">
               Will send at
             </span>
-            <span class="text-[11px] font-medium text-amber-400">
+            <span
+              id={"delivery-time-#{@target_agent || "team"}"}
+              class="text-[11px] font-medium text-amber-400"
+              phx-hook="LocalTime"
+              data-utc-time={DateTime.to_iso8601(@delivery_time)}
+              data-format="time"
+            >
               {format_delivery_time(@delivery_time)}
             </span>
           </div>
@@ -170,7 +176,13 @@ defmodule LoomkinWeb.ScheduleMessageComponent do
                 <span class="text-[10px] text-muted">
                   {Map.get(msg, :target_agent) || "Team"}
                 </span>
-                <span class="text-[10px] text-amber-400">
+                <span
+                  id={"countdown-#{msg.id}"}
+                  class="text-[10px] text-amber-400"
+                  phx-hook="LocalTime"
+                  data-utc-time={DateTime.to_iso8601(msg.deliver_at)}
+                  data-format="countdown"
+                >
                   {scheduled_countdown(msg.deliver_at)}
                 </span>
               </div>

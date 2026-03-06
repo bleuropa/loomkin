@@ -1,11 +1,15 @@
 defmodule LoomkinWeb.AgentCardComponent do
   @moduledoc """
-  Functional component that renders a single agent's workbench card in
+  LiveComponent that renders a single agent's workbench card in
   the mission control UI. Each agent gets one card that updates in-place,
   showing status, current activity, and action buttons.
+
+  As a LiveComponent, only the card whose assigns change will re-render,
+  and MDEx markdown rendering is memoized so it only runs when content
+  actually changes.
   """
 
-  use Phoenix.Component
+  use LoomkinWeb, :live_component
 
   @tool_config %{
     "file_read" => %{icon: "📄", color: "#818cf8"},
@@ -19,16 +23,55 @@ defmodule LoomkinWeb.AgentCardComponent do
   }
   @default_tool_config %{icon: "⚙", color: "#71717a"}
 
-  attr :card, :map, required: true
-  attr :focused, :boolean, default: false
-  attr :team_id, :string, required: true
-  attr :queue_count, :integer, default: 0
-  attr :scheduled_count, :integer, default: 0
-  attr :model, :string, default: nil
-  attr :budget_used, :integer, default: 0
-  attr :budget_limit, :integer, default: 0
+  def mount(socket) do
+    {:ok,
+     assign(socket,
+       card: nil,
+       focused: false,
+       team_id: nil,
+       queue_count: 0,
+       scheduled_count: 0,
+       model: nil,
+       budget_used: 0,
+       budget_limit: 0,
+       rendered_content: "",
+       prev_content: nil,
+       prev_content_type: nil,
+       prev_focused: nil
+     )}
+  end
 
-  def agent_card(assigns) do
+  def update(assigns, socket) do
+    socket = assign(socket, assigns)
+
+    card = socket.assigns.card
+    focused = socket.assigns.focused
+
+    new_content = card && card.latest_content
+    new_content_type = card && card.content_type
+    old_content = socket.assigns.prev_content
+    old_content_type = socket.assigns.prev_content_type
+    old_focused = socket.assigns.prev_focused
+
+    socket =
+      if new_content != old_content || new_content_type != old_content_type ||
+           focused != old_focused do
+        rendered = render_card_markdown(format_content(new_content, focused))
+
+        assign(socket,
+          rendered_content: rendered,
+          prev_content: new_content,
+          prev_content_type: new_content_type,
+          prev_focused: focused
+        )
+      else
+        socket
+      end
+
+    {:ok, socket}
+  end
+
+  def render(assigns) do
     ~H"""
     <div
       id={"agent-card-#{@card.name}"}
@@ -230,7 +273,7 @@ defmodule LoomkinWeb.AgentCardComponent do
               ]}
               style="color: var(--text-secondary);"
             >
-              {render_card_markdown(format_content(@card.latest_content, @focused))}
+              {@rendered_content}
             </div>
           <% :last_thinking -> %>
             <div
@@ -240,7 +283,7 @@ defmodule LoomkinWeb.AgentCardComponent do
               ]}
               style="color: var(--text-secondary);"
             >
-              {render_card_markdown(format_content(@card.latest_content, @focused))}
+              {@rendered_content}
             </div>
           <% :message -> %>
             <div
@@ -250,7 +293,7 @@ defmodule LoomkinWeb.AgentCardComponent do
               ]}
               style="color: var(--text-secondary);"
             >
-              {render_card_markdown(format_content(@card.latest_content, @focused))}
+              {@rendered_content}
             </div>
           <% _ -> %>
             <%= if @card.status == :complete do %>

@@ -97,7 +97,7 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
       render_component(LoomkinWeb.TeamActivityComponent, %{
         id: "test-activity",
         team_id: @team_id,
-        events: events,
+        reset_events: events,
         known_agents: Enum.map(events, & &1.agent) |> Enum.uniq()
       })
     end
@@ -169,7 +169,7 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
       render_component(LoomkinWeb.TeamActivityComponent, %{
         id: "test-activity",
         team_id: @team_id,
-        events: events,
+        reset_events: events,
         known_agents: Enum.map(events, & &1.agent) |> Enum.uniq()
       })
     end
@@ -223,7 +223,7 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
       render_component(LoomkinWeb.TeamActivityComponent, %{
         id: "test-activity",
         team_id: @team_id,
-        events: events,
+        reset_events: events,
         known_agents: Enum.map(events, & &1.agent) |> Enum.uniq()
       })
     end
@@ -313,7 +313,7 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
       render_component(LoomkinWeb.TeamActivityComponent, %{
         id: "test-activity",
         team_id: @team_id,
-        events: events,
+        reset_events: events,
         known_agents: Enum.map(events, & &1.agent) |> Enum.uniq()
       })
     end
@@ -460,7 +460,7 @@ defmodule LoomkinWeb.TeamActivityComponentTest do
       render_component(LoomkinWeb.TeamActivityComponent, %{
         id: "test-activity",
         team_id: @team_id,
-        events: events,
+        reset_events: events,
         known_agents: Enum.map(events, & &1.agent) |> Enum.uniq()
       })
     end

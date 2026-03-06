@@ -137,7 +137,7 @@ defmodule Loomkin.Permissions.TrustPolicy do
 
     if :ets.info(name) == :undefined do
       try do
-        :ets.new(name, [:set, :protected, :named_table])
+        :ets.new(name, [:set, :public, :named_table])
       rescue
         ArgumentError -> :ok
       end
@@ -170,7 +170,11 @@ defmodule Loomkin.Permissions.TrustPolicy do
     name = table_name(session_id)
 
     if :ets.info(name) != :undefined do
-      :ets.delete(name)
+      try do
+        :ets.delete(name)
+      rescue
+        ArgumentError -> :ok
+      end
     end
 
     :ok

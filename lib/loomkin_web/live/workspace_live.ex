@@ -5,7 +5,6 @@ defmodule LoomkinWeb.WorkspaceLive do
   alias Loomkin.Session.Manager
   alias Loomkin.Teams
 
-  @max_activity_events 200
   @max_messages 200
   @max_diffs 100
   @max_shell_commands 100
@@ -38,20 +37,22 @@ defmodule LoomkinWeb.WorkspaceLive do
         architect_phase: nil,
         plan_steps: [],
         current_step: nil,
-        activity_events: [],
         activity_known_agents: [],
+        activity_event_count: 0,
+        buffered_activity_events: [],
+        # Map of {agent, tool_name} -> event for pending tool results (stream merge)
+        pending_tool_events: %{},
         # Mission control assigns — agent cards + comms
         agent_cards: %{},
-        comms_events: [],
-        roster_version: 0,
+        concierge_card_names: [],
+        worker_card_names: [],
+        comms_event_count: 0,
         roster_refresh_timer: nil,
         mode: :mission_control,
         focused_agent: nil,
         inspector_mode: :auto_follow,
         active_inspector_tab: :files,
         collapsed_inspector: false,
-        streaming_agent: nil,
-        streaming_thoughts: "",
         # Command palette
         command_palette_open: false,
         command_palette_query: "",
@@ -64,12 +65,20 @@ defmodule LoomkinWeb.WorkspaceLive do
         channel_bindings: [],
         # Track subscribed PubSub teams to prevent duplicate subscriptions
         subscribed_teams: MapSet.new(),
+        # Guard against duplicate global signal bus subscriptions
+        global_signals_subscribed: false,
+        # Guard against duplicate vote signal subscriptions
+        vote_signals_subscribed: false,
+        # Debounce timer for metrics updates
+        metrics_debounce_ref: nil,
         # Agent picker for composer
         show_agent_picker: false,
-        # Cached roster data (recomputed on roster_version changes, not per render)
+        # Cached roster data (recomputed on roster refresh, not per render)
         cached_agents: [],
         cached_tasks: [],
         cached_budget: %{spent: 0.0, limit: 5.0},
+        budget_pct: 0,
+        budget_bar_color_class: "bg-emerald-500",
         last_user_message: nil,
         # Message queue UI state
         queue_drawer: nil,
@@ -83,6 +92,7 @@ defmodule LoomkinWeb.WorkspaceLive do
         kin_panel_open: false,
         kin_agents: []
       )
+      |> stream(:comms_events, [])
 
     case socket.assigns.live_action do
       :new ->
@@ -167,9 +177,12 @@ defmodule LoomkinWeb.WorkspaceLive do
       if connected?(socket) do
         Session.subscribe(session_id)
 
-        # Subscribe to session and system signals via the Bus
+        # Subscribe to session signals via the Bus
         Loomkin.Signals.subscribe("session.**")
-        Loomkin.Signals.subscribe("system.**")
+
+        # Subscribe to all global wildcard signals once
+        socket = subscribe_global_signals(socket)
+
         ensure_index_started(project_path)
 
         team_id = socket.assigns[:team_id]
@@ -216,27 +229,46 @@ defmodule LoomkinWeb.WorkspaceLive do
     active_team_id = socket.assigns[:active_team_id] || team_id
     channel_bindings = load_channel_bindings(active_team_id)
 
+    # Load any pending scheduled messages from MessageScheduler (survives reconnects)
+    scheduled_messages =
+      if active_team_id do
+        try do
+          Loomkin.Teams.MessageScheduler.list(active_team_id)
+        catch
+          :exit, _ -> []
+        end
+      else
+        []
+      end
+
     # Replay session message history as activity events so the feed
     # survives reconnections (longpoll or websocket drops).
     history_events = messages_to_activity_events(messages)
 
-    socket =
-      Enum.reduce(history_events, socket, fn event, sock ->
-        known = sock.assigns.activity_known_agents
-
-        case trackable_agent_name(event.agent) do
-          nil ->
-            assign(sock, activity_events: sock.assigns.activity_events ++ [event])
-
-          name ->
-            new_known = if name in known, do: known, else: known ++ [name]
-
-            assign(sock,
-              activity_events: sock.assigns.activity_events ++ [event],
-              activity_known_agents: new_known
-            )
+    known_agents =
+      history_events
+      |> Enum.map(& &1.agent)
+      |> Enum.flat_map(fn agent ->
+        case trackable_agent_name(agent) do
+          nil -> []
+          name -> [name]
         end
       end)
+      |> Enum.uniq()
+
+    # Send history events to the activity component (will arrive on first update)
+    if history_events != [] do
+      send_update(LoomkinWeb.TeamActivityComponent,
+        id: "team-activity",
+        reset_events: history_events
+      )
+    end
+
+    socket =
+      assign(socket,
+        activity_known_agents: Enum.uniq(socket.assigns.activity_known_agents ++ known_agents),
+        activity_event_count: length(history_events)
+      )
 
     assign(socket,
       session_id: session_id,
@@ -251,12 +283,14 @@ defmodule LoomkinWeb.WorkspaceLive do
       page_title: session_page_title(session_id),
       child_teams: child_teams,
       active_team_id: active_team_id,
+      scheduled_messages: scheduled_messages,
       switch_project_modal: nil,
       recent_projects: [],
       reply_target: nil,
       channel_bindings: channel_bindings,
       kin_agents: load_kin_agents(),
-      trust_preset: Loomkin.Permissions.TrustPolicy.get_preset_name(session_id)
+      trust_preset: Loomkin.Permissions.TrustPolicy.get_preset_name(session_id),
+      trust_expanded: false
     )
   end
 
@@ -284,14 +318,12 @@ defmodule LoomkinWeb.WorkspaceLive do
               metadata: %{from: "You", to: agent_name, action: :steer}
             }
 
-            events = cap_events(socket.assigns.activity_events ++ [steer_event])
-
             {:noreply,
              socket
+             |> push_activity_event(steer_event)
              |> assign(
                input_text: "",
                reply_target: nil,
-               activity_events: events,
                last_user_message: %{text: trimmed, to: agent_name}
              )
              |> push_event("clear-input", %{})}
@@ -318,16 +350,12 @@ defmodule LoomkinWeb.WorkspaceLive do
               metadata: %{from: "You", to: agent_name}
             }
 
-            events = socket.assigns.activity_events ++ [reply_event]
-
-            events = cap_events(events)
-
             {:noreply,
              socket
+             |> push_activity_event(reply_event)
              |> assign(
                input_text: "",
                reply_target: nil,
-               activity_events: events,
                last_user_message: %{text: trimmed, to: agent_name}
              )
              |> push_event("clear-input", %{})}
@@ -363,11 +391,8 @@ defmodule LoomkinWeb.WorkspaceLive do
               metadata: %{from: "You", to: "Kin"}
             }
 
-            events = socket.assigns.activity_events ++ [user_event]
-
-            events = cap_events(events)
-
-            assign(socket, activity_events: events)
+            socket
+            |> push_activity_event(user_event)
           else
             socket
           end
@@ -465,7 +490,24 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   @valid_tabs ~w(files diff terminal graph)
   def handle_event("switch_tab", %{"tab" => tab}, socket) when tab in @valid_tabs do
-    {:noreply, assign(socket, active_tab: String.to_existing_atom(tab))}
+    tab_atom = String.to_existing_atom(tab)
+
+    socket =
+      if tab_atom == :team and socket.assigns.buffered_activity_events != [] do
+        # Flush buffered events to the component now that it's visible
+        events = Enum.reverse(socket.assigns.buffered_activity_events)
+
+        send_update(LoomkinWeb.TeamActivityComponent,
+          id: "team-activity",
+          reset_events: events
+        )
+
+        assign(socket, buffered_activity_events: [])
+      else
+        socket
+      end
+
+    {:noreply, assign(socket, active_tab: tab_atom)}
   end
 
   def handle_event("change_model", %{"model" => model}, socket) do
@@ -483,6 +525,10 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   def handle_event("deselect_file", _params, socket) do
     {:noreply, assign(socket, selected_file: nil, file_content: nil)}
+  end
+
+  def handle_event("toggle_trust_panel", _params, socket) do
+    {:noreply, update(socket, :trust_expanded, &(!&1))}
   end
 
   @valid_trust_presets ~w(strict balanced autonomous full_trust)
@@ -746,7 +792,7 @@ defmodule LoomkinWeb.WorkspaceLive do
     if question do
       if answer == "__collective__" do
         # Forward question to peer agents for collective decision
-        handle_collective_decision(question, socket.assigns.pending_questions)
+        socket = handle_collective_decision(socket, question)
         {:noreply, assign(socket, pending_questions: remaining)}
       else
         # Send answer directly back to the waiting agent
@@ -947,36 +993,25 @@ defmodule LoomkinWeb.WorkspaceLive do
     target_agent = params["target_agent"]
     delay_minutes = String.to_integer(delay)
     team_id = socket.assigns.active_team_id
+    deliver_at = DateTime.add(DateTime.utc_now(), delay_minutes * 60, :second)
 
-    scheduled_msg = %{
-      id: Ecto.UUID.generate(),
-      content: content,
-      target_agent: target_agent,
-      team_id: team_id,
-      delay_minutes: delay_minutes,
-      deliver_at: DateTime.add(DateTime.utc_now(), delay_minutes * 60, :second),
-      scheduled_at: DateTime.utc_now()
-    }
+    case Loomkin.Teams.MessageScheduler.schedule(team_id, content, target_agent, deliver_at) do
+      {:ok, _msg} ->
+        {:noreply,
+         socket
+         |> assign(schedule_popover: false, input_text: "")
+         |> put_flash(:info, "Message scheduled for #{delay_minutes}m from now")
+         |> push_event("clear-input", %{})}
 
-    scheduled = socket.assigns.scheduled_messages ++ [scheduled_msg]
-
-    # Start a timer process to deliver the message
-    Process.send_after(self(), {:deliver_scheduled, scheduled_msg.id}, delay_minutes * 60 * 1000)
-
-    {:noreply,
-     socket
-     |> assign(
-       scheduled_messages: scheduled,
-       schedule_popover: false,
-       input_text: ""
-     )
-     |> put_flash(:info, "Message scheduled for #{delay_minutes}m from now")
-     |> push_event("clear-input", %{})}
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to schedule: #{inspect(reason)}")}
+    end
   end
 
   def handle_event("cancel_scheduled", %{"id" => id}, socket) do
-    scheduled = Enum.reject(socket.assigns.scheduled_messages, &(&1.id == id))
-    {:noreply, assign(socket, scheduled_messages: scheduled)}
+    team_id = socket.assigns.active_team_id
+    Loomkin.Teams.MessageScheduler.cancel(team_id, id)
+    {:noreply, socket}
   end
 
   # --- Enqueue & Guidance ---
@@ -1035,13 +1070,11 @@ defmodule LoomkinWeb.WorkspaceLive do
             metadata: %{from: "You", to: agent_name, action: :guidance}
           }
 
-          events = cap_events(socket.assigns.activity_events ++ [guidance_event])
-
           {:noreply,
            socket
+           |> push_activity_event(guidance_event)
            |> assign(
              input_text: "",
-             activity_events: events,
              last_user_message: %{text: text, to: agent_name}
            )
            |> push_event("clear-input", %{})}
@@ -1227,7 +1260,13 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   def handle_info(%Jido.Signal{type: "system.metrics.updated"}, socket) do
-    handle_info(:metrics_updated, socket)
+    # Debounce metrics updates to at most once per second
+    if socket.assigns[:metrics_debounce_ref] do
+      {:noreply, socket}
+    else
+      ref = Process.send_after(self(), :refresh_metrics, 1_000)
+      {:noreply, assign(socket, metrics_debounce_ref: ref)}
+    end
   end
 
   def handle_info(%Jido.Signal{type: "session.message.new"} = sig, socket) do
@@ -1290,8 +1329,7 @@ defmodule LoomkinWeb.WorkspaceLive do
         |> append_activity_event(event)
         |> update_agent_card(agent_name, %{
           content_type: :message,
-          latest_content: msg.content,
-          updated_at: DateTime.utc_now()
+          latest_content: msg.content
         })
       else
         socket
@@ -1419,6 +1457,13 @@ defmodule LoomkinWeb.WorkspaceLive do
     Logger.info("[Kin:UI] :team_available team=#{team_id}")
     bindings = load_channel_bindings(team_id)
 
+    scheduled =
+      try do
+        Loomkin.Teams.MessageScheduler.list(team_id)
+      catch
+        :exit, _ -> []
+      end
+
     socket =
       socket
       |> subscribe_to_team(team_id)
@@ -1426,7 +1471,8 @@ defmodule LoomkinWeb.WorkspaceLive do
         team_id: team_id,
         active_team_id: team_id,
         mode: :mission_control,
-        channel_bindings: bindings
+        channel_bindings: bindings,
+        scheduled_messages: scheduled
       )
       |> refresh_roster()
       |> sync_cards_with_roster()
@@ -1451,7 +1497,6 @@ defmodule LoomkinWeb.WorkspaceLive do
     socket =
       socket
       |> assign(child_teams: child_teams, mode: :mission_control)
-      |> update(:roster_version, &((&1 || 0) + 1))
       |> schedule_roster_refresh()
 
     {:noreply, socket}
@@ -1682,7 +1727,6 @@ defmodule LoomkinWeb.WorkspaceLive do
 
     socket =
       socket
-      |> update(:roster_version, &((&1 || 0) + 1))
       |> schedule_roster_refresh()
       |> update_card_status(agent_name, status)
       |> forward_to_cards_and_comms(event)
@@ -1761,7 +1805,6 @@ defmodule LoomkinWeb.WorkspaceLive do
 
     socket =
       socket
-      |> update(:roster_version, &((&1 || 0) + 1))
       |> forward_to_activity(event)
       |> forward_to_cards_and_comms(event)
       |> update_agent_card(agent_name, %{role: new_role})
@@ -1795,12 +1838,9 @@ defmodule LoomkinWeb.WorkspaceLive do
   # Agent streaming events — show thoughts live in activity feed + agent cards
   def handle_info({:agent_stream_start, agent_name, _payload}, socket) do
     socket =
-      socket
-      |> assign(streaming_agent: agent_name, streaming_thoughts: "")
-      |> update_agent_card(agent_name, %{
+      update_agent_card(socket, agent_name, %{
         content_type: :thinking,
-        latest_content: "",
-        updated_at: DateTime.utc_now()
+        latest_content: ""
       })
 
     {:noreply, socket}
@@ -1816,79 +1856,40 @@ defmodule LoomkinWeb.WorkspaceLive do
         _ -> ""
       end
 
-    current = socket.assigns[:streaming_thoughts] || ""
+    # Accumulate content on the card only — no activity_events mutation on the hot path
+    card = get_in(socket.assigns, [:agent_cards, agent_name])
+    current = (card && card.latest_content) || ""
     updated = current <> chunk
 
-    # Update or insert a live "thinking" event in the activity feed
-    thinking_id = "thinking-#{agent_name}"
-    events = socket.assigns.activity_events
-
-    existing_idx = Enum.find_index(events, &(&1.id == thinking_id))
-
-    events =
-      if existing_idx do
-        List.update_at(events, existing_idx, fn ev ->
-          %{ev | content: updated, timestamp: DateTime.utc_now()}
-        end)
-      else
-        events ++
-          [
-            %{
-              id: thinking_id,
-              type: :thinking,
-              agent: agent_name,
-              content: updated,
-              timestamp: DateTime.utc_now(),
-              expanded: true,
-              metadata: %{live: true}
-            }
-          ]
-      end
-
-    # Also update the agent card with streaming content
     socket =
-      socket
-      |> assign(activity_events: events, streaming_thoughts: updated)
-      |> update_agent_card(agent_name, %{
+      update_agent_card(socket, agent_name, %{
         latest_content: updated,
-        content_type: :thinking,
-        updated_at: DateTime.utc_now()
+        content_type: :thinking
       })
 
     {:noreply, socket}
   end
 
   def handle_info({:agent_stream_end, agent_name, _payload}, socket) do
-    # Remove the thinking card — internal reasoning shouldn't clutter the communication log.
-    # The actual output (message, tool call, etc.) will appear as its own event.
-    thinking_id = "thinking-#{agent_name}"
-    events = Enum.reject(socket.assigns.activity_events, &(&1.id == thinking_id))
+    # Preserve :message content — only reset to :idle if currently :thinking
+    card = get_in(socket.assigns, [:agent_cards, agent_name])
 
     socket =
-      socket
-      |> assign(activity_events: events, streaming_agent: nil, streaming_thoughts: "")
-      |> then(fn s ->
-        # Preserve :message content — only reset to :idle if currently :thinking
-        card = get_in(s.assigns, [:agent_cards, agent_name])
+      cond do
+        card && card.content_type == :message ->
+          socket
 
-        cond do
-          card && card.content_type == :message ->
-            s
+        card && card.content_type == :thinking && card.latest_content not in [nil, ""] ->
+          # Keep the last thinking content visible (dimmed) while tools run
+          update_agent_card(socket, agent_name, %{
+            content_type: :last_thinking
+          })
 
-          card && card.content_type == :thinking && card.latest_content not in [nil, ""] ->
-            # Keep the last thinking content visible (dimmed) while tools run
-            update_agent_card(s, agent_name, %{
-              content_type: :last_thinking,
-              updated_at: DateTime.utc_now()
-            })
-
-          true ->
-            update_agent_card(s, agent_name, %{
-              content_type: :idle,
-              updated_at: DateTime.utc_now()
-            })
-        end
-      end)
+        true ->
+          update_agent_card(socket, agent_name, %{
+            content_type: :idle
+          })
+      end
 
     {:noreply, socket}
   end
@@ -1910,7 +1911,6 @@ defmodule LoomkinWeb.WorkspaceLive do
       socket
       |> subscribe_to_team(child_team_id)
       |> assign(:child_teams, child_teams)
-      |> update(:roster_version, &((&1 || 0) + 1))
       |> refresh_roster()
       |> sync_cards_with_roster()
 
@@ -1920,8 +1920,8 @@ defmodule LoomkinWeb.WorkspaceLive do
       |> Enum.map(& &1.name)
       |> Enum.reject(&(&1 in existing_card_names))
 
-    comms_events =
-      Enum.reduce(new_agents, socket.assigns.comms_events, fn agent_name, comms ->
+    socket =
+      Enum.reduce(new_agents, socket, fn agent_name, sock ->
         event = %{
           id: Ecto.UUID.generate(),
           type: :agent_spawn,
@@ -1932,10 +1932,12 @@ defmodule LoomkinWeb.WorkspaceLive do
           metadata: %{}
         }
 
-        comms ++ [event]
+        sock
+        |> stream_insert(:comms_events, event)
+        |> update(:comms_event_count, &(&1 + 1))
       end)
 
-    {:noreply, assign(socket, comms_events: comms_events)}
+    {:noreply, socket}
   end
 
   def handle_info({:team_dissolved, team_id}, socket) do
@@ -1964,8 +1966,6 @@ defmodule LoomkinWeb.WorkspaceLive do
           do: :solo,
           else: socket.assigns.mode
 
-      socket = update(socket, :roster_version, &((&1 || 0) + 1))
-
       {:noreply,
        assign(socket, child_teams: child_teams, active_team_id: active_team_id, mode: mode)}
     end
@@ -1980,6 +1980,12 @@ defmodule LoomkinWeb.WorkspaceLive do
        session_cost: metrics.cost_usd,
        session_tokens: metrics.prompt_tokens + metrics.completion_tokens
      )}
+  end
+
+  # Debounced metrics refresh — fired by Process.send_after from system.metrics.updated handler
+  def handle_info(:refresh_metrics, socket) do
+    socket = assign(socket, metrics_debounce_ref: nil)
+    handle_info(:metrics_updated, socket)
   end
 
   # Handle async task completion — match on the stored async_task ref
@@ -2272,50 +2278,6 @@ defmodule LoomkinWeb.WorkspaceLive do
     {:noreply, put_flash(socket, :info, "Scheduled message delivered to #{agent_name}")}
   end
 
-  def handle_info({:deliver_scheduled, message_id}, socket) do
-    case Enum.find(socket.assigns.scheduled_messages, &(&1.id == message_id)) do
-      nil ->
-        # Already cancelled
-        {:noreply, socket}
-
-      msg ->
-        team_id = msg.team_id
-        target = msg.target_agent
-        content = msg.content
-
-        delivery_result =
-          if target do
-            case Loomkin.Teams.Manager.find_agent(team_id, target) do
-              {:ok, pid} ->
-                Task.Supervisor.start_child(Loomkin.Teams.TaskSupervisor, fn ->
-                  Loomkin.Teams.Agent.send_message(pid, content)
-                end)
-
-                :ok
-
-              :error ->
-                :error
-            end
-          else
-            Session.send_message(socket.assigns.session_id, content)
-            :ok
-          end
-
-        scheduled = Enum.reject(socket.assigns.scheduled_messages, &(&1.id == message_id))
-
-        flash =
-          case delivery_result do
-            :ok -> {:info, "Scheduled message sent to #{target || "Kin"}"}
-            :error -> {:error, "Scheduled delivery failed — agent #{target} not found"}
-          end
-
-        {:noreply,
-         socket
-         |> assign(scheduled_messages: scheduled)
-         |> put_flash(elem(flash, 0), elem(flash, 1))}
-    end
-  end
-
   # Catch-all
   def handle_info(msg, socket) do
     require Logger
@@ -2403,6 +2365,8 @@ defmodule LoomkinWeb.WorkspaceLive do
         <%!-- Trust policy selector --%>
         <LoomkinWeb.TrustPolicyComponent.trust_policy_selector
           current_preset={@trust_preset}
+          pending_count={length(@pending_permissions)}
+          expanded={@trust_expanded}
           class="hidden md:flex"
         />
 
@@ -2616,35 +2580,12 @@ defmodule LoomkinWeb.WorkspaceLive do
   # --- Mission Control Mode (three-panel layout) ---
 
   defp render_mode(:mission_control, assigns) do
-    all_cards =
-      assigns.agent_cards
-      |> Enum.sort_by(fn {_, c} -> c.updated_at end, DateTime)
-      |> Enum.map(fn {_name, card} -> card end)
-
-    # Separate first concierge to dedicated top slot; extras go back to workers
-    {concierge_cards, worker_cards} =
-      Enum.split_with(all_cards, fn c -> c.role in [:concierge] end)
-
-    concierge_card = List.first(concierge_cards)
-    extra_concierges = Enum.drop(concierge_cards, 1)
-    worker_cards = extra_concierges ++ worker_cards
-
     focused_card =
       if assigns.focused_agent do
         Map.get(assigns.agent_cards, assigns.focused_agent)
       end
 
-    agent_queues = assigns.agent_queues
-    scheduled_messages = assigns.scheduled_messages
-
-    assigns =
-      assigns
-      |> assign(:sorted_cards, all_cards)
-      |> assign(:concierge_card, concierge_card)
-      |> assign(:worker_cards, worker_cards)
-      |> assign(:focused_card, focused_card)
-      |> assign(:agent_queues, agent_queues)
-      |> assign(:scheduled_messages, scheduled_messages)
+    assigns = assign(assigns, :focused_card, focused_card)
 
     ~H"""
     <%!-- Left: Agent Cards + Comms + Composer (flex-1) --%>
@@ -2684,7 +2625,9 @@ defmodule LoomkinWeb.WorkspaceLive do
             </span>
           </div>
           <div class="flex-1 overflow-auto min-h-0">
-            <LoomkinWeb.AgentCardComponent.agent_card
+            <.live_component
+              module={LoomkinWeb.AgentCardComponent}
+              id={"agent-card-#{@focused_card.name}"}
               card={@focused_card}
               focused={true}
               team_id={@active_team_id}
@@ -2698,16 +2641,19 @@ defmodule LoomkinWeb.WorkspaceLive do
         </div>
       <% else %>
         <%!-- Concierge — dedicated top card --%>
-        <div :if={@concierge_card} class="flex-shrink-0 p-3 pb-0">
-          <LoomkinWeb.AgentCardComponent.agent_card
-            card={@concierge_card}
+        <div :if={@concierge_card_names != []} class="flex-shrink-0 p-3 pb-0">
+          <.live_component
+            :for={name <- @concierge_card_names}
+            module={LoomkinWeb.AgentCardComponent}
+            id={"agent-card-#{name}"}
+            card={@agent_cards[name]}
             focused={false}
             team_id={@active_team_id}
-            queue_count={queue_count_for(@agent_queues, @concierge_card.name)}
-            scheduled_count={scheduled_count_for(@scheduled_messages, @concierge_card.name)}
-            model={@concierge_card[:model]}
-            budget_used={@concierge_card[:budget_used] || 0}
-            budget_limit={@concierge_card[:budget_limit] || 0}
+            queue_count={queue_count_for(@agent_queues, name)}
+            scheduled_count={scheduled_count_for(@scheduled_messages, name)}
+            model={@agent_cards[name][:model]}
+            budget_used={@agent_cards[name][:budget_used] || 0}
+            budget_limit={@agent_cards[name][:budget_limit] || 0}
           />
         </div>
 
@@ -2724,14 +2670,14 @@ defmodule LoomkinWeb.WorkspaceLive do
               class="text-[10px] tabular-nums px-1.5 py-0.5 rounded-full font-medium text-muted"
               style="background: var(--surface-2);"
             >
-              {length(@worker_cards)}
+              {length(@worker_card_names)}
             </span>
             <div class="flex-1 h-px" style="background: var(--border-subtle);"></div>
           </div>
 
           <%!-- Waiting state: session exists but agents haven't spawned yet --%>
           <div
-            :if={@concierge_card == nil && @worker_cards == [] && @active_team_id}
+            :if={@concierge_card_names == [] && @worker_card_names == [] && @active_team_id}
             class="rounded-lg py-4 px-4 text-center"
             style="background: var(--surface-1); border: 1px solid var(--border-subtle);"
           >
@@ -2752,7 +2698,7 @@ defmodule LoomkinWeb.WorkspaceLive do
           </div>
           <%!-- No session state --%>
           <div
-            :if={@concierge_card == nil && @worker_cards == [] && !@active_team_id}
+            :if={@concierge_card_names == [] && @worker_card_names == [] && !@active_team_id}
             class="rounded-lg border border-dashed py-4 px-4 text-center"
             style="border-color: var(--border-subtle);"
           >
@@ -2765,18 +2711,20 @@ defmodule LoomkinWeb.WorkspaceLive do
           <%!-- Ghost cards for dormant kin (not yet spawned) --%>
           {render_ghost_cards(assigns)}
 
-          <%= if @worker_cards != [] do %>
-            <div class={["grid gap-3", card_grid_cols(length(@worker_cards))]}>
-              <LoomkinWeb.AgentCardComponent.agent_card
-                :for={card <- @worker_cards}
-                card={card}
+          <%= if @worker_card_names != [] do %>
+            <div class={["grid gap-3", card_grid_cols(length(@worker_card_names))]}>
+              <.live_component
+                :for={name <- @worker_card_names}
+                module={LoomkinWeb.AgentCardComponent}
+                id={"agent-card-#{name}"}
+                card={@agent_cards[name]}
                 focused={false}
                 team_id={@active_team_id}
-                queue_count={queue_count_for(@agent_queues, card.name)}
-                scheduled_count={scheduled_count_for(@scheduled_messages, card.name)}
-                model={card[:model]}
-                budget_used={card[:budget_used] || 0}
-                budget_limit={card[:budget_limit] || 0}
+                queue_count={queue_count_for(@agent_queues, name)}
+                scheduled_count={scheduled_count_for(@scheduled_messages, name)}
+                model={@agent_cards[name][:model]}
+                budget_used={@agent_cards[name][:budget_used] || 0}
+                budget_limit={@agent_cards[name][:budget_limit] || 0}
               />
             </div>
           <% end %>
@@ -2787,7 +2735,11 @@ defmodule LoomkinWeb.WorkspaceLive do
           class="flex-1 overflow-auto min-h-0"
           style="border-top: 1px solid var(--border-subtle);"
         >
-          <LoomkinWeb.AgentCommsComponent.comms_feed events={@comms_events} id="agent-comms" />
+          <LoomkinWeb.AgentCommsComponent.comms_feed
+            stream={@streams.comms_events}
+            event_count={@comms_event_count}
+            id="agent-comms"
+          />
         </div>
       <% end %>
 
@@ -2907,7 +2859,14 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   defp render_budget_bar(assigns) do
     budget = assigns[:cached_budget] || %{spent: 0.0, limit: 5.0}
-    assigns = assign(assigns, :budget, budget)
+    pct = assigns[:budget_pct] || 0
+    color_class = assigns[:budget_bar_color_class] || "bg-emerald-500"
+
+    assigns =
+      assigns
+      |> assign(:budget, budget)
+      |> assign(:pct, pct)
+      |> assign(:color_class, color_class)
 
     ~H"""
     <div
@@ -2919,8 +2878,8 @@ defmodule LoomkinWeb.WorkspaceLive do
       </span>
       <div class="flex-1 rounded-full h-1.5 overflow-hidden" style="background: var(--surface-3);">
         <div
-          class={["h-full rounded-full", budget_bar_color(@budget)]}
-          style={"width: #{min(budget_pct(@budget), 100)}%; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);"}
+          class={["h-full rounded-full", @color_class]}
+          style={"width: #{min(@pct, 100)}%; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);"}
         >
         </div>
       </div>
@@ -3158,7 +3117,7 @@ defmodule LoomkinWeb.WorkspaceLive do
               type="button"
               phx-click="toggle_scheduler"
               class="flex items-center justify-center w-9 h-9 rounded-lg transition-all duration-200 press-down"
-              style={"border: 1px solid " <> if(@schedule_popover, do: "var(--border-brand)", else: "var(--border-subtle)") <> "; color: " <> if(@schedule_popover, do: "var(--text-brand)", else: "var(--text-muted)") <> "; background: transparent;"}
+              style={"border: 1px solid #{if(@schedule_popover, do: "var(--border-brand)", else: "var(--border-subtle)")}; color: #{if(@schedule_popover, do: "var(--text-brand)", else: "var(--text-muted)")}; background: transparent;"}
               title="Schedule message"
             >
               <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
@@ -3231,8 +3190,6 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   # --- Helpers ---
-
-  defp cap_events(events, max \\ @max_activity_events), do: Enum.take(events, -max)
 
   # Convert persisted session messages into activity feed events.
   # Used on mount to recover feed state after reconnections.
@@ -3437,7 +3394,6 @@ defmodule LoomkinWeb.WorkspaceLive do
           module={LoomkinWeb.TeamActivityComponent}
           id="team-activity"
           team_id={@display_team_id}
-          events={@activity_events}
           known_agents={@activity_known_agents}
         />
       </div>
@@ -3584,6 +3540,25 @@ defmodule LoomkinWeb.WorkspaceLive do
     signal_team_id == nil or MapSet.member?(subscribed_teams, signal_team_id)
   end
 
+  # Subscribe to all global wildcard signal bus topics exactly once per LiveView process.
+  # These are process-level (PID) subscriptions, so calling them multiple times
+  # results in duplicate signal delivery. The guard prevents re-subscription.
+  defp subscribe_global_signals(socket) do
+    if socket.assigns[:global_signals_subscribed] do
+      socket
+    else
+      Loomkin.Signals.subscribe("agent.**")
+      Loomkin.Signals.subscribe("team.**")
+      Loomkin.Signals.subscribe("context.**")
+      Loomkin.Signals.subscribe("decision.**")
+      Loomkin.Signals.subscribe("channel.**")
+      Loomkin.Signals.subscribe("collaboration.**")
+      Loomkin.Signals.subscribe("system.**")
+
+      assign(socket, global_signals_subscribed: true)
+    end
+  end
+
   defp subscribe_to_team(socket, team_id) do
     subscribed = socket.assigns[:subscribed_teams] || MapSet.new()
 
@@ -3593,14 +3568,8 @@ defmodule LoomkinWeb.WorkspaceLive do
       require Logger
       Logger.info("[Kin:UI] subscribing to team=#{team_id}")
 
-      # Subscribe to Jido Signal Bus for typed signals (new path)
-      Loomkin.Signals.subscribe("agent.**")
-      Loomkin.Signals.subscribe("team.**")
-      Loomkin.Signals.subscribe("context.**")
-      Loomkin.Signals.subscribe("decision.**")
-      Loomkin.Signals.subscribe("channel.**")
-      Loomkin.Signals.subscribe("collaboration.**")
-      Loomkin.Signals.subscribe("system.**")
+      # Subscribe to Phoenix PubSub for legacy team broadcasts (MessageScheduler, etc.)
+      Phoenix.PubSub.subscribe(Loomkin.PubSub, "team:#{team_id}")
 
       socket = assign(socket, subscribed_teams: MapSet.put(subscribed, team_id))
 
@@ -3633,9 +3602,11 @@ defmodule LoomkinWeb.WorkspaceLive do
             metadata: %{agent_name: agent.name, role: agent.role}
           }
 
-          events = cap_events(sock.assigns.activity_events ++ [event])
           new_known = sock.assigns.activity_known_agents ++ [agent.name]
-          assign(sock, activity_events: events, activity_known_agents: new_known)
+
+          sock
+          |> push_activity_event(event)
+          |> assign(activity_known_agents: new_known)
         end
       end)
     end
@@ -3662,7 +3633,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   # Recompute cached roster data.
-  # Called when roster_version bumps — avoids per-render Registry queries.
+  # Called on roster refresh — avoids per-render Registry queries.
   # NOTE: Do NOT subscribe to PubSub topics here — this is called from many
   # event handlers and PubSub.subscribe is not idempotent (each call adds
   # another subscription, causing duplicate event delivery).
@@ -3729,7 +3700,13 @@ defmodule LoomkinWeb.WorkspaceLive do
         subscribe_to_team(acc, sub_id)
       end)
 
-    assign(socket, cached_agents: agents, cached_tasks: tasks, cached_budget: budget)
+    assign(socket,
+      cached_agents: agents,
+      cached_tasks: tasks,
+      cached_budget: budget,
+      budget_pct: budget_pct(budget),
+      budget_bar_color_class: budget_bar_color(budget)
+    )
   end
 
   defp forward_to_activity(socket, pubsub_event) do
@@ -3758,15 +3735,12 @@ defmodule LoomkinWeb.WorkspaceLive do
             metadata: %{agent_name: agent}
           }
 
-          events = cap_events(socket.assigns.activity_events ++ [event])
-          assign(socket, activity_events: events, activity_known_agents: known ++ [agent])
+          socket
+          |> push_activity_event(event)
+          |> assign(activity_known_agents: known ++ [agent])
         end
 
       event ->
-        events = socket.assigns.activity_events ++ [event]
-
-        events = cap_events(events)
-
         agents = socket.assigns.activity_known_agents
 
         agents =
@@ -3775,16 +3749,23 @@ defmodule LoomkinWeb.WorkspaceLive do
             name -> if name in agents, do: agents, else: agents ++ [name]
           end
 
-        assign(socket, activity_events: events, activity_known_agents: agents)
+        # Track pending tool events for stream-based merging
+        socket =
+          if event.type == :tool_call && is_nil((event.metadata || %{})[:result]) do
+            key = {event.agent, (event.metadata || %{})[:tool_name]}
+            update(socket, :pending_tool_events, &Map.put(&1, key, event))
+          else
+            socket
+          end
+
+        socket
+        |> push_activity_event(event)
+        |> assign(activity_known_agents: agents)
     end
   end
 
   # Append a pre-formed activity event (bypasses activity_event_from pattern matching)
   defp append_activity_event(socket, event) do
-    events = socket.assigns.activity_events ++ [event]
-
-    events = cap_events(events)
-
     agents = socket.assigns.activity_known_agents
 
     agents =
@@ -3793,7 +3774,24 @@ defmodule LoomkinWeb.WorkspaceLive do
         name -> if name in agents, do: agents, else: agents ++ [name]
       end
 
-    assign(socket, activity_events: events, activity_known_agents: agents)
+    socket
+    |> push_activity_event(event)
+    |> assign(activity_known_agents: agents)
+  end
+
+  # Send an activity event to the TeamActivityComponent's internal stream
+  # Buffer events when component isn't mounted (e.g., user on a different tab)
+  defp push_activity_event(socket, event) do
+    if socket.assigns[:active_tab] == :team do
+      send_update(LoomkinWeb.TeamActivityComponent,
+        id: "team-activity",
+        new_event: event
+      )
+    end
+
+    socket
+    |> update(:activity_event_count, &(&1 + 1))
+    |> update(:buffered_activity_events, &[event | Enum.take(&1, 199)])
   end
 
   # Merge tool_complete result into the most recent tool_executing event for that agent
@@ -3813,47 +3811,36 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   defp merge_team_assign_result(socket, agent, result_str) do
     task_meta = parse_team_assign_result(result_str)
-    events = socket.assigns.activity_events
+    key = {agent, "team_assign"}
+    pending = socket.assigns.pending_tool_events
 
-    # Replace the pending team_assign tool_call card with a typed task_assigned card
-    match_idx =
-      events
-      |> Enum.with_index()
-      |> Enum.reverse()
-      |> Enum.find_value(fn {ev, idx} ->
-        if ev.type == :tool_call && ev.agent == agent &&
-             (ev.metadata || %{})[:tool_name] == "team_assign" &&
-             is_nil((ev.metadata || %{})[:result]) do
-          idx
-        end
-      end)
+    case Map.get(pending, key) do
+      nil ->
+        event = %{
+          id: Ecto.UUID.generate(),
+          type: :task_assigned,
+          agent: agent,
+          content: "Assigned task to #{task_meta[:owner] || "agent"}",
+          timestamp: DateTime.utc_now(),
+          expanded: false,
+          metadata: task_meta
+        }
 
-    events =
-      if match_idx do
-        List.update_at(events, match_idx, fn ev ->
-          %{
-            ev
-            | type: :task_assigned,
-              content: "Assigned task to #{task_meta[:owner] || "agent"}",
-              metadata: task_meta
-          }
-        end)
-      else
-        events ++
-          [
-            %{
-              id: Ecto.UUID.generate(),
-              type: :task_assigned,
-              agent: agent,
-              content: "Assigned task to #{task_meta[:owner] || "agent"}",
-              timestamp: DateTime.utc_now(),
-              expanded: false,
-              metadata: task_meta
-            }
-          ]
-      end
+        socket
+        |> push_activity_event(event)
 
-    assign(socket, activity_events: events)
+      ev ->
+        updated = %{
+          ev
+          | type: :task_assigned,
+            content: "Assigned task to #{task_meta[:owner] || "agent"}",
+            metadata: task_meta
+        }
+
+        socket
+        |> push_activity_event(updated)
+        |> update(:pending_tool_events, &Map.delete(&1, key))
+    end
   end
 
   defp parse_team_assign_result(result_str) do
@@ -3883,44 +3870,32 @@ defmodule LoomkinWeb.WorkspaceLive do
         result_str
       end
 
-    events = socket.assigns.activity_events
+    key = {agent, tool_name}
+    pending = socket.assigns.pending_tool_events
 
-    # Find the last tool_call event from this agent (most recent match)
-    match_idx =
-      events
-      |> Enum.with_index()
-      |> Enum.reverse()
-      |> Enum.find_value(fn {ev, idx} ->
-        if ev.type == :tool_call && ev.agent == agent &&
-             (is_nil(tool_name) || (ev.metadata || %{})[:tool_name] == tool_name) &&
-             is_nil((ev.metadata || %{})[:result]) do
-          idx
-        end
-      end)
+    case Map.get(pending, key) do
+      nil ->
+        event = %{
+          id: Ecto.UUID.generate(),
+          type: :tool_call,
+          agent: agent,
+          content: tool_name || "tool result",
+          timestamp: DateTime.utc_now(),
+          expanded: false,
+          metadata: %{tool_name: tool_name, result: truncated}
+        }
 
-    events =
-      if match_idx do
-        List.update_at(events, match_idx, fn ev ->
-          metadata = Map.put(ev.metadata || %{}, :result, truncated)
-          %{ev | metadata: metadata, expanded: false}
-        end)
-      else
-        # No matching executing event — create standalone result event
-        events ++
-          [
-            %{
-              id: Ecto.UUID.generate(),
-              type: :tool_call,
-              agent: agent,
-              content: tool_name || "tool result",
-              timestamp: DateTime.utc_now(),
-              expanded: false,
-              metadata: %{tool_name: tool_name, result: truncated}
-            }
-          ]
-      end
+        socket
+        |> push_activity_event(event)
 
-    assign(socket, activity_events: events)
+      ev ->
+        metadata = Map.put(ev.metadata || %{}, :result, truncated)
+        updated = %{ev | metadata: metadata, expanded: false}
+
+        socket
+        |> push_activity_event(updated)
+        |> update(:pending_tool_events, &Map.delete(&1, key))
+    end
   end
 
   # --- Tool events: executing creates the card, complete merges result into it ---
@@ -4246,8 +4221,6 @@ defmodule LoomkinWeb.WorkspaceLive do
     :error
   ]
 
-  @max_comms_events 200
-
   defp forward_to_cards_and_comms(socket, pubsub_event) do
     case activity_event_from(pubsub_event) do
       nil -> socket
@@ -4260,9 +4233,9 @@ defmodule LoomkinWeb.WorkspaceLive do
   defp route_event_to_cards_or_comms(socket, event) do
     socket =
       if event.type in @comms_event_types do
-        comms = socket.assigns.comms_events ++ [event]
-        comms = if length(comms) > @max_comms_events, do: tl(comms), else: comms
-        assign(socket, comms_events: comms)
+        socket
+        |> stream_insert(:comms_events, event)
+        |> update(:comms_event_count, &(&1 + 1))
       else
         socket
       end
@@ -4274,8 +4247,7 @@ defmodule LoomkinWeb.WorkspaceLive do
           last_tool: %{
             name: (event.metadata || %{})[:tool_name] || "tool",
             target: (event.metadata || %{})[:file_path]
-          },
-          updated_at: event.timestamp
+          }
         })
 
       _ ->
@@ -4301,9 +4273,11 @@ defmodule LoomkinWeb.WorkspaceLive do
         metadata: %{}
       }
 
-      comms = socket.assigns.comms_events ++ [comms_event]
-
-      assign(socket, agent_cards: Map.put(cards, agent, card), comms_events: comms)
+      socket
+      |> assign(agent_cards: Map.put(cards, agent, card))
+      |> stream_insert(:comms_events, comms_event)
+      |> update(:comms_event_count, &(&1 + 1))
+      |> update_card_ordering()
     end
   end
 
@@ -4312,8 +4286,7 @@ defmodule LoomkinWeb.WorkspaceLive do
     tool_name = payload[:tool_name]
 
     update_agent_card(socket, agent, %{
-      last_tool: %{name: tool_name || "tool", target: nil, result: result_str},
-      updated_at: DateTime.utc_now()
+      last_tool: %{name: tool_name || "tool", target: nil, result: result_str}
     })
   end
 
@@ -4366,8 +4339,7 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   defp update_card_task(socket, agent_name, task_desc) do
     update_agent_card(socket, agent_name, %{
-      current_task: task_desc,
-      updated_at: DateTime.utc_now()
+      current_task: task_desc
     })
   end
 
@@ -4433,7 +4405,22 @@ defmodule LoomkinWeb.WorkspaceLive do
       "[Kin:UI] sync_cards total=#{map_size(updated_cards)} names=#{inspect(Map.keys(updated_cards))}"
     )
 
-    assign(socket, agent_cards: updated_cards)
+    socket
+    |> assign(agent_cards: updated_cards)
+    |> update_card_ordering()
+  end
+
+  defp update_card_ordering(socket) do
+    cards = socket.assigns.agent_cards
+
+    {concierge_names, worker_names} =
+      cards
+      |> Enum.split_with(fn {_, c} -> c.role in [:concierge] end)
+      |> then(fn {c, w} ->
+        {Enum.map(c, &elem(&1, 0)), Enum.map(w, &elem(&1, 0))}
+      end)
+
+    assign(socket, concierge_card_names: concierge_names, worker_card_names: worker_names)
   end
 
   # --- Human-readable tool descriptions ---
@@ -4785,7 +4772,7 @@ defmodule LoomkinWeb.WorkspaceLive do
     end
   end
 
-  defp handle_collective_decision(question, _pending_questions) do
+  defp handle_collective_decision(socket, question) do
     team_id = question.team_id
     question_id = question.question_id
     options = question.options
@@ -4797,9 +4784,16 @@ defmodule LoomkinWeb.WorkspaceLive do
         "Options: #{options_text}. " <>
         "Reply with ONLY your preferred option (exact text)."
 
-    # Subscribe to vote signals
+    # Subscribe to vote signals (only once to prevent duplicate delivery)
     vote_topic = "ask_user:vote:#{question_id}"
-    Loomkin.Signals.subscribe("collaboration.vote.*")
+
+    socket =
+      if socket.assigns[:vote_signals_subscribed] do
+        socket
+      else
+        Loomkin.Signals.subscribe("collaboration.vote.*")
+        assign(socket, vote_signals_subscribed: true)
+      end
 
     signal =
       Loomkin.Signals.Collaboration.PeerMessage.new!(
@@ -4833,6 +4827,8 @@ defmodule LoomkinWeb.WorkspaceLive do
 
       send_ask_user_answer(question_id, "Collective: #{winner}")
     end)
+
+    socket
   end
 
   defp collect_votes(topic, valid_options, timeout_ms) do
@@ -5081,7 +5077,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   defp scheduled_count_for(scheduled_messages, agent_name) do
-    Enum.count(scheduled_messages, &(&1[:target_agent] == agent_name))
+    Enum.count(scheduled_messages, &(&1.target_agent == agent_name))
   end
 
   defp agent_is_working?(agent_cards, agent_name) do

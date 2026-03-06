@@ -111,15 +111,11 @@ defmodule LoomkinWeb.AgentCommsComponent do
     accent_bg: "rgba(113, 113, 122, 0.06)"
   }
 
-  @max_visible 100
-
-  attr :events, :list, required: true
+  attr :stream, :any, required: true
+  attr :event_count, :integer, default: 0
   attr :id, :string, default: "agent-comms"
 
   def comms_feed(assigns) do
-    visible = Enum.take(assigns.events, -@max_visible)
-    assigns = assign(assigns, :visible_events, visible)
-
     ~H"""
     <div id={@id} class="flex flex-col h-full">
       <%!-- Section header --%>
@@ -127,19 +123,22 @@ defmodule LoomkinWeb.AgentCommsComponent do
         <span class="text-[10px] font-semibold text-muted uppercase tracking-widest">
           Kin Comms
         </span>
-        <span class="badge text-[10px] tabular-nums">{length(@events)}</span>
+        <span class="badge text-[10px] tabular-nums">{@event_count}</span>
       </div>
 
       <%!-- Scrollable feed --%>
-      <div id="comms-feed-scroll" class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
-        <div
-          :if={@visible_events == []}
-          class="flex items-center justify-center py-12 text-muted text-xs"
-        >
+      <div
+        id="comms-feed-scroll"
+        phx-update="stream"
+        class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5"
+      >
+        <div class="hidden only:flex items-center justify-center py-12 text-muted text-xs">
           No inter-agent communication yet
         </div>
 
-        <.comms_row :for={event <- @visible_events} event={event} />
+        <div :for={{dom_id, event} <- @stream} id={dom_id}>
+          <.comms_row event={event} />
+        </div>
       </div>
     </div>
     """

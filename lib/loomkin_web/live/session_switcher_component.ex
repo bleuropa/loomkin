@@ -4,20 +4,31 @@ defmodule LoomkinWeb.SessionSwitcherComponent do
   alias Loomkin.Session.Persistence
 
   def update(assigns, socket) do
-    project_path = assigns[:project_path]
-    show_all = socket.assigns[:show_all_projects] || false
+    prev_project_path = socket.assigns[:project_path]
+    prev_show_all = socket.assigns[:show_all_projects] || false
 
-    sessions =
-      if show_all || is_nil(project_path) do
-        list_all_sessions()
-      else
-        Persistence.list_sessions(project_path: project_path)
-      end
+    socket =
+      socket
+      |> assign(assigns)
+      |> assign_new(:dropdown_open, fn -> false end)
+      |> assign_new(:show_all_projects, fn -> false end)
 
-    {:ok,
-     socket
-     |> assign(assigns)
-     |> assign(sessions: sessions, dropdown_open: false, show_all_projects: show_all)}
+    project_path = socket.assigns[:project_path]
+    show_all = socket.assigns[:show_all_projects]
+
+    if project_path != prev_project_path or show_all != prev_show_all or
+         !Map.has_key?(socket.assigns, :sessions) do
+      sessions =
+        if show_all || is_nil(project_path) do
+          list_all_sessions()
+        else
+          Persistence.list_sessions(project_path: project_path)
+        end
+
+      {:ok, assign(socket, sessions: sessions)}
+    else
+      {:ok, socket}
+    end
   end
 
   def render(assigns) do
@@ -89,7 +100,7 @@ defmodule LoomkinWeb.SessionSwitcherComponent do
             <span :if={session.id != @session_id} class="w-3 flex-shrink-0" />
             <span class="truncate flex-1 text-left">{session_label(session)}</span>
             <span class="text-[10px] flex-shrink-0" style="color: var(--text-muted);">
-              {relative_time(session)}
+              {session_relative_time(session)}
             </span>
           </button>
         </div>
@@ -169,23 +180,10 @@ defmodule LoomkinWeb.SessionSwitcherComponent do
     end
   end
 
-  defp relative_time(session) do
-    case Map.get(session, :updated_at) || Map.get(session, :inserted_at) do
-      nil ->
-        ""
-
-      datetime ->
-        diff = DateTime.diff(DateTime.utc_now(), datetime, :second)
-
-        cond do
-          diff < 60 -> "now"
-          diff < 3600 -> "#{div(diff, 60)}m ago"
-          diff < 86400 -> "#{div(diff, 3600)}h ago"
-          true -> "#{div(diff, 86400)}d ago"
-        end
-    end
+  defp session_relative_time(session) do
+    datetime = Map.get(session, :updated_at) || Map.get(session, :inserted_at)
+    LoomkinWeb.TimeHelpers.relative_time(datetime)
   rescue
-    _e ->
-      "just now"
+    _e -> "just now"
   end
 end

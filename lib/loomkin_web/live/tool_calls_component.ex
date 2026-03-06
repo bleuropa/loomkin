@@ -14,6 +14,8 @@ defmodule LoomkinWeb.ToolCallsComponent do
 
   use LoomkinWeb, :live_component
 
+  import LoomkinWeb.TimeHelpers, only: [relative_time: 1]
+
   @tool_config %{
     "file_read" => %{icon: "&#128196;", color: "#818cf8"},
     "file_write" => %{icon: "&#9997;", color: "#34d399"},
@@ -45,11 +47,17 @@ defmodule LoomkinWeb.ToolCallsComponent do
     event_ids = MapSet.new(tool_events, & &1.id)
     expanded_ids = MapSet.intersection(expanded_ids, event_ids)
 
+    total_count = length(tool_events)
+    recent_count = min(total_count, socket.assigns.max_visible)
+    recent_events = tool_events |> Enum.take(-recent_count) |> Enum.reverse()
+
     {:ok,
      socket
      |> assign(:id, assigns[:id])
      |> assign(:events, tool_events)
      |> assign(:expanded_ids, expanded_ids)
+     |> assign(:recent_events, recent_events)
+     |> assign(:total_count, total_count)
      |> assign_new(:collapsed, fn -> true end)}
   end
 
@@ -73,15 +81,6 @@ defmodule LoomkinWeb.ToolCallsComponent do
 
   @impl true
   def render(assigns) do
-    total_count = length(assigns.events)
-    recent_count = min(total_count, assigns.max_visible)
-    recent_events = Enum.take(assigns.events, -recent_count) |> Enum.reverse()
-
-    assigns =
-      assigns
-      |> assign(:recent_events, recent_events)
-      |> assign(:total_count, total_count)
-
     ~H"""
     <div class="flex flex-col" style="border-top: 1px solid var(--border-subtle);">
       <%!-- Header: click to expand/collapse --%>
@@ -234,15 +233,4 @@ defmodule LoomkinWeb.ToolCallsComponent do
   end
 
   defp agent_color(agent_name), do: LoomkinWeb.AgentColors.agent_color(agent_name)
-
-  defp relative_time(datetime) do
-    diff = DateTime.diff(DateTime.utc_now(), datetime, :second)
-
-    cond do
-      diff < 3 -> "now"
-      diff < 60 -> "#{diff}s"
-      diff < 3600 -> "#{div(diff, 60)}m"
-      true -> "#{div(diff, 3600)}h"
-    end
-  end
 end

@@ -45,6 +45,8 @@ defmodule LoomkinWeb.KinPanelComponent do
   ]
 
   def update(assigns, socket) do
+    previously_loaded = Map.has_key?(socket.assigns, :kin_agents)
+
     socket =
       socket
       |> assign(assigns)
@@ -52,7 +54,9 @@ defmodule LoomkinWeb.KinPanelComponent do
       |> assign_new(:form, fn -> nil end)
       |> assign_new(:editing_id, fn -> nil end)
       |> assign_new(:delete_confirm_id, fn -> nil end)
-      |> load_kin_agents()
+
+    # Only load from DB on first mount (panel open)
+    socket = if previously_loaded, do: socket, else: load_kin_agents(socket)
 
     {:ok, socket}
   end

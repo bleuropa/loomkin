@@ -2006,12 +2006,54 @@ defmodule Loomkin.Teams.Agent do
     end
   end
 
+  @stream_throttle_ms 100
+
+  # Extracts the text chunk from a stream delta payload.
+  defp extract_delta_text(payload) do
+    case payload do
+      %{text: t} when is_binary(t) -> t
+      %{content: c} when is_binary(c) -> c
+      %{delta: d} when is_binary(d) -> d
+      c when is_binary(c) -> c
+      _ -> ""
+    end
+  end
+
+  # Flushes any buffered stream delta content as a single batched signal.
+  defp flush_stream_buffer(team_id, agent_str) do
+    buffer = Process.get(:stream_buffer, "")
+
+    if buffer != "" do
+      Process.put(:stream_buffer, "")
+      Process.put(:stream_last_flush, System.monotonic_time(:millisecond))
+
+      signal =
+        Loomkin.Signals.Agent.StreamDelta.new!(%{agent_name: agent_str, team_id: team_id},
+          subject: "payload"
+        )
+        |> Map.put(
+          :data,
+          Map.put(%{agent_name: agent_str, team_id: team_id}, :payload, %{text: buffer})
+        )
+        |> Loomkin.Signals.Extensions.Causality.attach(
+          team_id: team_id,
+          agent_name: agent_str
+        )
+
+      Loomkin.Signals.publish(signal)
+    end
+  end
+
   defp handle_loop_event(team_id, agent_name, event_name, payload) do
     agent_str = to_string(agent_name)
 
     signal =
       case event_name do
         :stream_start ->
+          # Reset buffer state at start of a new stream
+          Process.put(:stream_buffer, "")
+          Process.put(:stream_last_flush, System.monotonic_time(:millisecond))
+
           Loomkin.Signals.Agent.StreamStart.new!(%{agent_name: agent_str, team_id: team_id},
             subject: "payload"
           )
@@ -2021,15 +2063,25 @@ defmodule Loomkin.Teams.Agent do
           )
 
         :stream_delta ->
-          Loomkin.Signals.Agent.StreamDelta.new!(%{agent_name: agent_str, team_id: team_id},
-            subject: "payload"
-          )
-          |> Map.put(
-            :data,
-            Map.put(%{agent_name: agent_str, team_id: team_id}, :payload, payload)
-          )
+          # Accumulate tokens and only publish when throttle interval has elapsed
+          chunk = extract_delta_text(payload)
+          buffer = Process.get(:stream_buffer, "") <> chunk
+          Process.put(:stream_buffer, buffer)
+
+          last_flush = Process.get(:stream_last_flush, 0)
+          now = System.monotonic_time(:millisecond)
+
+          if now - last_flush >= @stream_throttle_ms do
+            flush_stream_buffer(team_id, agent_str)
+          end
+
+          # Return nil — signal was published by flush or will be later
+          nil
 
         :stream_end ->
+          # Flush any remaining buffered content before ending
+          flush_stream_buffer(team_id, agent_str)
+
           Loomkin.Signals.Agent.StreamEnd.new!(%{agent_name: agent_str, team_id: team_id},
             subject: "payload"
           )

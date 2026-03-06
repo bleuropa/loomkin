@@ -31,14 +31,32 @@ defmodule Loomkin.Tools.TeamSpawn do
     team_name = param!(params, :team_name)
     project_path = param(params, :project_path) || param(context, :project_path)
     parent_team_id = param(context, :parent_team_id)
+    session_id = param(context, :session_id)
     model = param(context, :model)
     agent_name = param(context, :agent_name) || "architect"
 
     roles = param!(params, :roles)
-    spawn_from_roles(team_name, roles, project_path, parent_team_id, model, agent_name)
+
+    spawn_from_roles(
+      team_name,
+      roles,
+      project_path,
+      parent_team_id,
+      session_id,
+      model,
+      agent_name
+    )
   end
 
-  defp spawn_from_roles(team_name, roles, project_path, parent_team_id, model, agent_name) do
+  defp spawn_from_roles(
+         team_name,
+         roles,
+         project_path,
+         parent_team_id,
+         session_id,
+         model,
+         agent_name
+       ) do
     require Logger
 
     Logger.info(
@@ -57,6 +75,7 @@ defmodule Loomkin.Tools.TeamSpawn do
 
     spawn_opts =
       [project_path: project_path]
+      |> then(fn opts -> if session_id, do: [{:session_id, session_id} | opts], else: opts end)
       |> then(fn opts -> if model, do: [{:model, model} | opts], else: opts end)
 
     spawn_results =

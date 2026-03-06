@@ -109,7 +109,11 @@ defmodule LoomkinWeb.MessageQueueComponent do
           >
             <%= if @editing_id == msg.id do %>
               <%!-- Inline editor --%>
-              <form phx-submit="save_queued_edit" class="flex flex-col gap-2">
+              <form
+                phx-submit="save_queued_edit"
+                id={"queue-edit-form-#{msg.id}"}
+                class="flex flex-col gap-2"
+              >
                 <input type="hidden" name="agent" value={@agent_name} />
                 <input type="hidden" name="message_id" value={msg.id} />
                 <textarea
@@ -169,8 +173,13 @@ defmodule LoomkinWeb.MessageQueueComponent do
                     ]}>
                       {msg.source}
                     </span>
-                    <span class="text-[10px] text-muted ml-auto flex-shrink-0">
-                      {relative_time(msg.queued_at)}
+                    <span
+                      id={"queue-time-#{msg.id}"}
+                      class="text-[10px] text-muted ml-auto flex-shrink-0"
+                      phx-hook="LocalTime"
+                      data-utc-time={if(msg.queued_at, do: DateTime.to_iso8601(msg.queued_at))}
+                      data-format="relative"
+                    >
                     </span>
                   </div>
 
@@ -224,17 +233,4 @@ defmodule LoomkinWeb.MessageQueueComponent do
   defp source_badge_class(:peer), do: "bg-green-500/15 text-green-400"
   defp source_badge_class(:scheduled), do: "bg-amber-500/15 text-amber-400"
   defp source_badge_class(_), do: "bg-zinc-500/15 text-zinc-400"
-
-  defp relative_time(nil), do: ""
-
-  defp relative_time(dt) do
-    diff = DateTime.diff(DateTime.utc_now(), dt, :second)
-
-    cond do
-      diff < 60 -> "#{diff}s ago"
-      diff < 3600 -> "#{div(diff, 60)}m ago"
-      diff < 86400 -> "#{div(diff, 3600)}h ago"
-      true -> "#{div(diff, 86400)}d ago"
-    end
-  end
 end
