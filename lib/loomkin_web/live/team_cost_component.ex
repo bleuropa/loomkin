@@ -20,6 +20,8 @@ defmodule LoomkinWeb.TeamCostComponent do
 
   @impl true
   def update(%{team_id: _team_id} = assigns, socket) do
+    prev_team_id = socket.assigns[:team_id]
+
     if connected?(socket) && !socket.assigns[:subscribed] do
       Loomkin.Signals.subscribe("agent.usage")
       Loomkin.Signals.subscribe("agent.escalation")
@@ -27,11 +29,17 @@ defmodule LoomkinWeb.TeamCostComponent do
       Loomkin.Signals.subscribe("system.metrics.updated")
     end
 
-    {:ok,
-     socket
-     |> assign(assigns)
-     |> assign(:subscribed, true)
-     |> load_cost_data()}
+    socket =
+      socket
+      |> assign(assigns)
+      |> assign(:subscribed, true)
+
+    # Only load cost data on first mount or when team_id changes
+    if prev_team_id != socket.assigns.team_id do
+      {:ok, load_cost_data(socket)}
+    else
+      {:ok, socket}
+    end
   end
 
   def update(assigns, socket) do
@@ -167,7 +175,7 @@ defmodule LoomkinWeb.TeamCostComponent do
   # --- Signal handlers ---
 
   def handle_info(%Jido.Signal{type: "agent.usage"}, socket) do
-    {:noreply, load_cost_data(socket)}
+    {:noreply, schedule_reload(socket)}
   end
 
   def handle_info(
@@ -187,19 +195,32 @@ defmodule LoomkinWeb.TeamCostComponent do
     {:noreply,
      socket
      |> assign(:escalations, Enum.take(socket.assigns.escalations ++ [escalation], -500))
-     |> load_cost_data()}
+     |> schedule_reload()}
   end
 
   def handle_info(%Jido.Signal{type: "team.task.completed"}, socket) do
-    {:noreply, load_cost_data(socket)}
+    {:noreply, schedule_reload(socket)}
   end
 
   def handle_info(%Jido.Signal{type: "system.metrics.updated"}, socket) do
-    {:noreply, load_cost_data(socket)}
+    {:noreply, schedule_reload(socket)}
+  end
+
+  def handle_info(:reload_cost_data, socket) do
+    {:noreply, socket |> assign(:reload_timer, nil) |> load_cost_data()}
   end
 
   def handle_info(_msg, socket) do
     {:noreply, socket}
+  end
+
+  defp schedule_reload(socket) do
+    if timer = socket.assigns[:reload_timer] do
+      Process.cancel_timer(timer)
+    end
+
+    timer = Process.send_after(self(), :reload_cost_data, 500)
+    assign(socket, :reload_timer, timer)
   end
 
   @impl true

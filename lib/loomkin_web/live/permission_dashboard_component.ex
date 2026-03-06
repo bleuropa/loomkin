@@ -8,27 +8,33 @@ defmodule LoomkinWeb.PermissionDashboardComponent do
 
   use LoomkinWeb, :live_component
 
+  import LoomkinWeb.TimeHelpers, only: [relative_time: 1]
+
   def update(assigns, socket) do
     pending = assigns.pending_permissions || []
+    prev_pending = socket.assigns[:pending_permissions]
 
-    sorted =
-      pending
-      |> Enum.sort_by(fn req ->
-        # Pin :execute to top, then sort newest first
-        priority = if req.category == :execute, do: 0, else: 1
-        {priority, DateTime.to_unix(req.requested_at) * -1}
-      end)
+    socket = assign(socket, assigns)
 
-    unique_agents =
-      pending
-      |> Enum.map(& &1.agent_name)
-      |> Enum.uniq()
-      |> Enum.reject(&(&1 == "session"))
+    if pending != prev_pending do
+      sorted =
+        pending
+        |> Enum.sort_by(fn req ->
+          # Pin :execute to top, then sort newest first
+          priority = if req.category == :execute, do: 0, else: 1
+          {priority, DateTime.to_unix(req.requested_at) * -1}
+        end)
 
-    {:ok,
-     socket
-     |> assign(assigns)
-     |> assign(sorted_permissions: sorted, unique_agents: unique_agents)}
+      unique_agents =
+        pending
+        |> Enum.map(& &1.agent_name)
+        |> Enum.uniq()
+        |> Enum.reject(&(&1 == "session"))
+
+      {:ok, assign(socket, sorted_permissions: sorted, unique_agents: unique_agents)}
+    else
+      {:ok, socket}
+    end
   end
 
   def render(assigns) do
@@ -208,15 +214,4 @@ defmodule LoomkinWeb.PermissionDashboardComponent do
   end
 
   defp truncate_path(path), do: path
-
-  defp relative_time(dt) do
-    diff = DateTime.diff(DateTime.utc_now(), dt, :second)
-
-    cond do
-      diff < 5 -> "just now"
-      diff < 60 -> "#{diff}s ago"
-      diff < 3600 -> "#{div(diff, 60)}m ago"
-      true -> "#{div(diff, 3600)}h ago"
-    end
-  end
 end

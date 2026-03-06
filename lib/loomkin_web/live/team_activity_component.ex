@@ -19,6 +19,8 @@ defmodule LoomkinWeb.TeamActivityComponent do
 
   use LoomkinWeb, :live_component
 
+  import LoomkinWeb.TimeHelpers, only: [relative_time: 1]
+
   @type_config %{
     tool_call: %{
       label: "tool",
@@ -175,41 +177,71 @@ defmodule LoomkinWeb.TeamActivityComponent do
     }
   }
 
+  @max_events 200
+
   @impl true
   def mount(socket) do
     {:ok,
-     assign(socket,
-       events: [],
+     socket
+     |> assign(
+       all_events: [],
        known_agents: [],
+       event_count: 0,
        focused_agent: nil,
        agent_filter: nil,
        type_filter: MapSet.new(),
        expanded_ids: MapSet.new()
-     )}
+     )
+     |> stream(:filtered_events, [])}
   end
 
   @impl true
   def update(assigns, socket) do
-    events = assigns[:events] || socket.assigns.events
-
-    # Prune expanded_ids for events no longer in the feed
-    expanded_ids = socket.assigns.expanded_ids
-    event_ids = MapSet.new(events, & &1.id)
-    expanded_ids = MapSet.intersection(expanded_ids, event_ids)
-
     socket =
       socket
       |> assign(:team_id, assigns[:team_id])
       |> assign(:id, assigns[:id])
-      |> assign(:events, events)
       |> assign(:known_agents, assigns[:known_agents] || socket.assigns.known_agents)
-      |> assign(:expanded_ids, expanded_ids)
 
     # Accept focused_agent from parent (e.g. roster click) — auto-apply as agent filter
     socket =
       case assigns[:focused_agent] do
         nil -> socket
         agent -> assign(socket, focused_agent: agent, agent_filter: agent)
+      end
+
+    # Handle new events pushed from parent via send_update
+    socket =
+      case assigns[:new_event] do
+        nil ->
+          socket
+
+        event ->
+          all = socket.assigns.all_events ++ [event]
+          all = if length(all) > @max_events, do: tl(all), else: all
+
+          socket = assign(socket, all_events: all, event_count: length(all))
+
+          if event_matches_filter?(event, socket.assigns) do
+            stream_insert(socket, :filtered_events, event)
+          else
+            socket
+          end
+      end
+
+    # Handle bulk event reset (e.g. initial history load)
+    socket =
+      case assigns[:reset_events] do
+        nil ->
+          socket
+
+        events ->
+          all = Enum.take(events, -@max_events)
+          filtered = apply_filters(all, socket.assigns)
+
+          socket
+          |> assign(all_events: all, event_count: length(all))
+          |> stream(:filtered_events, filtered, reset: true)
       end
 
     {:ok, socket}
@@ -219,13 +251,24 @@ defmodule LoomkinWeb.TeamActivityComponent do
 
   @impl true
   def handle_event("filter_agent", %{"agent" => ""}, socket) do
-    {:noreply, assign(socket, agent_filter: nil, focused_agent: nil)}
+    socket =
+      socket
+      |> assign(agent_filter: nil, focused_agent: nil)
+      |> refilter_stream()
+
+    {:noreply, socket}
   end
 
   def handle_event("filter_agent", %{"agent" => agent}, socket) do
     current = socket.assigns.agent_filter
     new_filter = if(current == agent, do: nil, else: agent)
-    {:noreply, assign(socket, agent_filter: new_filter, focused_agent: nil)}
+
+    socket =
+      socket
+      |> assign(agent_filter: new_filter, focused_agent: nil)
+      |> refilter_stream()
+
+    {:noreply, socket}
   end
 
   @valid_event_types ~w(tool_call message task_created task_assigned task_complete discovery error thinking agent_spawn context_offload question channel_message)
@@ -239,7 +282,12 @@ defmodule LoomkinWeb.TeamActivityComponent do
         do: MapSet.delete(filter, type),
         else: MapSet.put(filter, type)
 
-    {:noreply, assign(socket, type_filter: new_filter)}
+    socket =
+      socket
+      |> assign(type_filter: new_filter)
+      |> refilter_stream()
+
+    {:noreply, socket}
   end
 
   def handle_event("expand_event", %{"id" => id}, socket) do
@@ -267,8 +315,6 @@ defmodule LoomkinWeb.TeamActivityComponent do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :filtered_events, filtered_events(assigns))
-
     ~H"""
     <div class="flex flex-col h-full" style="background: var(--surface-0);">
       <%!-- Filter Bar --%>
@@ -326,11 +372,8 @@ defmodule LoomkinWeb.TeamActivityComponent do
 
       <%!-- Event Feed --%>
       <div class="flex-1 overflow-auto" id={"activity-feed-#{@id}"} phx-hook="ScrollToBottom">
-        <div class="flex flex-col gap-1.5 p-2.5">
-          <div
-            :if={@filtered_events == []}
-            class="flex items-center justify-center h-48"
-          >
+        <div id={"activity-stream-#{@id}"} phx-update="stream" class="flex flex-col gap-1.5 p-2.5">
+          <div class="hidden only:flex items-center justify-center h-48">
             <div class="text-center space-y-3">
               <div class="text-muted" style="font-size: 2rem; opacity: 0.3;">&#9673;</div>
               <p class="text-sm text-muted">No activity yet</p>
@@ -340,7 +383,11 @@ defmodule LoomkinWeb.TeamActivityComponent do
             </div>
           </div>
 
-          <div :for={event <- @filtered_events} class="activity-event-enter">
+          <div
+            :for={{dom_id, event} <- @streams.filtered_events}
+            id={dom_id}
+            class="activity-event-enter"
+          >
             {render_event_card(assigns, event)}
           </div>
         </div>
@@ -1348,9 +1395,12 @@ defmodule LoomkinWeb.TeamActivityComponent do
 
   # --- Helpers ---
 
-  defp filtered_events(assigns) do
-    events = assigns.events
+  defp refilter_stream(socket) do
+    filtered = apply_filters(socket.assigns.all_events, socket.assigns)
+    stream(socket, :filtered_events, filtered, reset: true)
+  end
 
+  defp apply_filters(events, assigns) do
     events =
       case assigns.agent_filter do
         nil -> events
@@ -1363,15 +1413,20 @@ defmodule LoomkinWeb.TeamActivityComponent do
     end
   end
 
-  defp relative_time(datetime) do
-    diff = DateTime.diff(DateTime.utc_now(), datetime, :second)
+  defp event_matches_filter?(event, assigns) do
+    agent_ok =
+      case assigns.agent_filter do
+        nil -> true
+        agent -> event.agent == agent
+      end
 
-    cond do
-      diff < 3 -> "now"
-      diff < 60 -> "#{diff}s ago"
-      diff < 3600 -> "#{div(diff, 60)}m ago"
-      true -> "#{div(diff, 3600)}h ago"
-    end
+    type_ok =
+      case MapSet.size(assigns.type_filter) do
+        0 -> true
+        _ -> MapSet.member?(assigns.type_filter, event.type)
+      end
+
+    agent_ok && type_ok
   end
 
   defp agent_color(agent_name), do: LoomkinWeb.AgentColors.agent_color(agent_name)

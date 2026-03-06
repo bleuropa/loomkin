@@ -99,7 +99,12 @@ defmodule LoomkinWeb.ContextInspectorComponent do
         </div>
 
         <%!-- Content area --%>
-        <div class="flex-1 overflow-auto min-h-0 relative" style="background: var(--surface-0);">
+        <div
+          id="inspector-content"
+          class="flex-1 overflow-auto min-h-0 relative"
+          style="background: var(--surface-0);"
+          phx-update="ignore"
+        >
           <%!-- Decision graph is always mounted (stays subscribed to PubSub) --%>
           <div class={if @active_inspector_tab == :graph, do: "h-full", else: "hidden"}>
             <.live_component

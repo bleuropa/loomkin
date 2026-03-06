@@ -10,9 +10,17 @@ defmodule LoomkinWeb.DiffComponent do
 
   @impl true
   def update(assigns, socket) do
-    diffs = assigns[:diffs] || []
-    parsed = Enum.map(diffs, &parse_diff/1)
-    {:ok, assign(socket, Map.put(assigns, :parsed_diffs, parsed))}
+    new_diffs = assigns[:diffs] || []
+    prev_diffs = socket.assigns[:diffs]
+
+    socket = assign(socket, assigns)
+
+    if new_diffs != prev_diffs do
+      parsed = Enum.map(new_diffs, &parse_diff/1)
+      {:ok, assign(socket, parsed_diffs: parsed)}
+    else
+      {:ok, socket}
+    end
   end
 
   @impl true

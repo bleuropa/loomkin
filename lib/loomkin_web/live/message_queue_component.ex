@@ -91,6 +91,7 @@ defmodule LoomkinWeb.MessageQueueComponent do
         id={"queue-list-#{@agent_name}"}
         class="flex-1 overflow-auto"
         phx-hook="SortableQueue"
+        phx-update="ignore"
         data-agent={@agent_name}
       >
         <%= if @queue == [] do %>
@@ -179,7 +180,6 @@ defmodule LoomkinWeb.MessageQueueComponent do
                       data-utc-time={if(msg.queued_at, do: DateTime.to_iso8601(msg.queued_at))}
                       data-format="relative"
                     >
-                      {relative_time(msg.queued_at)}
                     </span>
                   </div>
 
@@ -233,17 +233,4 @@ defmodule LoomkinWeb.MessageQueueComponent do
   defp source_badge_class(:peer), do: "bg-green-500/15 text-green-400"
   defp source_badge_class(:scheduled), do: "bg-amber-500/15 text-amber-400"
   defp source_badge_class(_), do: "bg-zinc-500/15 text-zinc-400"
-
-  defp relative_time(nil), do: ""
-
-  defp relative_time(dt) do
-    diff = DateTime.diff(DateTime.utc_now(), dt, :second)
-
-    cond do
-      diff < 60 -> "#{diff}s ago"
-      diff < 3600 -> "#{div(diff, 60)}m ago"
-      diff < 86400 -> "#{div(diff, 3600)}h ago"
-      true -> "#{div(diff, 86400)}d ago"
-    end
-  end
 end
