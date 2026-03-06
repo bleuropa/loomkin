@@ -1,8 +1,9 @@
 ExUnit.start()
 Ecto.Adapters.SQL.Sandbox.mode(Loomkin.Repo, :manual)
 
-# Skip LLM-dependent tests in CI (no API keys available)
-if System.get_env("CI"), do: ExUnit.configure(exclude: [:llm_dependent])
+# Skip LLM-dependent tests by default — they depend on external API state.
+# Run with: mix test --include llm_dependent
+ExUnit.configure(exclude: [:llm_dependent])
 
 # Mox mock definitions for channel adapter tests
 Mox.defmock(Loomkin.MockAdapter, for: Loomkin.Channels.Adapter)
