@@ -235,17 +235,22 @@ defmodule Loomkin.Teams.RateLimiterTest do
     end
 
     test "default provider buckets have expected capacities" do
+      # Request more than max so the bucket is guaranteed empty even after
+      # wall-clock refill between the two GenServer.call round-trips.
+      # (refill_rate of 80K/min ≈ 1.3 tokens/ms, so a few ms adds tokens.)
+      overshoot = 500
+
       # Anthropic: 80K
       assert :ok = RateLimiter.acquire("anthropic", 80_000)
-      assert {:wait, _} = RateLimiter.acquire("anthropic", 1)
+      assert {:wait, _} = RateLimiter.acquire("anthropic", overshoot)
 
       # OpenAI: 90K (separate bucket, still full)
       assert :ok = RateLimiter.acquire("openai", 90_000)
-      assert {:wait, _} = RateLimiter.acquire("openai", 1)
+      assert {:wait, _} = RateLimiter.acquire("openai", overshoot)
 
       # Google: 60K
       assert :ok = RateLimiter.acquire("google", 60_000)
-      assert {:wait, _} = RateLimiter.acquire("google", 1)
+      assert {:wait, _} = RateLimiter.acquire("google", overshoot)
     end
   end
 end
