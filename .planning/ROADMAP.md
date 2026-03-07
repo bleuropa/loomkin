@@ -42,7 +42,7 @@ Plans:
 - [x] 01-03-PLAN.md — Extract SidebarPanelComponent (files/diff/graph tab panel)
 - [x] 01-04-PLAN.md — Extract MissionControlPanelComponent (agent card grid + comms feed)
 - [x] 01-05-PLAN.md — Wire all components into workspace_live.ex orchestrator + integration test
-- [ ] 01-06-PLAN.md — Gap closure: update roadmap criteria, real LiveView mount test, clean up anti-pattern
+- [x] 01-06-PLAN.md — Gap closure: update roadmap criteria, real LiveView mount test, clean up anti-pattern
 
 ### Phase 2: Signal Infrastructure
 **Goal**: A TeamBroadcaster GenServer sits between the Signal Bus and LiveView, all signal topics are generated through a Topics module, and dead subscriptions are cleaned up on process termination
