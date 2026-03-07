@@ -166,12 +166,14 @@ body {
   box-shadow: var(--shadow-sm);
   transition: border-color var(--transition-base),
               box-shadow var(--transition-base),
-              transform var(--transition-base);
+              transform var(--transition-base),
+              filter var(--transition-base);
 }
 
 .card-elevated:hover {
   border-color: var(--border-hover);
   box-shadow: var(--shadow-md);
+  filter: brightness(1.05);
 }
 
 .card-brand {
