@@ -36,7 +36,8 @@ defmodule Loomkin.Teams.TeamBroadcaster do
                     "team.ask_user.answered",
                     "agent.error",
                     "agent.escalation",
-                    "team.dissolved"
+                    "team.dissolved",
+                    "collaboration.peer.message"
                   ])
 
   defstruct team_ids: MapSet.new(),

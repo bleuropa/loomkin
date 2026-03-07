@@ -83,7 +83,7 @@ defmodule LoomkinWeb.WorkspaceLive do
         # File explorer drawer
         file_drawer_open: false
       )
-      |> stream(:comms_events, [])
+      |> stream(:comms_events, [], limit: -500)
 
     case socket.assigns.live_action do
       :new ->
@@ -992,6 +992,35 @@ defmodule LoomkinWeb.WorkspaceLive do
   def handle_info(%Jido.Signal{type: "agent.queue.updated"} = sig, socket) do
     %{agent_name: agent_name, queue: queue} = sig.data
     handle_info({:queue_updated, agent_name, queue}, socket)
+  end
+
+  # Peer-to-peer agent messages — critical-priority delivery via TeamBroadcaster
+  def handle_info(%Jido.Signal{type: "collaboration.peer.message"} = sig, socket) do
+    agent = sig.data[:from] || "unknown"
+
+    content =
+      case sig.data[:message] do
+        {:peer_message, _sender, text} -> text
+        text when is_binary(text) -> text
+        other -> inspect(other)
+      end
+
+    event = %{
+      id: Ecto.UUID.generate(),
+      type: :peer_message,
+      agent: agent,
+      content: content,
+      timestamp: DateTime.utc_now(),
+      expanded: false,
+      metadata: %{team_id: sig.data[:team_id]}
+    }
+
+    socket =
+      socket
+      |> stream_insert(:comms_events, event)
+      |> update(:comms_event_count, &(&1 + 1))
+
+    {:noreply, socket}
   end
 
   # Catch-all for unhandled signal types — ignore
@@ -2248,6 +2277,7 @@ defmodule LoomkinWeb.WorkspaceLive do
         <%!-- Brand mark — pulses when system is active --%>
         <a
           href="/"
+          aria-label="Loomkin"
           class={[
             "flex items-center gap-2 flex-shrink-0 group",
             @status in [:thinking, :executing_tool] && "brand-active"
@@ -2259,6 +2289,7 @@ defmodule LoomkinWeb.WorkspaceLive do
             viewBox="0 0 32 32"
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
           >
             <polygon points="10,2 6,10 15,7" fill="#5B21B6" />
             <polygon points="22,2 26,10 17,7" fill="#5B21B6" />
@@ -2391,7 +2422,7 @@ defmodule LoomkinWeb.WorkspaceLive do
       </header>
 
       <%!-- ── Main Content — branches on mode ── --%>
-      <div class="flex flex-1 min-h-0 flex-col xl:flex-row">
+      <div id="main-content" class="flex flex-1 min-h-0 flex-col xl:flex-row">
         <%= if @mode == :solo do %>
           <%!-- Left: Chat + Input --%>
           <div class="flex-1 flex flex-col min-w-0 min-h-0 bg-surface-0">
@@ -3361,6 +3392,7 @@ defmodule LoomkinWeb.WorkspaceLive do
     :role_changed,
     :escalation,
     :channel_message,
+    :peer_message,
     :task_created,
     :task_assigned,
     :task_complete,
