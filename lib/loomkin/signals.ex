@@ -22,6 +22,11 @@ defmodule Loomkin.Signals do
     Bus.subscribe(@bus, path, dispatch: {:pid, target: pid, delivery_mode: :async})
   end
 
+  @doc "Unsubscribe from the bus using a subscription ID returned by subscribe/2."
+  def unsubscribe(subscription_id) do
+    Bus.unsubscribe(@bus, subscription_id)
+  end
+
   @doc "Replay recorded signals matching `path` from the bus log."
   def replay(path, start_timestamp \\ 0) do
     Bus.replay(@bus, path, start_timestamp)
