@@ -83,24 +83,18 @@ defmodule Loomkin.Decisions.SupervisionTest do
     test "AutoLogger restarts after crash", %{team_id: team_id} do
       [{old_pid, _}] = Registry.lookup(Loomkin.Teams.AgentRegistry, {:auto_logger, team_id})
       Process.exit(old_pid, :kill)
-      Process.sleep(100)
 
-      # DynamicSupervisor should restart it with a new pid
-      result = Registry.lookup(Loomkin.Teams.AgentRegistry, {:auto_logger, team_id})
-      assert [{new_pid, _}] = result
+      # Wait for supervisor to restart the process (CI can be slow)
+      {new_pid, _} = await_registry({:auto_logger, team_id}, old_pid)
       assert Process.alive?(new_pid)
-      assert new_pid != old_pid
     end
 
     test "Broadcaster restarts after crash", %{team_id: team_id} do
       [{old_pid, _}] = Registry.lookup(Loomkin.Teams.AgentRegistry, {:broadcaster, team_id})
       Process.exit(old_pid, :kill)
-      Process.sleep(100)
 
-      result = Registry.lookup(Loomkin.Teams.AgentRegistry, {:broadcaster, team_id})
-      assert [{new_pid, _}] = result
+      {new_pid, _} = await_registry({:broadcaster, team_id}, old_pid)
       assert Process.alive?(new_pid)
-      assert new_pid != old_pid
     end
   end
 
@@ -119,6 +113,15 @@ defmodule Loomkin.Decisions.SupervisionTest do
 
       nodes = Loomkin.Decisions.Graph.list_nodes(node_type: :action)
       assert Enum.any?(nodes, &(&1.title == "Agent test-agent joined team"))
+    end
+  end
+
+  # Poll Registry until a new pid (different from old_pid) appears, up to 2s.
+  defp await_registry(key, old_pid, attempts \\ 40) do
+    case Registry.lookup(Loomkin.Teams.AgentRegistry, key) do
+      [{pid, val}] when pid != old_pid -> {pid, val}
+      _ when attempts > 0 -> Process.sleep(50) && await_registry(key, old_pid, attempts - 1)
+      other -> flunk("Expected new pid for #{inspect(key)}, got: #{inspect(other)}")
     end
   end
 end
