@@ -132,7 +132,10 @@ defmodule LoomkinWeb.AgentCommsComponent do
         phx-update="stream"
         class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5"
       >
-        <div class="hidden only:flex items-center justify-center py-12 text-muted text-xs">
+        <div
+          id="comms-empty-state"
+          class="hidden only:flex items-center justify-center py-12 text-muted text-xs"
+        >
           No inter-agent communication yet
         </div>
 

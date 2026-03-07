@@ -2,8 +2,33 @@ defmodule LoomkinWeb.WorkspaceLiveTest do
   @moduledoc """
   Integration tests verifying all extracted components are properly wired
   into WorkspaceLive and the module compiles correctly.
+
+  Includes both fast module-level smoke tests and a real LiveView mount test
+  that verifies extracted components render in the DOM.
   """
-  use LoomkinWeb.ConnCase, async: true
+  use LoomkinWeb.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+
+  describe "live mount and component rendering" do
+    test "mounting workspace renders all extracted components", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/sessions/new")
+
+      # CommandPaletteComponent renders its wrapper div
+      assert html =~ "command-palette"
+
+      # ComposerComponent renders the message input and send form
+      assert html =~ "message-input"
+      assert html =~ "send_message"
+
+      # MissionControlPanelComponent renders the agent comms section
+      assert html =~ "agent-comms"
+
+      # No inline defp render_ output should appear — all rendering is via components
+      refute html =~ "render_agent_card"
+      refute html =~ "render_comms_feed"
+    end
+  end
 
   describe "module compilation and component wiring" do
     test "workspace_live compiles successfully" do
