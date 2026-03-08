@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 05-03-PLAN.md
-last_updated: "2026-03-08T14:36:09.136Z"
+stopped_at: Completed 05-04-PLAN.md
+last_updated: "2026-03-08T14:56:21.709Z"
 last_activity: 2026-03-08 — Distinct agent card controls with force-pause, dual indicator, steer-only resume, and state transition comms events
 progress:
   total_phases: 10
   completed_phases: 5
-  total_plans: 20
-  completed_plans: 20
-  percent: 95
+  total_plans: 21
+  completed_plans: 21
+  percent: 100
 ---
 
 # Project State
@@ -67,6 +67,7 @@ Progress: [██████████] 100%
 | Phase 05 P01 | 6 | 1 tasks | 4 files |
 | Phase 05 P02 | 7 | 2 tasks | 5 files |
 | Phase 05 P03 | 7 | 2 tasks | 6 files |
+| Phase 05 P04 | 3 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -110,6 +111,9 @@ Recent decisions affecting current work:
 - [Phase 05-02]: broadcast_mode defaults to true in team sessions, false in solo -- reset only on explicit agent selection
 - [Phase 05]: resume button removed in favor of steer-only flow requiring mandatory guidance text
 - [Phase 05]: set_status_and_broadcast extended to 4-tuple signal with metadata map for backwards compatibility
+- [Phase 05-04]: broadcast_mode defaults to params["team_id"] != nil in mount; also set explicitly to true in start_and_subscribe team_id branch
+- [Phase 05-04]: source inspection tests used for force_pause and broadcast send paths that require live Agent processes
+- [Phase 05-04]: assert_received used to verify self-send {:steer_agent} dispatch from resume_agent handler in unit tests
 
 ### Pending Todos
 
@@ -124,6 +128,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T14:36:09.134Z
-Stopped at: Completed 05-03-PLAN.md
+Last session: 2026-03-08T14:56:21.707Z
+Stopped at: Completed 05-04-PLAN.md
 Resume file: None
