@@ -48,7 +48,8 @@ defmodule Loomkin.Teams.Agent do
     paused_state: nil,
     subscription_ids: [],
     last_asked_at: nil,
-    pending_ask_user: nil
+    pending_ask_user: nil,
+    spawned_child_teams: []
   ]
 
   # --- Public API ---
@@ -1663,6 +1664,17 @@ defmodule Loomkin.Teams.Agent do
     {:noreply, %{state | messages: state.messages ++ [msg]}}
   end
 
+  def handle_info({:child_team_spawned, child_team_id}, state) do
+    updated =
+      if child_team_id in state.spawned_child_teams do
+        state.spawned_child_teams
+      else
+        [child_team_id | state.spawned_child_teams]
+      end
+
+    {:noreply, %{state | spawned_child_teams: updated}}
+  end
+
   @impl true
   def handle_info(_msg, state) do
     {:noreply, state}
@@ -2055,6 +2067,8 @@ defmodule Loomkin.Teams.Agent do
         handle_loop_event(team_id, name, event_name, payload)
       end,
       on_tool_execute: fn tool_module, tool_args, context ->
+        agent_pid = self()
+
         # Inject agent messages into context for ContextOffload to avoid deadlock.
         context =
           if tool_module == Loomkin.Tools.ContextOffload do
@@ -2067,8 +2081,6 @@ defmodule Loomkin.Teams.Agent do
         # default 60s Jido.Exec timeout and call run/2 directly.
         # Rate-limit check happens first via GenServer.call to read live state.
         if tool_module == Loomkin.Tools.AskUser do
-          agent_pid = self()
-
           case GenServer.call(agent_pid, {:check_ask_user_rate_limit, tool_args}) do
             :allow ->
               atomized = Loomkin.Tools.Registry.atomize_keys(tool_args)
@@ -2128,7 +2140,20 @@ defmodule Loomkin.Teams.Agent do
               )
           end
         else
-          AgentLoop.default_run_tool(tool_module, tool_args, context)
+          result = AgentLoop.default_run_tool(tool_module, tool_args, context)
+
+          # If TeamSpawn succeeded, notify GenServer to track the child team
+          if tool_module == Loomkin.Tools.TeamSpawn do
+            case result do
+              {:ok, %{team_id: child_team_id}} ->
+                send(agent_pid, {:child_team_spawned, child_team_id})
+
+              _ ->
+                :ok
+            end
+          end
+
+          result
         end
       end
     ]
