@@ -298,6 +298,21 @@ defmodule Loomkin.Teams.Agent do
     {:noreply, %{state | loop_task: {task, from}}}
   end
 
+  # Inject broadcast into paused agent's message history without starting a loop
+  @impl true
+  def handle_call({:inject_broadcast, text}, _from, %{status: :paused, paused_state: ps} = state)
+      when ps != nil do
+    user_message = %{role: :user, content: text}
+    updated_ps = %{ps | messages: ps.messages ++ [user_message]}
+    {:reply, :ok, %{state | paused_state: updated_ps}}
+  end
+
+  # For non-paused agents, delegate to send_message
+  @impl true
+  def handle_call({:inject_broadcast, text}, from, state) do
+    handle_call({:send_message, text}, from, state)
+  end
+
   @impl true
   def handle_call(:get_status, _from, state) do
     {:reply, state.status, state}
@@ -608,6 +623,23 @@ defmodule Loomkin.Teams.Agent do
   # --- handle_cast ---
 
   @impl true
+  def handle_cast(:request_pause, %{status: :idle} = state) do
+    # No-op: agent is not running, nothing to pause
+    {:noreply, state}
+  end
+
+  def handle_cast(:request_pause, %{status: :waiting_permission} = state) do
+    # Queue the pause instead of setting pause_requested -- permission must resolve first
+    broadcast_team(state, {:agent_pause_queued, state.name})
+    {:noreply, %{state | pause_queued: true}}
+  end
+
+  def handle_cast(:request_pause, %{status: :approval_pending} = state) do
+    # Pre-wire for Phase 6: queue pause during approval gate
+    broadcast_team(state, {:agent_pause_queued, state.name})
+    {:noreply, %{state | pause_queued: true}}
+  end
+
   def handle_cast(:request_pause, state) do
     {:noreply, %{state | pause_requested: true}}
   end
