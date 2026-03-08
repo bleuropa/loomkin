@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 08-03-PLAN.md
-last_updated: "2026-03-08T22:10:06.271Z"
+stopped_at: Completed 08-04-PLAN.md
+last_updated: "2026-03-08T22:17:47.583Z"
 last_activity: 2026-03-08 — Distinct agent card controls with force-pause, dual indicator, steer-only resume, and state transition comms events
 progress:
   total_phases: 10
   completed_phases: 7
   total_plans: 35
-  completed_plans: 33
+  completed_plans: 34
   percent: 100
 ---
 
@@ -81,6 +81,7 @@ Progress: [██████████] 100%
 | Phase 08-dynamic-tree-visibility P01 | 8 | 2 tasks | 5 files |
 | Phase 08-dynamic-tree-visibility P02 | 5 | 2 tasks | 7 files |
 | Phase 08-dynamic-tree-visibility P03 | 14 | 2 tasks | 2 files |
+| Phase 08-dynamic-tree-visibility P04 | 15 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -150,6 +151,8 @@ Recent decisions affecting current work:
 - [Phase 08-02]: team.child.created added to @critical_types MapSet for O(1) lookup and instant delivery bypassing 50ms batch window
 - [Phase 08-03]: agent_pid = self() moved to top of on_tool_execute closure so both AskUser and TeamSpawn paths share it without redundant self() calls
 - [Phase 08-03]: terminate/2 uses try/catch :exit for Manager.dissolve_team; spawned_child_teams not restored on OTP restart — agent boots with [] and re-accumulates
+- [Phase 08-04]: handle_info :child_team_created arity changed to 4-tuple; signal handler extracts parent_team_id and team_name from sig.data
+- [Phase 08-04]: team_names starts empty on reconnect path — repopulates on next ChildTeamCreated signal; Plan 05 falls back to short_id/1 when name absent
 
 ### Pending Todos
 
@@ -164,6 +167,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T22:10:06.269Z
-Stopped at: Completed 08-03-PLAN.md
+Last session: 2026-03-08T22:17:47.581Z
+Stopped at: Completed 08-04-PLAN.md
 Resume file: None
