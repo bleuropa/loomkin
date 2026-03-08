@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-03-08T05:27:39.000Z"
-last_activity: 2026-03-08 — Team-wide broadcast messaging with inject_broadcast/2, composer indicator, and paused agent injection
+stopped_at: Completed 05-03-PLAN.md
+last_updated: "2026-03-08T14:36:09.136Z"
+last_activity: 2026-03-08 — Distinct agent card controls with force-pause, dual indicator, steer-only resume, and state transition comms events
 progress:
   total_phases: 10
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 20
-  completed_plans: 19
+  completed_plans: 20
   percent: 95
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 5 of 10 (Chat Injection & State Machines)
-Plan: 3 of 4 in current phase
-Status: Completed 05-02 team broadcast messaging
-Last activity: 2026-03-08 — Team-wide broadcast messaging with inject_broadcast/2, composer indicator, and paused agent injection
+Plan: 4 of 4 in current phase
+Status: Completed 05-03 agent card ui for state machine guards
+Last activity: 2026-03-08 — Distinct agent card controls with force-pause, dual indicator, steer-only resume, and state transition comms events
 
-Progress: [█████████▌] 95%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -66,6 +66,7 @@ Progress: [█████████▌] 95%
 | Phase 05 P00 | 2 | 1 tasks | 5 files |
 | Phase 05 P01 | 6 | 1 tasks | 4 files |
 | Phase 05 P02 | 7 | 2 tasks | 5 files |
+| Phase 05 P03 | 7 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -107,6 +108,8 @@ Recent decisions affecting current work:
 - [Phase 05-01]: broadcast_team for pause_queued reuses Agent.Status signal with :pause_queued atom status
 - [Phase 05-02]: inject_broadcast delegates to send_message for non-paused agents instead of checking status externally
 - [Phase 05-02]: broadcast_mode defaults to true in team sessions, false in solo -- reset only on explicit agent selection
+- [Phase 05]: resume button removed in favor of steer-only flow requiring mandatory guidance text
+- [Phase 05]: set_status_and_broadcast extended to 4-tuple signal with metadata map for backwards compatibility
 
 ### Pending Todos
 
@@ -121,6 +124,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-08T05:27:39.000Z
-Stopped at: Completed 05-02-PLAN.md
-Resume file: .planning/phases/05-chat-injection-state-machines/05-02-SUMMARY.md
+Last session: 2026-03-08T14:36:09.134Z
+Stopped at: Completed 05-03-PLAN.md
+Resume file: None

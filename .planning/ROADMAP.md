@@ -15,7 +15,7 @@ and the leader research protocol. Each phase delivers one coherent, testable cap
 - [ ] **Phase 2: Signal Infrastructure** - TeamBroadcaster intermediary, Topics module, and subscription cleanup
 - [x] **Phase 3: Live Comms Feed** - Agent-to-agent messages visible in real-time for all teams including dynamic sub-teams (completed 2026-03-08)
 - [ ] **Phase 4: Task Graph & Crash Recovery** - Visual task dependency graph and OTP crash status reflected in UI (gap closure)
-- [ ] **Phase 5: Chat Injection & State Machines** - Team-wide chat broadcast and typed pause/permission state machines
+- [x] **Phase 5: Chat Injection & State Machines** - Team-wide chat broadcast and typed pause/permission state machines (completed 2026-03-08)
 - [ ] **Phase 6: Approval Gates** - Checkpoint-based approval gates distinct from permission hooks with high-visibility UI
 - [ ] **Phase 7: Confidence Triggers** - Agents auto-ask humans when uncertain via configurable threshold
 - [ ] **Phase 8: Dynamic Tree Visibility** - Nested sub-teams auto-appear in UI via recursive subscription
@@ -182,7 +182,7 @@ Plans:
 | 2. Signal Infrastructure | 3/4 | Gap closure | - |
 | 3. Live Comms Feed | 2/2 | Complete   | 2026-03-08 |
 | 4. Task Graph & Crash Recovery | 3/4 | Gap closure | - |
-| 5. Chat Injection & State Machines | 0/4 | Not started | - |
+| 5. Chat Injection & State Machines | 4/4 | Complete   | 2026-03-08 |
 | 6. Approval Gates | 0/TBD | Not started | - |
 | 7. Confidence Triggers | 0/TBD | Not started | - |
 | 8. Dynamic Tree Visibility | 0/TBD | Not started | - |
