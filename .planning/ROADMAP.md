@@ -125,7 +125,13 @@ Plans:
   3. When the human approves, the agent resumes from the exact checkpoint where it paused; when denied, the agent receives the denial as context and continues
   4. If the leader agent is paused at an approval gate, the UI shows a persistent team-wide banner indicating the team is waiting for human sign-off
   5. An approval gate with a timed-out response defaults to deny, not auto-approve, and the agent sees the timeout reason in its resumed context
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [ ] 06-01-PLAN.md — Wave 0: failing test stubs for all approval gate behaviors
+- [ ] 06-02-PLAN.md — Backend: RequestApproval tool, ApprovalRequested/Resolved signals, TeamBroadcaster critical types, tool registry
+- [ ] 06-03-PLAN.md — workspace_live: approve/deny events, signal handlers, leader banner, comms feed events
+- [ ] 06-04-PLAN.md — UI: agent card approval panel, violet styling, CountdownTimer JS hook, visual verification
 
 ### Phase 7: Confidence Triggers
 **Goal**: Agents automatically surface a question to the human when their confidence drops below a threshold, with rate limiting to prevent interrupt fatigue
@@ -184,7 +190,7 @@ Plans:
 | 3. Live Comms Feed | 2/2 | Complete   | 2026-03-08 |
 | 4. Task Graph & Crash Recovery | 3/4 | Gap closure | - |
 | 5. Chat Injection & State Machines | 5/5 | Complete   | 2026-03-08 |
-| 6. Approval Gates | 0/TBD | Not started | - |
+| 6. Approval Gates | 0/4 | Planned | - |
 | 7. Confidence Triggers | 0/TBD | Not started | - |
 | 8. Dynamic Tree Visibility | 0/TBD | Not started | - |
 | 9. Spawn Safety | 0/TBD | Not started | - |
