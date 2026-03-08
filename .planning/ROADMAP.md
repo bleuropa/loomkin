@@ -17,7 +17,7 @@ and the leader research protocol. Each phase delivers one coherent, testable cap
 - [ ] **Phase 4: Task Graph & Crash Recovery** - Visual task dependency graph and OTP crash status reflected in UI (gap closure)
 - [x] **Phase 5: Chat Injection & State Machines** - Team-wide chat broadcast and typed pause/permission state machines (gap closure) (completed 2026-03-08)
 - [x] **Phase 6: Approval Gates** - Checkpoint-based approval gates distinct from permission hooks with high-visibility UI (completed 2026-03-08)
-- [ ] **Phase 7: Confidence Triggers** - Agents auto-ask humans when uncertain via configurable threshold
+- [x] **Phase 7: Confidence Triggers** - Agents auto-ask humans when uncertain via configurable threshold (completed 2026-03-08)
 - [ ] **Phase 8: Dynamic Tree Visibility** - Nested sub-teams auto-appear in UI via recursive subscription
 - [ ] **Phase 9: Spawn Safety** - Pre-spawn budget check and approval gate before expensive sub-tree creation
 - [ ] **Phase 10: Leader Research Protocol** - Leader spawns research sub-agents, synthesizes findings, then asks humans
@@ -198,7 +198,7 @@ Plans:
 | 4. Task Graph & Crash Recovery | 3/4 | Gap closure | - |
 | 5. Chat Injection & State Machines | 5/5 | Complete   | 2026-03-08 |
 | 6. Approval Gates | 5/5 | Complete   | 2026-03-08 |
-| 7. Confidence Triggers | 3/4 | In Progress|  |
+| 7. Confidence Triggers | 4/4 | Complete   | 2026-03-08 |
 | 8. Dynamic Tree Visibility | 0/TBD | Not started | - |
 | 9. Spawn Safety | 0/TBD | Not started | - |
 | 10. Leader Research Protocol | 0/TBD | Not started | - |
