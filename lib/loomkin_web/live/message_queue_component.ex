@@ -128,7 +128,8 @@ defmodule LoomkinWeb.MessageQueueComponent do
           phx-click="close_queue_drawer"
           phx-target={@myself}
           class="p-1 rounded-md interactive text-muted"
-          title="Close"
+          data-tooltip="Close queue"
+          aria-label="Close queue"
         >
           <.icon name="hero-x-mark-mini" class="w-4 h-4" />
         </button>
@@ -273,7 +274,8 @@ defmodule LoomkinWeb.MessageQueueComponent do
                     phx-click="start_queued_edit"
                     phx-target={@myself}
                     phx-value-id={msg.id}
-                    title="Edit"
+                    data-tooltip="Edit message"
+                    aria-label="Edit message"
                     class="p-1 rounded-md interactive text-muted"
                   >
                     <.icon name="hero-pencil-mini" class="w-3.5 h-3.5" />
@@ -282,7 +284,8 @@ defmodule LoomkinWeb.MessageQueueComponent do
                     phx-click="delete_queued"
                     phx-target={@myself}
                     phx-value-id={msg.id}
-                    title="Delete"
+                    data-tooltip="Delete message"
+                    aria-label="Delete message"
                     class="p-1 rounded-md interactive text-red-400/60 hover:text-red-400"
                   >
                     <.icon name="hero-trash-mini" class="w-3.5 h-3.5" />

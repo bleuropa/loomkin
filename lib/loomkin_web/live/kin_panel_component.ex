@@ -91,6 +91,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="kin_back_to_list"
             phx-target={@myself}
             class="text-muted hover:text-primary p-1 rounded-md hover:bg-surface-2 transition-colors"
+            data-tooltip="Back to list"
+            aria-label="Back to list"
           >
             <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
               <path
@@ -130,6 +132,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="close_kin_panel"
             phx-target={@myself}
             class="text-muted hover:text-primary p-1 rounded-md hover:bg-surface-2 transition-colors"
+            data-tooltip="Close panel"
+            aria-label="Close panel"
           >
             <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
               <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
@@ -305,7 +309,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="kin_spawn"
             phx-value-id={kin.id}
             phx-target={@myself}
-            title="Spawn now"
+            data-tooltip="Spawn now"
+            aria-label="Spawn now"
             class="text-emerald-400 hover:text-emerald-300 p-1 rounded-md hover:bg-surface-3 transition-colors"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
@@ -327,7 +332,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="kin_edit"
             phx-value-id={kin.id}
             phx-target={@myself}
-            title="Edit"
+            data-tooltip="Edit template"
+            aria-label="Edit template"
             class="text-muted hover:text-primary p-1 rounded-md hover:bg-surface-3 transition-colors"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
@@ -339,7 +345,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="kin_toggle"
             phx-value-id={kin.id}
             phx-target={@myself}
-            title={if kin.enabled, do: "Disable", else: "Enable"}
+            data-tooltip={if kin.enabled, do: "Disable template", else: "Enable template"}
+            aria-label={if kin.enabled, do: "Disable template", else: "Enable template"}
             class={[
               "p-1 rounded-md hover:bg-surface-3 transition-colors",
               if(kin.enabled,
@@ -371,7 +378,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="kin_delete_confirm"
             phx-value-id={kin.id}
             phx-target={@myself}
-            title="Delete"
+            data-tooltip="Delete template"
+            aria-label="Delete template"
             class="text-muted hover:text-red-400 p-1 rounded-md hover:bg-surface-3 transition-colors"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">

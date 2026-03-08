@@ -84,7 +84,8 @@ defmodule LoomkinWeb.FileExplorerDrawerComponent do
             phx-click="close"
             phx-target={@myself}
             class="interactive p-1 rounded-md text-muted hover:text-secondary"
-            title="Close (Esc)"
+            data-tooltip="Close (Esc)"
+            aria-label="Close (Esc)"
           >
             <.icon name="hero-x-mark-mini" class="w-4 h-4" />
           </button>

@@ -107,6 +107,8 @@ defmodule LoomkinWeb.ComposerComponent do
             phx-click="cancel_reply"
             phx-target={@myself}
             class="ml-auto rounded-full p-0.5 transition-colors interactive text-muted"
+            data-tooltip="Cancel reply"
+            aria-label="Cancel reply"
           >
             <.icon name="hero-x-mark-mini" class="w-3 h-3" />
           </button>
@@ -123,7 +125,12 @@ defmodule LoomkinWeb.ComposerComponent do
                 "flex items-center justify-center h-9 px-2 rounded-lg transition-all duration-200 press-down bg-transparent border",
                 if(@reply_target, do: "border-brand text-brand", else: "border-subtle text-muted")
               ]}
-              title={if @reply_target, do: @reply_target.agent, else: "Send to team"}
+              data-tooltip={
+                if @reply_target, do: "Replying to #{@reply_target.agent}", else: "Send to team"
+              }
+              aria-label={
+                if @reply_target, do: "Replying to #{@reply_target.agent}", else: "Send to team"
+              }
             >
               <.icon name="hero-at-symbol-mini" class="w-3.5 h-3.5" />
               <span :if={@reply_target} class="text-[11px] font-medium ml-1 max-w-[4rem] truncate">
@@ -180,7 +187,8 @@ defmodule LoomkinWeb.ComposerComponent do
               phx-click="toggle_queue_from_composer"
               phx-target={@myself}
               class="flex items-center justify-center h-9 px-2 rounded-lg transition-all duration-200 press-down border border-subtle text-muted bg-transparent"
-              title={"View #{@reply_target.agent}'s message queue"}
+              data-tooltip={"View #{@reply_target.agent}'s message queue"}
+              aria-label={"View #{@reply_target.agent}'s message queue"}
             >
               <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
                 <path d="M2 4.75A.75.75 0 012.75 4h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 4.75zm0 10.5a.75.75 0 01.75-.75h7.5a.75.75 0 010 1.5h-7.5a.75.75 0 01-.75-.75zM2 10a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 10z" />
@@ -217,6 +225,8 @@ defmodule LoomkinWeb.ComposerComponent do
                 else: "background: var(--surface-2); color: var(--text-muted);"
             }
             disabled={@status != :idle}
+            data-tooltip="Send message"
+            aria-label="Send message"
           >
             <svg
               class="w-3.5 h-3.5"
@@ -238,6 +248,8 @@ defmodule LoomkinWeb.ComposerComponent do
             phx-click="cancel"
             class="flex items-center justify-center w-9 h-9 rounded-lg transition-all duration-200 press-down"
             style="background: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3);"
+            data-tooltip="Stop generation"
+            aria-label="Stop generation"
           >
             <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
               <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -254,7 +266,8 @@ defmodule LoomkinWeb.ComposerComponent do
                 "flex items-center justify-center w-9 h-9 rounded-lg transition-all duration-200 press-down bg-transparent border",
                 if(@schedule_popover, do: "border-brand text-brand", else: "border-subtle text-muted")
               ]}
-              title="Schedule message"
+              data-tooltip="Schedule message"
+              aria-label="Schedule message"
             >
               <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
                 <path
@@ -282,7 +295,8 @@ defmodule LoomkinWeb.ComposerComponent do
             phx-click="enqueue_message"
             phx-target={@myself}
             class="flex items-center justify-center w-9 h-9 rounded-lg transition-all duration-200 press-down border border-subtle text-muted bg-transparent"
-            title={"Add to #{@reply_target.agent}'s queue"}
+            data-tooltip={"Add to #{@reply_target.agent}'s queue"}
+            aria-label={"Add to #{@reply_target.agent}'s queue"}
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
               <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
@@ -300,7 +314,7 @@ defmodule LoomkinWeb.ComposerComponent do
             phx-target={@myself}
             class="flex items-center gap-1 h-9 px-2.5 rounded-lg transition-all duration-200 press-down text-[11px] font-medium"
             style="border: 1px solid rgba(52, 211, 153, 0.3); color: #34d399; background: rgba(52, 211, 153, 0.08);"
-            title={"Guide #{@reply_target.agent} without pausing"}
+            data-tooltip={"Guide #{@reply_target.agent} without pausing"}
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
               <path

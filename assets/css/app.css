@@ -1218,6 +1218,68 @@ body {
 }
 
 /* ══════════════════════════════════════════
+   Tooltips — CSS Anchor Positioning
+   ══════════════════════════════════════════ */
+[data-tooltip] { position: relative; }
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  /* Absolute fallback */
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  /* Styling */
+  background: var(--surface-3);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  line-height: 1.4;
+  padding: 4px 8px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 9999;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  transition-delay: 0s;
+}
+
+[data-tooltip]:hover::after,
+[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transition-delay: 500ms;
+}
+
+@supports (anchor-name: --x) {
+  @position-try --tooltip-below {
+    bottom: auto;
+    top: anchor(bottom);
+    margin-top: 6px;
+    margin-bottom: 0;
+  }
+
+  [data-tooltip]:hover,
+  [data-tooltip]:focus-visible {
+    anchor-name: --tooltip-active;
+  }
+
+  [data-tooltip]::after {
+    position: fixed;
+    position-anchor: --tooltip-active;
+    bottom: anchor(top);
+    margin-bottom: 6px;
+    left: anchor(center);
+    transform: translateX(-50%);
+    /* Reset absolute fallback values */
+    inset-block-start: auto;
+    position-try-fallbacks: --tooltip-below;
+  }
+}
+
+/* ══════════════════════════════════════════
    Reduced Motion — Accessibility
    ══════════════════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {
