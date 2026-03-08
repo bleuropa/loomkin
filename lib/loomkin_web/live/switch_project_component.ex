@@ -9,7 +9,13 @@ defmodule LoomkinWeb.SwitchProjectComponent do
   use LoomkinWeb, :live_component
 
   def update(assigns, socket) do
-    {:ok, assign(socket, assigns)}
+    {:ok,
+     socket
+     |> assign(assigns)
+     |> assign_new(:fp_open, fn -> false end)
+     |> assign_new(:fp_dir, fn -> nil end)
+     |> assign_new(:fp_entries, fn -> [] end)
+     |> assign_new(:fp_selected, fn -> nil end)}
   end
 
   def render(assigns) do
@@ -61,14 +67,79 @@ defmodule LoomkinWeb.SwitchProjectComponent do
     <form phx-submit="switch_project_set_path" phx-target={@myself} class="space-y-4">
       <div>
         <label class="text-[10px] text-gray-500 uppercase tracking-wider">Project directory</label>
-        <input
-          type="text"
-          name="path"
-          value={@modal.target_path || @explorer_path}
-          class="mt-1 w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500/50"
-          autofocus
-          placeholder="/path/to/project"
-        />
+        <div class="relative mt-1">
+          <input
+            type="text"
+            name="path"
+            value={@fp_selected || @modal.target_path || @explorer_path}
+            class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 pr-10 text-sm text-gray-200 font-mono focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500/50"
+            autofocus
+            placeholder="/path/to/project"
+          />
+          <button
+            type="button"
+            phx-click="fp_open"
+            phx-target={@myself}
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+            tabindex="-1"
+            title="Browse folders"
+          >
+            <.icon name="hero-folder-mini" class="w-4 h-4" />
+          </button>
+          <div :if={@fp_open} class="absolute top-full mt-1 left-0 right-0 z-50">
+            <div class="fixed inset-0 z-40" phx-click="fp_close" phx-target={@myself} />
+            <div class="relative z-50 bg-gray-900 border border-gray-700/60 rounded-xl shadow-2xl overflow-hidden">
+              <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-700/50 bg-gray-800/60">
+                <button
+                  type="button"
+                  phx-click="fp_up"
+                  phx-target={@myself}
+                  class="text-gray-400 hover:text-gray-200 transition-colors p-0.5 rounded"
+                >
+                  <.icon name="hero-arrow-left-mini" class="w-3.5 h-3.5" />
+                </button>
+                <span class="text-xs text-gray-400 font-mono truncate flex-1">{@fp_dir}</span>
+                <button
+                  type="button"
+                  phx-click="fp_close"
+                  phx-target={@myself}
+                  class="text-gray-500 hover:text-gray-300 transition-colors p-0.5 rounded"
+                >
+                  <.icon name="hero-x-mark-mini" class="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div class="max-h-52 overflow-y-auto py-1">
+                <p
+                  :if={@fp_entries == []}
+                  class="px-3 py-3 text-xs text-gray-500 italic text-center"
+                >
+                  No subdirectories
+                </p>
+                <button
+                  :for={entry <- @fp_entries}
+                  type="button"
+                  phx-click="fp_navigate"
+                  phx-value-dir={Path.join(@fp_dir, entry)}
+                  phx-target={@myself}
+                  class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 transition-colors"
+                >
+                  <.icon name="hero-folder-mini" class="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
+                  {entry}
+                </button>
+              </div>
+              <div class="border-t border-gray-700/50 px-3 py-2">
+                <button
+                  type="button"
+                  phx-click="fp_select"
+                  phx-target={@myself}
+                  class="w-full text-xs text-center text-violet-400 hover:text-violet-300 font-medium py-1 rounded-lg hover:bg-violet-500/10 transition-colors"
+                >
+                  Select this folder
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="flex gap-2 justify-end">
         <button
@@ -153,8 +224,49 @@ defmodule LoomkinWeb.SwitchProjectComponent do
 
   # Events
 
+  def handle_event("fp_open", _params, socket) do
+    current =
+      socket.assigns.fp_selected ||
+        socket.assigns.modal.target_path ||
+        socket.assigns.explorer_path
+
+    expanded = Path.expand(current || "")
+
+    dir =
+      if expanded != "" and expanded != File.cwd!() and File.dir?(expanded) do
+        expanded
+      else
+        System.user_home!()
+      end
+
+    {:noreply, assign(socket, fp_open: true, fp_dir: dir, fp_entries: list_subdirs(dir))}
+  end
+
+  def handle_event("fp_close", _params, socket) do
+    {:noreply, assign(socket, fp_open: false)}
+  end
+
+  def handle_event("fp_navigate", %{"dir" => dir}, socket) do
+    {:noreply, assign(socket, fp_dir: dir, fp_entries: list_subdirs(dir))}
+  end
+
+  def handle_event("fp_up", _params, socket) do
+    parent = Path.dirname(socket.assigns.fp_dir)
+
+    if parent != socket.assigns.fp_dir do
+      {:noreply, assign(socket, fp_dir: parent, fp_entries: list_subdirs(parent))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("fp_select", _params, socket) do
+    {:noreply, assign(socket, fp_selected: socket.assigns.fp_dir, fp_open: false)}
+  end
+
   def handle_event("switch_project_set_path", %{"path" => path}, socket) do
-    send(self(), {:switch_project_set_path, String.trim(path)})
+    expanded = path |> String.trim() |> Path.expand()
+    send(self(), {:switch_project_set_path, expanded})
     {:noreply, socket}
   end
 
@@ -166,6 +278,19 @@ defmodule LoomkinWeb.SwitchProjectComponent do
   def handle_event("confirm_switch_project", _params, socket) do
     send(self(), :confirm_switch_project)
     {:noreply, socket}
+  end
+
+  defp list_subdirs(path) do
+    case File.ls(path) do
+      {:ok, entries} ->
+        entries
+        |> Enum.filter(&File.dir?(Path.join(path, &1)))
+        |> Enum.reject(&String.starts_with?(&1, "."))
+        |> Enum.sort()
+
+      {:error, _} ->
+        []
+    end
   end
 
   defp agent_status_class(:idle), do: "text-green-400"

@@ -109,7 +109,7 @@ defmodule Loomkin.MixProject do
       {:bandit, "~> 1.6"},
 
       # Channel adapters
-      {:telegex, github: "vinnymac/telegex", ref: "22d2a35"},
+      {:telegex, github: "vinnymac/telegex", ref: "5c02566"},
       {:nostrum, "~> 0.10", runtime: false},
 
       # Binary packaging

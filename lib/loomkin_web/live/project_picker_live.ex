@@ -13,7 +13,10 @@ defmodule LoomkinWeb.ProjectPickerLive do
         view: :projects,
         selected_project: nil,
         new_path: "",
-        new_path_error: nil
+        new_path_error: nil,
+        fp_open: false,
+        fp_dir: nil,
+        fp_entries: []
       )
       |> stream(:projects, projects, dom_id: &project_dom_id/1)
 
@@ -54,22 +57,59 @@ defmodule LoomkinWeb.ProjectPickerLive do
     {:noreply, socket}
   end
 
+  def handle_event("fp_open", _params, socket) do
+    dir =
+      case socket.assigns.new_path do
+        "" ->
+          System.user_home!()
+
+        path ->
+          expanded = Path.expand(path)
+          if File.dir?(expanded), do: expanded, else: System.user_home!()
+      end
+
+    {:noreply, assign(socket, fp_open: true, fp_dir: dir, fp_entries: list_subdirs(dir))}
+  end
+
+  def handle_event("fp_close", _params, socket) do
+    {:noreply, assign(socket, fp_open: false)}
+  end
+
+  def handle_event("fp_navigate", %{"dir" => dir}, socket) do
+    {:noreply, assign(socket, fp_dir: dir, fp_entries: list_subdirs(dir))}
+  end
+
+  def handle_event("fp_up", _params, socket) do
+    parent = Path.dirname(socket.assigns.fp_dir)
+
+    if parent != socket.assigns.fp_dir do
+      {:noreply, assign(socket, fp_dir: parent, fp_entries: list_subdirs(parent))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("fp_select", _params, socket) do
+    {:noreply, assign(socket, new_path: socket.assigns.fp_dir, fp_open: false)}
+  end
+
   def handle_event("validate_path", %{"path" => path}, socket) do
     {:noreply, assign(socket, new_path: path, new_path_error: nil)}
   end
 
   def handle_event("add_project", %{"path" => path}, socket) do
-    path = String.trim(path)
+    trimmed = String.trim(path)
 
     cond do
-      path == "" ->
+      trimmed == "" ->
         {:noreply, assign(socket, new_path_error: "Path cannot be empty")}
 
-      not File.dir?(path) ->
+      not File.dir?(Path.expand(trimmed)) ->
         {:noreply, assign(socket, new_path_error: "Directory does not exist")}
 
       true ->
-        {:noreply, push_navigate(socket, to: ~p"/sessions/new?#{%{project_path: path}}")}
+        {:noreply,
+         push_navigate(socket, to: ~p"/sessions/new?#{%{project_path: Path.expand(trimmed)}}")}
     end
   end
 
@@ -88,6 +128,9 @@ defmodule LoomkinWeb.ProjectPickerLive do
             projects={@streams.projects}
             new_path={@new_path}
             new_path_error={@new_path_error}
+            fp_open={@fp_open}
+            fp_dir={@fp_dir}
+            fp_entries={@fp_entries}
           />
         <% else %>
           <.sessions_view
@@ -103,6 +146,9 @@ defmodule LoomkinWeb.ProjectPickerLive do
   attr :projects, :any, required: true
   attr :new_path, :string, required: true
   attr :new_path_error, :string, default: nil
+  attr :fp_open, :boolean, required: true
+  attr :fp_dir, :string, default: nil
+  attr :fp_entries, :list, required: true
 
   defp projects_view(assigns) do
     ~H"""
@@ -115,7 +161,7 @@ defmodule LoomkinWeb.ProjectPickerLive do
         class="mb-6"
       >
         <div class="flex gap-3">
-          <div class="flex-1">
+          <div class="relative flex-1">
             <input
               type="text"
               name="path"
@@ -123,7 +169,7 @@ defmodule LoomkinWeb.ProjectPickerLive do
               placeholder="Enter project directory path..."
               autocomplete="off"
               class={[
-                "w-full bg-surface-1 border rounded-lg px-4 py-3 text-sm text-gray-100",
+                "w-full bg-surface-1 border rounded-lg px-4 py-3 pr-10 text-sm text-gray-100",
                 "placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand/50",
                 "transition-colors",
                 if(@new_path_error,
@@ -132,6 +178,64 @@ defmodule LoomkinWeb.ProjectPickerLive do
                 )
               ]}
             />
+            <button
+              type="button"
+              phx-click="fp_open"
+              class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+              tabindex="-1"
+              title="Browse folders"
+            >
+              <.icon name="hero-folder-mini" class="w-4 h-4" />
+            </button>
+            <div :if={@fp_open} class="absolute top-full mt-1 left-0 right-0 z-50">
+              <div class="fixed inset-0 z-40" phx-click="fp_close" />
+              <div class="relative z-50 bg-gray-900 border border-gray-700/60 rounded-xl shadow-2xl overflow-hidden">
+                <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-700/50 bg-gray-800/60">
+                  <button
+                    type="button"
+                    phx-click="fp_up"
+                    class="text-gray-400 hover:text-gray-200 transition-colors p-0.5 rounded"
+                  >
+                    <.icon name="hero-arrow-left-mini" class="w-3.5 h-3.5" />
+                  </button>
+                  <span class="text-xs text-gray-400 font-mono truncate flex-1">{@fp_dir}</span>
+                  <button
+                    type="button"
+                    phx-click="fp_close"
+                    class="text-gray-500 hover:text-gray-300 transition-colors p-0.5 rounded"
+                  >
+                    <.icon name="hero-x-mark-mini" class="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div class="max-h-52 overflow-y-auto py-1">
+                  <p
+                    :if={@fp_entries == []}
+                    class="px-3 py-3 text-xs text-gray-500 italic text-center"
+                  >
+                    No subdirectories
+                  </p>
+                  <button
+                    :for={entry <- @fp_entries}
+                    type="button"
+                    phx-click="fp_navigate"
+                    phx-value-dir={Path.join(@fp_dir, entry)}
+                    class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 transition-colors"
+                  >
+                    <.icon name="hero-folder-mini" class="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
+                    {entry}
+                  </button>
+                </div>
+                <div class="border-t border-gray-700/50 px-3 py-2">
+                  <button
+                    type="button"
+                    phx-click="fp_select"
+                    class="w-full text-xs text-center text-violet-400 hover:text-violet-300 font-medium py-1 rounded-lg hover:bg-violet-500/10 transition-colors"
+                  >
+                    Select this folder
+                  </button>
+                </div>
+              </div>
+            </div>
             <p :if={@new_path_error} class="text-accent-rose text-xs mt-1.5 ml-1">
               {@new_path_error}
             </p>
@@ -294,6 +398,19 @@ defmodule LoomkinWeb.ProjectPickerLive do
       {@status}
     </span>
     """
+  end
+
+  defp list_subdirs(path) do
+    case File.ls(path) do
+      {:ok, entries} ->
+        entries
+        |> Enum.filter(&File.dir?(Path.join(path, &1)))
+        |> Enum.reject(&String.starts_with?(&1, "."))
+        |> Enum.sort()
+
+      {:error, _} ->
+        []
+    end
   end
 
   defp format_relative_time(nil), do: ""
