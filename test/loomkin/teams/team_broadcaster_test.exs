@@ -108,6 +108,32 @@ defmodule Loomkin.Teams.TeamBroadcasterTest do
     end
   end
 
+  describe "approval gate critical classification" do
+    test "agent.approval.requested is classified as critical" do
+      # This test fails until Plan 02 adds "agent.approval.requested" to @critical_types
+      broadcaster = start_broadcaster()
+      TeamBroadcaster.subscribe(broadcaster, self())
+
+      signal = build_signal("agent.approval.requested")
+      Signals.publish(signal)
+
+      assert_receive {:team_broadcast, %{critical: [received]}}, 50
+      assert received.type == "agent.approval.requested"
+    end
+
+    test "agent.approval.resolved is classified as critical" do
+      # This test fails until Plan 02 adds "agent.approval.resolved" to @critical_types
+      broadcaster = start_broadcaster()
+      TeamBroadcaster.subscribe(broadcaster, self())
+
+      signal = build_signal("agent.approval.resolved")
+      Signals.publish(signal)
+
+      assert_receive {:team_broadcast, %{critical: [received]}}, 50
+      assert received.type == "agent.approval.resolved"
+    end
+  end
+
   describe "team_id filtering" do
     test "subscriber receives signals matching their team_ids" do
       broadcaster = start_broadcaster(team_ids: [@team_id])

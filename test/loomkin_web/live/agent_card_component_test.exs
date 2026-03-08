@@ -74,9 +74,27 @@ defmodule LoomkinWeb.Live.AgentCardComponentTest do
     test "renders approval_pending status dot correctly" do
       html = render_card(%{status: :approval_pending})
 
-      # The approval_pending status should render with the amber dot class
-      assert html =~ "bg-amber-400"
+      # The approval_pending status dot must be violet, not amber
+      # This test fails until Plan 04 updates the dot class in agent_card_component
+      assert html =~ "bg-violet-500"
       assert html =~ "Awaiting approval"
+    end
+
+    test "approval panel renders when card has pending_approval assign" do
+      # When the card has a pending_approval assign (gate_id, question, timeout_ms),
+      # the expanded approval panel section should be visible with question text
+      # and approve/deny action buttons.
+      # Will fail until Plan 04 implements the approval panel in agent_card_component.
+      flunk("not implemented")
+    end
+
+    test "card_state_class for :approval_pending uses agent-card-approval not agent-card-blocked" do
+      html = render_card(%{status: :approval_pending})
+
+      # Approval gate uses distinct purple accent class, not the blocked class
+      # This test fails until Plan 04 updates card_state_class/2 in agent_card_component
+      assert html =~ "agent-card-approval"
+      refute html =~ "agent-card-blocked"
     end
   end
 
