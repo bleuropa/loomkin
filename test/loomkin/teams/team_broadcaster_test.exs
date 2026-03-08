@@ -127,7 +127,7 @@ defmodule Loomkin.Teams.TeamBroadcasterTest do
       refute_receive {:team_broadcast, _}, 100
     end
 
-    test "signals with nil team_id are forwarded to all" do
+    test "signals with nil team_id are dropped" do
       broadcaster = start_broadcaster(team_ids: [@team_id])
       TeamBroadcaster.subscribe(broadcaster, self())
 
@@ -142,7 +142,7 @@ defmodule Loomkin.Teams.TeamBroadcasterTest do
 
       Signals.publish(signal)
 
-      assert_receive {:team_broadcast, _}, 200
+      refute_receive {:team_broadcast, _}, 100
     end
   end
 
@@ -157,14 +157,17 @@ defmodule Loomkin.Teams.TeamBroadcasterTest do
           end
         end)
 
+      ref = Process.monitor(pid)
       TeamBroadcaster.subscribe(broadcaster, pid)
       send(pid, :stop)
-      # Wait for DOWN message to be processed
-      Process.sleep(50)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+      # Synchronize — ensure broadcaster has processed the DOWN message
+      _ = :sys.get_state(broadcaster)
 
       # Publishing should not crash the broadcaster
       Signals.publish(build_signal("team.permission.request"))
-      Process.sleep(50)
+      _ = :sys.get_state(broadcaster)
 
       # Broadcaster is still alive
       assert Process.alive?(broadcaster)

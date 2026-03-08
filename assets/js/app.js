@@ -567,10 +567,21 @@ Hooks.CommsFeedScroll = {
 
 Hooks.SortableQueue = {
   mounted() {
+    this._cleanups = []
     this.initSortable()
   },
   updated() {
+    this.cleanup()
     this.initSortable()
+  },
+  destroyed() {
+    this.cleanup()
+  },
+  cleanup() {
+    for (const { el, event, handler } of this._cleanups) {
+      el.removeEventListener(event, handler)
+    }
+    this._cleanups = []
   },
   initSortable() {
     const items = this.el.querySelectorAll("[data-id]")
@@ -582,31 +593,37 @@ Hooks.SortableQueue = {
 
       handle.setAttribute("draggable", "true")
 
-      handle.addEventListener("dragstart", (e) => {
+      const onDragstart = (e) => {
         item.classList.add("opacity-50")
         e.dataTransfer.effectAllowed = "move"
         e.dataTransfer.setData("text/plain", item.dataset.id)
-      })
-
-      handle.addEventListener("dragend", () => {
+      }
+      const onDragend = () => {
         item.classList.remove("opacity-50")
-      })
+      }
+
+      handle.addEventListener("dragstart", onDragstart)
+      handle.addEventListener("dragend", onDragend)
+      this._cleanups.push({ el: handle, event: "dragstart", handler: onDragstart })
+      this._cleanups.push({ el: handle, event: "dragend", handler: onDragend })
     })
 
-    this.el.addEventListener("dragover", (e) => {
+    const onDragover = (e) => {
       e.preventDefault()
       e.dataTransfer.dropEffect = "move"
-    })
-
-    this.el.addEventListener("drop", (e) => {
+    }
+    const onDrop = (e) => {
       e.preventDefault()
-      const draggedId = e.dataTransfer.getData("text/plain")
       const allItems = [...this.el.querySelectorAll("[data-id]")]
       const ordered = allItems.map(el => el.dataset.id)
       const agent = this.el.dataset.agent
-
       this.pushEvent("reorder_queue", {agent: agent, ids: ordered})
-    })
+    }
+
+    this.el.addEventListener("dragover", onDragover)
+    this.el.addEventListener("drop", onDrop)
+    this._cleanups.push({ el: this.el, event: "dragover", handler: onDragover })
+    this._cleanups.push({ el: this.el, event: "drop", handler: onDrop })
   }
 }
 

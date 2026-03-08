@@ -111,7 +111,7 @@ defmodule Loomkin.Teams.TeamBroadcaster do
   def handle_info({:signal, %Jido.Signal{} = signal}, state) do
     team_id = extract_team_id(signal)
 
-    if team_id == nil or MapSet.member?(state.team_ids, team_id) do
+    if team_id != nil and MapSet.member?(state.team_ids, team_id) do
       if critical?(signal) do
         broadcast_immediate(state.subscribers, signal)
         {:noreply, state}
@@ -131,17 +131,19 @@ defmodule Loomkin.Teams.TeamBroadcaster do
     batch_size =
       Enum.reduce(state.buffer, 0, fn {_cat, signals}, acc -> acc + length(signals) end)
 
-    :telemetry.execute(
-      [:loomkin, :team_broadcaster, :flush],
-      %{batch_size: batch_size, queue_depth: map_size(state.subscribers)},
-      %{team_ids: MapSet.to_list(state.team_ids)}
-    )
+    if batch_size > 0 do
+      :telemetry.execute(
+        [:loomkin, :team_broadcaster, :flush],
+        %{batch_size: batch_size, subscriber_count: map_size(state.subscribers)},
+        %{team_ids: MapSet.to_list(state.team_ids)}
+      )
 
-    # Reverse buffered signals to preserve insertion order
-    buffer =
-      Map.new(state.buffer, fn {category, signals} -> {category, Enum.reverse(signals)} end)
+      # Reverse buffered signals to preserve insertion order
+      buffer =
+        Map.new(state.buffer, fn {category, signals} -> {category, Enum.reverse(signals)} end)
 
-    broadcast_batch(state.subscribers, buffer)
+      broadcast_batch(state.subscribers, buffer)
+    end
 
     {:noreply,
      %{state | buffer: %{streaming: [], tools: [], activity: [], status: []}, flush_ref: nil}}

@@ -102,9 +102,11 @@ defmodule Loomkin.Teams.TeamBroadcasterIntegrationTest do
       TeamBroadcaster.subscribe(broadcaster, self())
 
       # Kill the doomed process
+      ref = Process.monitor(doomed_pid)
       send(doomed_pid, :die)
-      # Wait for DOWN message to be processed
-      Process.sleep(50)
+      assert_receive {:DOWN, ^ref, :process, ^doomed_pid, :normal}
+      # Synchronize — ensure broadcaster has processed the DOWN message
+      _ = :sys.get_state(broadcaster)
 
       # Broadcaster should still be alive and delivering signals
       assert Process.alive?(broadcaster)

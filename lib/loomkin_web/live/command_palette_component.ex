@@ -1,6 +1,20 @@
 defmodule LoomkinWeb.CommandPaletteComponent do
   use LoomkinWeb, :live_component
 
+  def update(%{toggle: true}, socket) do
+    if socket.assigns[:command_palette_open] do
+      {:ok,
+       assign(socket,
+         command_palette_open: false,
+         command_palette_query: "",
+         command_palette_results: []
+       )}
+    else
+      results = build_palette_results(socket, "")
+      {:ok, assign(socket, command_palette_open: true, command_palette_results: results)}
+    end
+  end
+
   def update(assigns, socket) do
     socket =
       socket

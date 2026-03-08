@@ -9,6 +9,8 @@ defmodule Loomkin.Teams.Agent do
 
   use GenServer
 
+  require Logger
+
   alias Loomkin.AgentLoop
 
   alias Loomkin.Teams.Comms
@@ -171,7 +173,6 @@ defmodule Loomkin.Teams.Agent do
 
   @impl true
   def init(opts) do
-    require Logger
     team_id = Keyword.fetch!(opts, :team_id)
     name = Keyword.fetch!(opts, :name)
     role = Keyword.fetch!(opts, :role)
@@ -221,8 +222,6 @@ defmodule Loomkin.Teams.Agent do
 
   @impl true
   def terminate(reason, state) do
-    require Logger
-
     Logger.info(
       "[Kin:agent] terminating name=#{state.name} team=#{state.team_id} reason=#{inspect(reason)}"
     )
@@ -232,7 +231,6 @@ defmodule Loomkin.Teams.Agent do
 
   @impl true
   def handle_continue(:auto_orient, state) do
-    require Logger
     Logger.info("[Kin:agent] orienter auto-orient starting team=#{state.team_id}")
     state = set_status_and_broadcast(state, :working)
 
@@ -267,8 +265,6 @@ defmodule Loomkin.Teams.Agent do
 
   @impl true
   def handle_call({:send_message, text}, from, state) do
-    require Logger
-
     Logger.info(
       "[Kin:agent] #{state.name} received message, loop_active=#{state.loop_task != nil}"
     )

@@ -615,7 +615,10 @@ defmodule LoomkinWeb.WorkspaceLive do
     {:noreply, push_event(socket, "focus-input", %{})}
   end
 
-  # keyboard_shortcut "command_palette" now handled by CommandPaletteComponent
+  def handle_event("keyboard_shortcut", %{"key" => "command_palette"}, socket) do
+    send_update(LoomkinWeb.CommandPaletteComponent, id: "command-palette", toggle: true)
+    {:noreply, socket}
+  end
 
   def handle_event("keyboard_shortcut", %{"key" => "focus_panel_4"}, socket) do
     {:noreply, assign(socket, file_drawer_open: !socket.assigns.file_drawer_open)}
@@ -800,16 +803,14 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   # Batched signals from TeamBroadcaster — critical signals (instant delivery)
   def handle_info({:team_broadcast, %{critical: signals}}, socket) do
-    for sig <- signals, do: send(self(), {:signal, sig})
+    socket = Enum.reduce(signals, socket, &dispatch_signal/2)
     {:noreply, socket}
   end
 
   # Batched signals from TeamBroadcaster — regular batched delivery
   def handle_info({:team_broadcast, batch}, socket) when is_map(batch) do
-    for {_category, signals} <- batch, sig <- signals do
-      send(self(), {:signal, sig})
-    end
-
+    signals = Enum.flat_map(batch, fn {_category, sigs} -> sigs end)
+    socket = Enum.reduce(signals, socket, &dispatch_signal/2)
     {:noreply, socket}
   end
 
@@ -831,7 +832,7 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   # TeamBroadcaster pre-filters signals by team_id, so no additional filtering needed.
   def handle_info({:signal, %Jido.Signal{} = sig}, socket) do
-    handle_info(sig, socket)
+    {:noreply, dispatch_signal(sig, socket)}
   end
 
   def handle_info(%Jido.Signal{type: "agent.status"} = sig, socket) do
@@ -2257,6 +2258,15 @@ defmodule LoomkinWeb.WorkspaceLive do
     {:noreply, socket}
   end
 
+  # Dispatches a signal inline, returning the updated socket.
+  # Used by team_broadcast handlers to avoid extra mailbox hops.
+  defp dispatch_signal(%Jido.Signal{} = sig, socket) do
+    case handle_info(sig, socket) do
+      {:noreply, socket} -> socket
+      _ -> socket
+    end
+  end
+
   # --- Render ---
 
   def render(assigns) do
@@ -2508,22 +2518,21 @@ defmodule LoomkinWeb.WorkspaceLive do
           />
         <% else %>
           <%!-- Mission Control Left: Agent Cards + Comms + Composer --%>
-          <.live_component
-            module={LoomkinWeb.MissionControlPanelComponent}
-            id="mission-control-panel"
-            agent_cards={@agent_cards}
-            concierge_card_names={@concierge_card_names}
-            worker_card_names={@worker_card_names}
-            comms_event_count={@comms_event_count}
-            comms_stream={@streams.comms_events}
-            focused_agent={@focused_agent}
-            kin_agents={@kin_agents}
-            cached_agents={@cached_agents}
-            active_team_id={@active_team_id}
-          />
+          <div class="flex-1 flex flex-col min-w-0 min-h-0 border-r border-subtle">
+            <.live_component
+              module={LoomkinWeb.MissionControlPanelComponent}
+              id="mission-control-panel"
+              agent_cards={@agent_cards}
+              concierge_card_names={@concierge_card_names}
+              worker_card_names={@worker_card_names}
+              comms_event_count={@comms_event_count}
+              comms_stream={@streams.comms_events}
+              focused_agent={@focused_agent}
+              kin_agents={@kin_agents}
+              cached_agents={@cached_agents}
+              active_team_id={@active_team_id}
+            />
 
-          <%!-- Composer below the mission control panel --%>
-          <div class="flex-shrink-0 border-r border-subtle">
             <.live_component
               module={LoomkinWeb.ComposerComponent}
               id="composer"
