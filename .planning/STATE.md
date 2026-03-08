@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 05-00-PLAN.md
-last_updated: "2026-03-08T05:22:11.856Z"
-last_activity: 2026-03-08 — Created 28 pending test stubs across 5 files for phase 5 tdd targets
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-03-08T05:25:43.000Z"
+last_activity: 2026-03-08 — Implemented agent state machine guards (pause_queued, guarded request_pause, permission_response auto-pause)
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 20
-  completed_plans: 17
-  percent: 85
+  completed_plans: 18
+  percent: 90
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 5 of 10 (Chat Injection & State Machines)
-Plan: 1 of 4 in current phase
-Status: Completed 05-00 test stub files
-Last activity: 2026-03-08 — Created 28 pending test stubs across 5 files for phase 5 tdd targets
+Plan: 2 of 4 in current phase
+Status: Completed 05-01 agent state machine guards
+Last activity: 2026-03-08 — Implemented agent state machine guards (pause_queued, guarded request_pause, permission_response auto-pause)
 
-Progress: [█████████░] 85%
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
@@ -64,6 +64,7 @@ Progress: [█████████░] 85%
 | Phase 04 P02 | 5 | 2 tasks | 5 files |
 | Phase 04 P03 | 8 | 3 tasks | 3 files |
 | Phase 05 P00 | 2 | 1 tasks | 5 files |
+| Phase 05 P01 | 6 | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,8 @@ Recent decisions affecting current work:
 - [Phase 04-03]: Reuse card-error class for all crash states (crashed, recovering, permanently_failed)
 - [Phase 04-03]: 2-second Process.send_after delay for recovering->idle transition
 - [Phase 05]: test stubs already existed on branch from prior work; verified correctness rather than recreating
+- [Phase 05-01]: pause_queued field separate from pause_requested to avoid conflating two distinct mechanisms
+- [Phase 05-01]: broadcast_team for pause_queued reuses Agent.Status signal with :pause_queued atom status
 
 ### Pending Todos
 
@@ -109,12 +112,12 @@ None yet.
 ### Blockers/Concerns
 
 - workspace_live.ex at 3,968 lines after Phase 1 extraction (down from 4,714) — further reduction requires extracting signal dispatch (Phase 2 TeamBroadcaster)
-- Permission state machine bug identified in CONCERNS.md (pending_permission can be overwritten) — must be fixed in Phase 5 before adding more intervention types
+- Permission state machine bug FIXED in 05-01 (pending_permission can no longer be overwritten by pause requests)
 - LLM confidence extraction format for Phase 7 is a design decision not yet made — needs product decision during Phase 7 planning
 - Approval gate timeout UX for Phase 6 needs explicit decision: auto-deny vs. escalate — needs product decision during Phase 6 planning
 
 ## Session Continuity
 
-Last session: 2026-03-08T05:22:11.854Z
-Stopped at: Completed 05-00-PLAN.md
-Resume file: None
+Last session: 2026-03-08T05:25:43.000Z
+Stopped at: Completed 05-01-PLAN.md
+Resume file: .planning/phases/05-chat-injection-state-machines/05-01-SUMMARY.md
