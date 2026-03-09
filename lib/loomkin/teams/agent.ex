@@ -192,7 +192,7 @@ defmodule Loomkin.Teams.Agent do
     project_path = Keyword.get(opts, :project_path)
 
     permission_mode = Keyword.get(opts, :permission_mode, :auto)
-    session_id = Keyword.get(opts, :session_id, team_id)
+    session_id = Keyword.get(opts, :session_id)
     kin_agents = Keyword.get(opts, :kin_agents, [])
 
     Logger.info("[Kin:agent] init name=#{name} role=#{role} team=#{team_id}")
@@ -2158,6 +2158,9 @@ defmodule Loomkin.Teams.Agent do
   defp build_loop_opts(state) do
     team_id = state.team_id
     name = state.name
+    # Capture Agent GenServer PID here — closures below run inside async Task
+    # where self() would return the Task PID, not the Agent PID.
+    agent_pid = self()
     system_prompt = inject_keeper_index(state.role_config.system_prompt, team_id)
     permission_callback = build_permission_callback(state)
     checkpoint_callback = build_checkpoint_callback()
@@ -2185,8 +2188,6 @@ defmodule Loomkin.Teams.Agent do
         handle_loop_event(team_id, name, event_name, payload)
       end,
       on_tool_execute: fn tool_module, tool_args, context ->
-        agent_pid = self()
-
         # Inject agent messages into context for ContextOffload to avoid deadlock.
         context =
           if tool_module == Loomkin.Tools.ContextOffload do

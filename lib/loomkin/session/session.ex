@@ -713,6 +713,7 @@ defmodule Loomkin.Session do
     Loomkin.Teams.Manager.spawn_agent(team_id, "concierge", :concierge,
       model: state.model,
       project_path: project_path,
+      session_id: state.id,
       kin_agents: kin_agents
     )
 
@@ -721,14 +722,15 @@ defmodule Loomkin.Session do
 
     Loomkin.Teams.Manager.spawn_agent(team_id, "orienter", :orienter,
       model: fast_model,
-      project_path: project_path
+      project_path: project_path,
+      session_id: state.id
     )
 
     # Spawn auto-spawn kin agents
     kin_agents
     |> Enum.filter(& &1.auto_spawn)
     |> Enum.each(fn kin ->
-      spawn_opts = [project_path: project_path]
+      spawn_opts = [project_path: project_path, session_id: state.id]
 
       spawn_opts =
         if kin.model_override,
