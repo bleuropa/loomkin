@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 09-spawn-safety-01-PLAN.md
-last_updated: "2026-03-09T00:53:58.479Z"
+stopped_at: Completed 09-spawn-safety-02-PLAN.md
+last_updated: "2026-03-09T01:05:56.782Z"
 last_activity: 2026-03-08 — Distinct agent card controls with force-pause, dual indicator, steer-only resume, and state transition comms events
 progress:
   total_phases: 10
   completed_phases: 8
   total_plans: 39
-  completed_plans: 36
+  completed_plans: 37
   percent: 100
 ---
 
@@ -84,6 +84,7 @@ Progress: [██████████] 100%
 | Phase 08-dynamic-tree-visibility P04 | 15 | 1 tasks | 2 files |
 | Phase 08-dynamic-tree-visibility P05 | 25 | 3 tasks | 3 files |
 | Phase 09-spawn-safety P01 | 99 | 2 tasks | 3 files |
+| Phase 09-spawn-safety P02 | 22 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -158,6 +159,9 @@ Recent decisions affecting current work:
 - [Phase 08-dynamic-tree-visibility]: TeamTreeComponent hidden via :if={@team_tree != %{}} — zero DOM output when no sub-teams; compute_agent_counts/1 derives counts from roster at render time without extra assign; human-approved visual verification 2026-03-08
 - [Phase 09-spawn-safety]: wave 0 stub pattern reused from phases 7/8 — @moduletag :skip at module level, @tag :skip per test, flunk placeholder
 - [Phase 09-spawn-safety]: spawn gate signal types agent.spawn.gate.requested and agent.spawn.gate.resolved classified as critical in TeamBroadcaster (Plan 02 implements)
+- [Phase 09-spawn-safety]: spawn gate intercept runs in tool task (on_tool_execute closure), not in GenServer — same pattern as RequestApproval.run/2
+- [Phase 09-spawn-safety]: open_spawn_gate is a cast (not call) to avoid deadlock: tool task sends cast then blocks on receive
+- [Phase 09-spawn-safety]: execute_spawn_and_notify passes gate_id=nil for auto-approve path to skip GateResolved publish (no gate opened)
 
 ### Pending Todos
 
@@ -172,6 +176,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-09T00:53:58.476Z
-Stopped at: Completed 09-spawn-safety-01-PLAN.md
+Last session: 2026-03-09T01:05:56.780Z
+Stopped at: Completed 09-spawn-safety-02-PLAN.md
 Resume file: None

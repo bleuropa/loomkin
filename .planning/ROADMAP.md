@@ -213,7 +213,7 @@ Plans:
 | 6. Approval Gates | 5/5 | Complete   | 2026-03-08 |
 | 7. Confidence Triggers | 4/4 | Complete   | 2026-03-08 |
 | 8. Dynamic Tree Visibility | 4/5 | In Progress|  |
-| 9. Spawn Safety | 1/4 | In Progress|  |
+| 9. Spawn Safety | 2/4 | In Progress|  |
 | 10. Leader Research Protocol | 0/TBD | Not started | - |
 
 ---
