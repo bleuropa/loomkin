@@ -49,7 +49,8 @@ defmodule Loomkin.Teams.Agent do
     subscription_ids: [],
     last_asked_at: nil,
     pending_ask_user: nil,
-    spawned_child_teams: []
+    spawned_child_teams: [],
+    auto_approve_spawns: false
   ]
 
   # --- Public API ---
@@ -726,6 +727,42 @@ defmodule Loomkin.Teams.Agent do
       end
 
     {:reply, :ok, state}
+  end
+
+  # --- Spawn gate handle_calls ---
+
+  @impl true
+  def handle_call(:get_spawn_settings, _from, state) do
+    {:reply, %{auto_approve_spawns: state.auto_approve_spawns}, state}
+  end
+
+  def handle_call({:set_auto_approve_spawns, enabled}, _from, state) do
+    {:reply, :ok, %{state | auto_approve_spawns: enabled}}
+  end
+
+  def handle_call({:check_spawn_budget, estimated_cost}, _from, state) do
+    budget_limit =
+      case state.role_config do
+        %{budget_limit: limit} when is_number(limit) -> limit / 1
+        _ -> 5.0
+      end
+
+    summary = CostTracker.team_cost_summary(state.team_id)
+
+    spent =
+      case summary[:total_cost_usd] do
+        %Decimal{} = d -> Decimal.to_float(d)
+        n when is_number(n) -> n / 1
+        _ -> 0.0
+      end
+
+    remaining = budget_limit - spent
+
+    if remaining < estimated_cost do
+      {:reply, {:budget_exceeded, %{remaining: remaining, estimated: estimated_cost}}, state}
+    else
+      {:reply, :ok, state}
+    end
   end
 
   # --- handle_cast ---
