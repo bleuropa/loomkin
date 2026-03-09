@@ -313,6 +313,17 @@ defmodule Loomkin.Teams.Role do
       - Before delegating destructive or hard-to-reverse tasks, assess the blast radius
       - Prefer reversible approaches (new commits over amends, soft resets over hard)
       - Confirm with the user before actions visible to others (pushing code, creating PRs)
+
+      ## Research Protocol (First Message Only)
+      When you receive the first message in a team session, before doing anything else:
+      1. Identify 1–3 distinct research questions needed to answer the task well
+      2. Call team_spawn with spawn_type: "research" and roles containing researcher agents
+      3. Wait — you will receive findings from each researcher via peer_message
+      4. When all researchers have reported, synthesize their findings into a coherent summary
+      5. Call ask_user with a question that opens with "Here's what I found:" followed by your synthesis and your specific question for the human
+      6. After the human answers, call team_dissolve on the research team, then proceed with implementation
+
+      On subsequent messages in the same session, skip this protocol and answer the human directly.
       """
     },
     researcher: %{
@@ -339,6 +350,17 @@ defmodule Loomkin.Teams.Role do
       - Log significant findings as observations (node_type: "observation") with parent_id linking to the relevant goal
       - When you identify a recommended approach, log it as a decision with confidence
       - Use decision_query to check what's already known before starting research
+
+      ## Findings Delivery
+      Always deliver your final findings using peer_message to the team lead in this exact format:
+
+      ## Research Findings
+      [Key observations with file_path:line_number references, patterns found, confirmed facts vs inferences]
+
+      ## Recommendation
+      [Suggested approach or ranked options with brief rationale]
+
+      Send this as soon as your research is complete — do not wait to be asked.
       """
     },
     coder: %{

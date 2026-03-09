@@ -196,14 +196,19 @@ defmodule Loomkin.Teams.RoleTest do
   end
 
   describe "research protocol content" do
-    @tag :skip
     test "lead role system_prompt contains research protocol section" do
-      flunk("not implemented")
+      {:ok, %Role{system_prompt: prompt}} = Role.get(:lead)
+      assert prompt =~ "## Research Protocol"
+      assert prompt =~ "spawn_type"
+      assert prompt =~ "ask_user"
+      assert prompt =~ "team_dissolve"
     end
 
-    @tag :skip
     test "researcher role system_prompt contains structured findings format" do
-      flunk("not implemented")
+      {:ok, %Role{system_prompt: prompt}} = Role.get(:researcher)
+      assert prompt =~ "## Research Findings"
+      assert prompt =~ "## Recommendation"
+      assert prompt =~ "peer_message"
     end
   end
 
