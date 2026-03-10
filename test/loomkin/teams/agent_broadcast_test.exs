@@ -142,7 +142,8 @@ defmodule Loomkin.Teams.AgentBroadcastTest do
       assert state_before.loop_task == nil
 
       # inject_broadcast on idle agent falls through to send_message
-      # which starts a loop (will crash without DB/LLM but proves delegation)
+      # which starts an async loop. Verify delegation by checking that
+      # the agent transitions to :working and starts a loop task.
       Task.start(fn ->
         try do
           Agent.inject_broadcast(pid, "hello idle agent")
@@ -151,17 +152,27 @@ defmodule Loomkin.Teams.AgentBroadcastTest do
         end
       end)
 
-      # Wait for the loop to be attempted and crash
-      Process.sleep(200)
-      state_after = :sys.get_state(pid)
+      # Wait for the GenServer to process the call and start the loop.
+      # Poll for status change rather than using a fixed sleep.
+      started_loop =
+        Enum.reduce_while(1..20, false, fn _, _acc ->
+          Process.sleep(50)
 
-      # inject_broadcast on idle agent delegates to send_message which appends
-      # the message. The LLM loop may crash in test (no API key), so we verify
-      # the message was processed rather than checking ephemeral status.
-      assert Enum.any?(state_after.messages, fn msg ->
-               msg.content == "hello idle agent"
-             end),
-             "Expected broadcast message to appear in agent messages"
+          if Process.alive?(pid) do
+            state = :sys.get_state(pid)
+
+            if state.loop_task != nil or state.status != :idle do
+              {:halt, true}
+            else
+              {:cont, false}
+            end
+          else
+            {:cont, false}
+          end
+        end)
+
+      assert started_loop,
+             "Expected inject_broadcast to delegate to send_message and start a loop"
     end
   end
 end

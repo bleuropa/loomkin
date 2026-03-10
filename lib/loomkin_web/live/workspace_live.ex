@@ -3697,14 +3697,14 @@ defmodule LoomkinWeb.WorkspaceLive do
   # event handlers and PubSub.subscribe is not idempotent (each call adds
   # another subscription, causing duplicate event delivery).
   defp refresh_decision_graphs(socket) do
-    # "inspector-graph" is always mounted in the context inspector (mission control).
+    # "inspector-agent-graph" is always mounted in the context inspector (mission control).
     # "decision-graph" lives in the sidebar graph tab (solo mode).
     # "team-decision-graph" lives in the team sub-tab (solo mode, :team tab, :graph sub-tab).
     ref = System.unique_integer()
 
     if socket.assigns[:mode] == :mission_control do
       send_update(LoomkinWeb.DecisionGraphComponent,
-        id: "inspector-graph",
+        id: "inspector-agent-graph",
         session_id: socket.assigns[:session_id],
         team_id: socket.assigns[:active_team_id],
         refresh_ref: ref
