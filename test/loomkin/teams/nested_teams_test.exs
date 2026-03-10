@@ -115,12 +115,12 @@ defmodule Loomkin.Teams.NestedTeamsTest do
       TableRegistry.delete_table(sub_id)
     end
 
-    test "returns :none for root team", %{parent_id: parent_id} do
-      assert :none = Manager.get_parent_team(parent_id)
+    test "returns :error for root team", %{parent_id: parent_id} do
+      assert :error = Manager.get_parent_team(parent_id)
     end
 
-    test "returns :none for nonexistent team" do
-      assert :none = Manager.get_parent_team("nonexistent")
+    test "returns :error for nonexistent team" do
+      assert :error = Manager.get_parent_team("nonexistent")
     end
   end
 
@@ -178,7 +178,7 @@ defmodule Loomkin.Teams.NestedTeamsTest do
       parent_team_id =
         case Manager.get_parent_team(child_id) do
           {:ok, pid} -> pid
-          :none -> nil
+          :error -> nil
         end
 
       assert parent_team_id == parent_id
@@ -191,7 +191,7 @@ defmodule Loomkin.Teams.NestedTeamsTest do
       parent_team_id =
         case Manager.get_parent_team(team_id) do
           {:ok, pid} -> pid
-          :none -> nil
+          :error -> nil
         end
 
       assert parent_team_id == nil

@@ -189,7 +189,7 @@ defmodule Loomkin.Teams.Tasks do
         |> Enum.flat_map(fn sib_id -> list_all(sib_id) end)
         |> Enum.take(limit)
 
-      :none ->
+      :error ->
         []
     end
   end

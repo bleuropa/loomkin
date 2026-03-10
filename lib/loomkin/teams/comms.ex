@@ -165,7 +165,7 @@ defmodule Loomkin.Teams.Comms do
 
         :ok
 
-      :none ->
+      :error ->
         :ok
     end
   end
@@ -259,7 +259,7 @@ defmodule Loomkin.Teams.Comms do
           |> Causality.attach(team_id: team_id, agent_name: to_string(from))
           |> Signals.publish()
 
-        :none ->
+        :error ->
           :ok
       end
     end

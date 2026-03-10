@@ -68,7 +68,7 @@ defmodule Loomkin.Tools.CrossTeamQuery do
   defp resolve_target_team(team_id, _) do
     case Manager.get_parent_team(team_id) do
       {:ok, parent_id} -> parent_id
-      :none -> nil
+      :error -> nil
     end
   end
 end

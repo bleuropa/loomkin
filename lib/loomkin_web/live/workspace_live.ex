@@ -1382,8 +1382,74 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   def handle_info(%Jido.Signal{type: "collaboration.vote.response"} = sig, socket) do
-    %{vote_id: vid, response: resp} = sig.data
-    handle_info({:vote_response, vid, resp}, socket)
+    response = sig.data[:response] || %{}
+    agent = response[:from] || "unknown"
+    choice = response[:choice] || "abstain"
+    confidence = response[:confidence]
+
+    content =
+      if confidence,
+        do: "voted '#{choice}' (confidence: #{confidence})",
+        else: "voted '#{choice}'"
+
+    event = %{
+      id: Ecto.UUID.generate(),
+      type: :vote_response,
+      agent: agent,
+      content: content,
+      timestamp: DateTime.utc_now(),
+      expanded: false,
+      metadata: %{
+        team_id: sig.data[:team_id],
+        vote_id: sig.data[:vote_id],
+        choice: choice,
+        confidence: confidence
+      }
+    }
+
+    socket =
+      socket
+      |> stream_insert(:comms_events, event)
+      |> update(:comms_event_count, &(&1 + 1))
+
+    {:noreply, socket}
+  end
+
+  def handle_info(%Jido.Signal{type: "collaboration.debate.response"} = sig, socket) do
+    response = sig.data[:response] || %{}
+    agent = response[:from] || "unknown"
+    phase = sig.data[:phase] || :unknown
+
+    content =
+      case phase do
+        :vote ->
+          choice = response[:choice] || "no choice"
+          "debate vote: '#{choice}'"
+
+        _ ->
+          response[:content] || "no response"
+      end
+
+    event = %{
+      id: Ecto.UUID.generate(),
+      type: :debate_response,
+      agent: agent,
+      content: "[#{phase}] #{content}",
+      timestamp: DateTime.utc_now(),
+      expanded: false,
+      metadata: %{
+        team_id: sig.data[:team_id],
+        debate_id: sig.data[:debate_id],
+        phase: phase
+      }
+    }
+
+    socket =
+      socket
+      |> stream_insert(:comms_events, event)
+      |> update(:comms_event_count, &(&1 + 1))
+
+    {:noreply, socket}
   end
 
   def handle_info(%Jido.Signal{type: "system.auth." <> _} = sig, socket) do
@@ -3645,36 +3711,30 @@ defmodule LoomkinWeb.WorkspaceLive do
       )
     end
 
-    if socket.assigns[:active_tab] == :graph do
-      send_update(LoomkinWeb.DecisionGraphComponent,
-        id: "decision-graph",
-        session_id: socket.assigns[:session_id],
-        team_id: socket.assigns[:active_team_id],
-        refresh_ref: ref
-      )
-    end
+    send_update(LoomkinWeb.DecisionGraphComponent,
+      id: "decision-graph",
+      session_id: socket.assigns[:session_id],
+      team_id: socket.assigns[:active_team_id],
+      refresh_ref: ref
+    )
 
-    if socket.assigns[:active_tab] == :team && socket.assigns[:team_sub_tab] == :graph do
-      send_update(LoomkinWeb.DecisionGraphComponent,
-        id: "team-decision-graph",
-        session_id: socket.assigns[:session_id],
-        team_id: socket.assigns[:display_team_id],
-        refresh_ref: ref
-      )
-    end
+    send_update(LoomkinWeb.DecisionGraphComponent,
+      id: "team-decision-graph",
+      session_id: socket.assigns[:session_id],
+      team_id: socket.assigns[:display_team_id],
+      refresh_ref: ref
+    )
   end
 
   defp refresh_task_graph(socket) do
-    if socket.assigns[:active_tab] == :graph do
-      ref = System.unique_integer()
+    ref = System.unique_integer()
 
-      send_update(LoomkinWeb.TaskGraphComponent,
-        id: "task-graph",
-        session_id: socket.assigns[:session_id],
-        team_id: socket.assigns[:active_team_id],
-        refresh_ref: ref
-      )
-    end
+    send_update(LoomkinWeb.TaskGraphComponent,
+      id: "task-graph",
+      session_id: socket.assigns[:session_id],
+      team_id: socket.assigns[:active_team_id],
+      refresh_ref: ref
+    )
 
     socket
   end
@@ -3804,14 +3864,11 @@ defmodule LoomkinWeb.WorkspaceLive do
   end
 
   # Send an activity event to the TeamActivityComponent's internal stream
-  # Buffer events when component isn't mounted (e.g., user on a different tab)
   defp push_activity_event(socket, event) do
-    if socket.assigns[:active_tab] == :team do
-      send_update(LoomkinWeb.TeamActivityComponent,
-        id: "team-activity",
-        new_event: event
-      )
-    end
+    send_update(LoomkinWeb.TeamActivityComponent,
+      id: "team-activity",
+      new_event: event
+    )
 
     socket
     |> update(:activity_event_count, &(&1 + 1))
@@ -4300,7 +4357,9 @@ defmodule LoomkinWeb.WorkspaceLive do
     :error,
     :rebalance_nudge,
     :rebalance_escalation,
-    :conflict
+    :conflict,
+    :vote_response,
+    :debate_response
   ]
 
   defp forward_to_cards_and_comms(socket, pubsub_event) do
@@ -4754,7 +4813,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   defp forward_to_dashboard(socket) do
     tid = socket.assigns[:active_team_id] || socket.assigns[:team_id]
 
-    if tid && team_tab_visible?(socket) do
+    if tid do
       send_update(LoomkinWeb.TeamDashboardComponent, id: "team-dashboard", team_id: tid)
     end
   end
@@ -4762,7 +4821,7 @@ defmodule LoomkinWeb.WorkspaceLive do
   defp forward_to_cost(socket) do
     tid = socket.assigns[:active_team_id] || socket.assigns[:team_id]
 
-    if tid && team_tab_visible?(socket) && socket.assigns[:team_sub_tab] == :cost do
+    if tid do
       try do
         send_update(LoomkinWeb.TeamCostComponent, id: "team-cost", team_id: tid)
       rescue
@@ -4770,9 +4829,6 @@ defmodule LoomkinWeb.WorkspaceLive do
       end
     end
   end
-
-  defp team_tab_visible?(socket),
-    do: socket.assigns[:active_tab] == :team
 
   defp trackable_agent_name(name) when is_binary(name) do
     trimmed = String.trim(name)

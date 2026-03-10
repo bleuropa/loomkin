@@ -338,7 +338,7 @@ defmodule Loomkin.AgentLoop do
     parent_team_id =
       case Loomkin.Teams.Manager.get_parent_team(config.team_id) do
         {:ok, parent_id} -> parent_id
-        :none -> config.team_id
+        :error -> config.team_id
       end
 
     context = %{

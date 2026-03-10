@@ -1,6 +1,8 @@
 defmodule Loomkin.Teams.Manager do
   @moduledoc "Public API for team lifecycle management."
 
+  require Logger
+
   alias Loomkin.Decisions.AutoLogger
   alias Loomkin.Decisions.Broadcaster
   alias Loomkin.Signals.Team.ChildTeamCreated
@@ -121,25 +123,25 @@ defmodule Loomkin.Teams.Manager do
     get_sub_team_ids(parent_team_id)
   end
 
-  @doc "Get the parent team ID for a given team, or nil if it's a root team."
-  @spec get_parent_team(String.t()) :: {:ok, String.t()} | :none
+  @doc "Get the parent team ID for a given team, or :error if it's a root team or not found."
+  @spec get_parent_team(String.t()) :: {:ok, String.t()} | :error
   def get_parent_team(team_id) do
     case get_team_meta(team_id) do
       {:ok, %{parent_team_id: parent_id}} when is_binary(parent_id) -> {:ok, parent_id}
-      _ -> :none
+      _ -> :error
     end
   end
 
   @doc "Get sibling team IDs (other sub-teams under the same parent)."
-  @spec get_sibling_teams(String.t()) :: {:ok, [String.t()]} | :none
+  @spec get_sibling_teams(String.t()) :: {:ok, [String.t()]} | :error
   def get_sibling_teams(team_id) do
     case get_parent_team(team_id) do
       {:ok, parent_id} ->
         siblings = get_sub_team_ids(parent_id) -- [team_id]
         {:ok, siblings}
 
-      :none ->
-        :none
+      :error ->
+        :error
     end
   end
 
@@ -164,8 +166,6 @@ defmodule Loomkin.Teams.Manager do
   Starts a Teams.Agent GenServer under the AgentSupervisor.
   """
   def spawn_agent(team_id, name, role, opts \\ []) do
-    require Logger
-
     child_opts = [
       team_id: team_id,
       name: name,
@@ -194,7 +194,6 @@ defmodule Loomkin.Teams.Manager do
     case result do
       {:ok, pid} ->
         Logger.info("[Kin:spawn] agent=#{name} role=#{role} team=#{team_id} pid=#{inspect(pid)}")
-        Loomkin.Teams.AgentWatcher.watch(Loomkin.Teams.AgentWatcher, pid, team_id, name)
 
       {:error, reason} ->
         Logger.error(
@@ -254,7 +253,7 @@ defmodule Loomkin.Teams.Manager do
         end
 
         # Notify all running agents in this team
-        for %{pid: pid} <- list_agents(team_id) do
+        for %{pid: pid} <- list_agents(team_id), Process.alive?(pid) do
           Loomkin.Teams.Agent.update_project_path(pid, new_path)
         end
 
@@ -315,16 +314,14 @@ defmodule Loomkin.Teams.Manager do
 
   @doc "List all agents in a team (excludes keepers and other non-agent entries)."
   def list_agents(team_id) do
-    require Logger
-
     raw =
       Registry.select(Loomkin.Teams.AgentRegistry, [
         {{{team_id, :"$1"}, :"$2", :"$3"}, [], [%{name: :"$1", pid: :"$2", meta: :"$3"}]}
       ])
 
     filtered =
-      Enum.filter(raw, fn %{meta: meta} ->
-        is_map(meta) and meta[:type] != :keeper and
+      Enum.filter(raw, fn %{pid: pid, meta: meta} ->
+        Process.alive?(pid) and is_map(meta) and meta[:type] != :keeper and
           (Map.has_key?(meta, :role) or Map.has_key?(meta, "role"))
       end)
 
@@ -486,14 +483,23 @@ defmodule Loomkin.Teams.Manager do
 
   defp start_nervous_system(team_id) do
     if Application.get_env(:loomkin, :start_nervous_system, true) do
-      try do
-        Distributed.start_child({AutoLogger, team_id: team_id})
-        Distributed.start_child({Broadcaster, team_id: team_id})
-        Distributed.start_child({Rebalancer, team_id: team_id})
-        Distributed.start_child({ConflictDetector, team_id: team_id})
-        Distributed.start_child({MessageScheduler, team_id: team_id})
-      catch
-        :exit, _ -> :ok
+      components = [
+        {AutoLogger, team_id: team_id},
+        {Broadcaster, team_id: team_id},
+        {Rebalancer, team_id: team_id},
+        {ConflictDetector, team_id: team_id},
+        {MessageScheduler, team_id: team_id}
+      ]
+
+      for {mod, opts} <- components do
+        try do
+          Distributed.start_child({mod, opts})
+        catch
+          :exit, reason ->
+            Logger.warning(
+              "[Kin:team] Failed to start #{inspect(mod)} for team #{team_id}: #{inspect(reason)}"
+            )
+        end
       end
     end
   end

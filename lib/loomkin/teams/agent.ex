@@ -222,6 +222,10 @@ defmodule Loomkin.Teams.Agent do
           subscription_ids: sub_ids
         }
 
+        # Monitor via AgentWatcher BEFORE init completes — guarantees no gap
+        # where a crash could be missed (previously called after start_child returned)
+        Loomkin.Teams.AgentWatcher.watch(Loomkin.Teams.AgentWatcher, self(), team_id, name)
+
         Context.register_agent(team_id, name, %{role: role, status: :idle, model: model})
         broadcast_team(state, {:agent_status, state.name, :idle})
         Logger.info("[Kin:agent] registered name=#{name} role=#{role} — broadcasting :idle")
