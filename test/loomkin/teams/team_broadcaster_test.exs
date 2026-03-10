@@ -227,7 +227,7 @@ defmodule Loomkin.Teams.TeamBroadcasterTest do
       refute_receive {:team_broadcast, _}, 100
     end
 
-    test "signals with nil team_id are dropped" do
+    test "signals with nil team_id are passed through" do
       broadcaster = start_broadcaster(team_ids: [@team_id])
       TeamBroadcaster.subscribe(broadcaster, self())
 
@@ -242,7 +242,7 @@ defmodule Loomkin.Teams.TeamBroadcasterTest do
 
       Signals.publish(signal)
 
-      refute_receive {:team_broadcast, _}, 100
+      assert_receive {:team_broadcast, _}, 200
     end
   end
 

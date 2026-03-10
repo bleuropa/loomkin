@@ -417,7 +417,9 @@ defmodule Loomkin.Teams.Agent do
           | loop_task: nil,
             pending_permission: nil,
             pending_updates: [],
-            priority_queue: []
+            priority_queue: [],
+            pause_queued: false,
+            pause_requested: false
         }
 
         state = set_status_and_broadcast(state, :idle)
@@ -425,7 +427,15 @@ defmodule Loomkin.Teams.Agent do
 
       nil when state.pending_permission != nil ->
         # Agent is waiting on permission — clear it and go idle
-        state = %{state | pending_permission: nil, pending_updates: [], priority_queue: []}
+        state = %{
+          state
+          | pending_permission: nil,
+            pending_updates: [],
+            priority_queue: [],
+            pause_queued: false,
+            pause_requested: false
+        }
+
         state = set_status_and_broadcast(state, :idle)
         {:reply, :ok, state}
 
@@ -872,11 +882,16 @@ defmodule Loomkin.Teams.Agent do
   @impl true
   def handle_cast(:exit_awaiting_synthesis, state) do
     state = set_status_and_broadcast(state, :working)
+    # Drain any pause that was queued while awaiting synthesis
+    state = maybe_apply_queued_pause(state, [])
     {:noreply, state}
   end
 
   @impl true
-  def handle_cast({:append_ask_user_question, tool_args, card_id, question_id}, state) do
+  def handle_cast(
+        {:append_ask_user_question, tool_args, card_id, question_id, tool_task_pid},
+        state
+      ) do
     question_text = Map.get(tool_args, "question") || Map.get(tool_args, :question)
     options = Map.get(tool_args, "options") || Map.get(tool_args, :options) || []
 
@@ -892,9 +907,9 @@ defmodule Loomkin.Teams.Agent do
           %{card_id: card_id, questions: [question_entry]}
       end
 
-    # Register this question_id in Registry so the answer can be routed back to the
+    # Register the tool task pid in Registry so the answer can be routed back to the
     # tool task process that is blocking on receive {:ask_user_answer, question_id, _}
-    Registry.register(Loomkin.Teams.AgentRegistry, {:ask_user, question_id}, self())
+    Registry.register(Loomkin.Teams.AgentRegistry, {:ask_user, question_id}, tool_task_pid)
 
     # Publish a question signal so WorkspaceLive can render it in the ask-user card
     signal =
@@ -2431,27 +2446,26 @@ defmodule Loomkin.Teams.Agent do
                 end
 
               # After run/2 returns (question was answered), notify GenServer
-              # to update last_asked_at and clear the pending card
-              question_id =
-                Map.get(tool_args, "question_id") || Map.get(tool_args, :question_id)
-
-              if question_id do
-                GenServer.call(agent_pid, {:ask_user_answered, question_id})
-              end
+              # to update last_asked_at and clear the pending card.
+              # Use a sentinel ID — the :allow path has questions: [], so any ID
+              # triggers the "all answered" cleanup in ask_user_answered.
+              GenServer.call(agent_pid, {:ask_user_answered, :allow_cleanup})
 
               AgentLoop.format_tool_result(result)
 
             {:batch, card_id} ->
               # Append question to open card and block tool task waiting for answer
               question_id = Ecto.UUID.generate()
+              tool_task_pid = self()
 
               GenServer.cast(
                 agent_pid,
-                {:append_ask_user_question, tool_args, card_id, question_id}
+                {:append_ask_user_question, tool_args, card_id, question_id, tool_task_pid}
               )
 
               receive do
                 {:ask_user_answer, ^question_id, answer} ->
+                  Registry.unregister(Loomkin.Teams.AgentRegistry, {:ask_user, question_id})
                   GenServer.call(agent_pid, {:ask_user_answered, question_id})
 
                   AgentLoop.format_tool_result(
@@ -2460,6 +2474,7 @@ defmodule Loomkin.Teams.Agent do
               after
                 300_000 ->
                   # Timeout: clear the question and proceed autonomously
+                  Registry.unregister(Loomkin.Teams.AgentRegistry, {:ask_user, question_id})
                   GenServer.call(agent_pid, {:ask_user_answered, question_id})
 
                   AgentLoop.format_tool_result(
@@ -2540,18 +2555,34 @@ defmodule Loomkin.Teams.Agent do
         GenServer.cast(agent_pid, {:enter_awaiting_synthesis, researcher_count})
 
         # Execute spawn (nil gate_id = no GateResolved published; no human gate opened)
-        execute_spawn_and_notify(
-          agent_pid,
-          tool_module,
-          tool_args,
-          context,
-          nil,
-          team_id,
-          agent_name
-        )
+        spawn_result =
+          execute_spawn_and_notify(
+            agent_pid,
+            tool_module,
+            tool_args,
+            context,
+            nil,
+            team_id,
+            agent_name
+          )
 
-        # Block in receive loop collecting findings from researchers
-        findings = collect_research_findings(researcher_count, 120_000, [])
+        # If spawn failed, exit awaiting_synthesis immediately instead of blocking 120s
+        findings =
+          case spawn_result do
+            {:error, _reason} ->
+              GenServer.cast(agent_pid, :exit_awaiting_synthesis)
+
+              Registry.unregister(
+                Loomkin.Teams.AgentRegistry,
+                {:awaiting_synthesis, team_id, agent_name}
+              )
+
+              []
+
+            _ ->
+              # Block in receive loop collecting findings from researchers
+              collect_research_findings(researcher_count, 120_000, [])
+          end
 
         # Exit awaiting_synthesis; agent returns to :working
         GenServer.cast(agent_pid, :exit_awaiting_synthesis)

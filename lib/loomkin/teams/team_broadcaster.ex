@@ -121,7 +121,7 @@ defmodule Loomkin.Teams.TeamBroadcaster do
   def handle_info({:signal, %Jido.Signal{} = signal}, state) do
     team_id = extract_team_id(signal)
 
-    if team_id != nil and MapSet.member?(state.team_ids, team_id) do
+    if team_id == nil or MapSet.member?(state.team_ids, team_id) do
       if critical?(signal) do
         broadcast_immediate(state.subscribers, signal)
         {:noreply, state}

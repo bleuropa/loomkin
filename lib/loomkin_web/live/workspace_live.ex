@@ -811,7 +811,16 @@ defmodule LoomkinWeb.WorkspaceLive do
         if answer in valid_options do
           # Send answer directly back to the waiting agent
           send_ask_user_answer(question_id, answer)
-          {:noreply, assign(socket, pending_questions: remaining)}
+
+          # Update the agent card's pending_questions to stay in sync
+          agent_remaining = Enum.filter(remaining, &(&1.agent_name == question.agent_name))
+
+          socket =
+            socket
+            |> assign(pending_questions: remaining)
+            |> update_agent_card(question.agent_name, %{pending_questions: agent_remaining})
+
+          {:noreply, socket}
         else
           {:noreply, socket}
         end
@@ -857,6 +866,14 @@ defmodule LoomkinWeb.WorkspaceLive do
 
     send_approval_response(gate_id, %{outcome: :approved, context: context})
     socket = update_agent_card(socket, agent_name, %{pending_approval: nil})
+
+    socket =
+      if socket.assigns.leader_approval_pending[:gate_id] == gate_id do
+        assign(socket, leader_approval_pending: nil)
+      else
+        socket
+      end
+
     {:noreply, socket}
   end
 
@@ -920,6 +937,18 @@ defmodule LoomkinWeb.WorkspaceLive do
       {:ok, pid} -> GenServer.call(pid, {:set_auto_approve_spawns, enabled})
       :error -> :ok
     end
+
+    # Update the agent card so the checkbox reflects the new state
+    socket =
+      case get_in(socket.assigns, [:agent_cards, agent_name, :pending_approval]) do
+        %{} = pa ->
+          update_agent_card(socket, agent_name, %{
+            pending_approval: Map.put(pa, :auto_approve_spawns, enabled)
+          })
+
+        _ ->
+          socket
+      end
 
     {:noreply, socket}
   end
@@ -1073,23 +1102,8 @@ defmodule LoomkinWeb.WorkspaceLive do
     {:noreply, socket}
   end
 
-  # child_team_created carries the NEW team_id which isn't subscribed yet —
-  # accept it if the parent_team_id belongs to this workspace
-  def handle_info(
-        {:signal, %Jido.Signal{type: "team.child.created"} = sig},
-        socket
-      ) do
-    parent_id = sig.data[:parent_team_id]
-    subscribed = socket.assigns[:subscribed_teams] || MapSet.new()
-
-    if parent_id && MapSet.member?(subscribed, parent_id) do
-      handle_info(sig, socket)
-    else
-      {:noreply, socket}
-    end
-  end
-
   # TeamBroadcaster pre-filters signals by team_id, so no additional filtering needed.
+  # child_team_created is routed by parent_team_id via extract_team_id/1 in TeamBroadcaster.
   def handle_info({:signal, %Jido.Signal{} = sig}, socket) do
     {:noreply, dispatch_signal(sig, socket)}
   end
@@ -1191,6 +1205,7 @@ defmodule LoomkinWeb.WorkspaceLive do
         assign(socket,
           leader_approval_pending: %{
             gate_id: gate_id,
+            question: question,
             timeout_ms: timeout_ms,
             started_at: started_at
           }
@@ -1317,6 +1332,7 @@ defmodule LoomkinWeb.WorkspaceLive do
       case outcome do
         :approved -> "approved"
         :denied -> "denied"
+        :timeout -> "timed out"
         _ -> "resolved"
       end
 
@@ -2407,12 +2423,19 @@ defmodule LoomkinWeb.WorkspaceLive do
           do: :solo,
           else: socket.assigns.mode
 
+      updated_subscribed =
+        MapSet.difference(
+          socket.assigns[:subscribed_teams] || MapSet.new(),
+          MapSet.new(all_to_remove)
+        )
+
       {:noreply,
        assign(socket,
          team_tree: updated_tree,
          team_names: updated_names,
          active_team_id: active_team_id,
-         mode: mode
+         mode: mode,
+         subscribed_teams: updated_subscribed
        )}
     end
   end

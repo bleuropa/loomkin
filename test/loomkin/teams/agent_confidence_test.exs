@@ -160,7 +160,7 @@ defmodule Loomkin.Teams.AgentConfidenceTest do
         %{s | pending_ask_user: %{card_id: card_id, questions: []}}
       end)
 
-      GenServer.cast(pid, {:append_ask_user_question, tool_args, card_id, question_id})
+      GenServer.cast(pid, {:append_ask_user_question, tool_args, card_id, question_id, self()})
       :timer.sleep(50)
 
       state = :sys.get_state(pid)

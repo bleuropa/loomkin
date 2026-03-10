@@ -194,6 +194,7 @@ defmodule Loomkin.Teams.Manager do
     case result do
       {:ok, pid} ->
         Logger.info("[Kin:spawn] agent=#{name} role=#{role} team=#{team_id} pid=#{inspect(pid)}")
+        Loomkin.Teams.AgentWatcher.watch(Loomkin.Teams.AgentWatcher, pid, team_id, name)
 
       {:error, reason} ->
         Logger.error(
