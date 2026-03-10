@@ -3,6 +3,8 @@ defmodule Loomkin.Decisions.Broadcaster do
 
   use GenServer
 
+  require Logger
+
   alias Loomkin.Decisions.Graph
   alias Loomkin.Teams.Comms
 
@@ -52,7 +54,7 @@ defmodule Loomkin.Decisions.Broadcaster do
     node = Map.get(data, :node)
 
     if node && relevant_node?(node, state.team_id) do
-      state = process_node(node, state)
+      state = safe_process_node(node, state)
       {:noreply, state}
     else
       {:noreply, state}
@@ -64,6 +66,17 @@ defmodule Loomkin.Decisions.Broadcaster do
   end
 
   # --- Private ---
+
+  defp safe_process_node(node, state) do
+    process_node(node, state)
+  rescue
+    e ->
+      Logger.error(
+        "[Kin:broadcaster] process_node failed for #{node.id}: #{Exception.message(e)}"
+      )
+
+      state
+  end
 
   defp relevant_node?(node, team_id) do
     node.node_type in [:observation, :outcome] and

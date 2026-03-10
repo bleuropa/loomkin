@@ -141,38 +141,17 @@ defmodule Loomkin.Teams.AgentBroadcastTest do
       assert state_before.status == :idle
       assert state_before.loop_task == nil
 
-      # inject_broadcast on idle agent falls through to send_message
-      # which starts an async loop. Verify delegation by checking that
-      # the agent transitions to :working and starts a loop task.
-      Task.start(fn ->
-        try do
-          Agent.inject_broadcast(pid, "hello idle agent")
-        catch
-          :exit, _ -> :ok
-        end
+      # Verify delegation by exploiting send_message's busy guard:
+      # when loop_task is already set, send_message returns {:error, :busy}.
+      # The paused/complete/error handlers all return :ok, so getting
+      # {:error, :busy} proves inject_broadcast delegated to send_message.
+      fake_task = %Task{pid: self(), ref: make_ref(), owner: self(), mfa: nil}
+
+      :sys.replace_state(pid, fn state ->
+        %{state | loop_task: {fake_task, nil}}
       end)
 
-      # Wait for the GenServer to process the call and start the loop.
-      # Poll for status change rather than using a fixed sleep.
-      started_loop =
-        Enum.reduce_while(1..20, false, fn _, _acc ->
-          Process.sleep(50)
-
-          if Process.alive?(pid) do
-            state = :sys.get_state(pid)
-
-            if state.loop_task != nil or state.status != :idle do
-              {:halt, true}
-            else
-              {:cont, false}
-            end
-          else
-            {:cont, false}
-          end
-        end)
-
-      assert started_loop,
-             "Expected inject_broadcast to delegate to send_message and start a loop"
+      assert {:error, :busy} = Agent.inject_broadcast(pid, "hello busy agent")
     end
   end
 end

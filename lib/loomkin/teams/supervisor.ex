@@ -30,7 +30,7 @@ defmodule Loomkin.Teams.Supervisor do
         {Task.Supervisor, name: Loomkin.Teams.TaskSupervisor}
       ] ++ cluster_children()
 
-    Supervisor.init(children, strategy: :one_for_all)
+    Supervisor.init(children, strategy: :one_for_one)
   end
 
   defp cluster_children do
