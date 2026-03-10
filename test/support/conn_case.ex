@@ -26,10 +26,15 @@ defmodule LoomkinWeb.ConnCase do
       :ets.new(:loomkin_sessions, [:named_table, :public, :set])
     end
 
-    # Start the endpoint if not already running
-    case Process.whereis(LoomkinWeb.Endpoint) do
-      nil -> start_supervised!(LoomkinWeb.Endpoint)
-      _pid -> :ok
+    # Start the endpoint if not already running.
+    # Use try/rescue to handle the race where another async test module
+    # starts the endpoint between our whereis check and start_supervised! call.
+    unless Process.whereis(LoomkinWeb.Endpoint) do
+      try do
+        start_supervised!(LoomkinWeb.Endpoint)
+      rescue
+        RuntimeError -> :ok
+      end
     end
 
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Loomkin.Repo, shared: not tags[:async])
