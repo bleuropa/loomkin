@@ -29,17 +29,32 @@ defmodule Loomkin.Tools.PeerResolveNegotiation do
 
     resolution =
       case resolution_str do
-        "accept_negotiation" -> :accept_negotiation
-        "override" -> :override
-        "reassign" -> :reassign
+        "accept_negotiation" ->
+          :accept_negotiation
+
+        "override" ->
+          :override
+
+        "reassign" ->
+          :reassign
+
+        _ ->
+          {:error,
+           "Unknown resolution: #{resolution_str}. Use 'accept_negotiation', 'override', or 'reassign'."}
       end
 
-    case Negotiation.resolve(team_id, task_id, resolution) do
-      :ok ->
-        {:ok, %{result: "Negotiation for task #{task_id} resolved with: #{resolution_str}"}}
+    case resolution do
+      {:error, msg} ->
+        {:error, msg}
 
-      {:error, reason} ->
-        {:ok, %{result: "Negotiation resolution failed: #{inspect(reason)}"}}
+      _ ->
+        case Negotiation.resolve(team_id, task_id, resolution) do
+          :ok ->
+            {:ok, %{result: "Negotiation for task #{task_id} resolved with: #{resolution_str}"}}
+
+          {:error, err} ->
+            {:error, "Negotiation resolution failed: #{inspect(err)}"}
+        end
     end
   end
 end

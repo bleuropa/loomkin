@@ -719,7 +719,7 @@ defmodule Loomkin.AgentLoop do
     end
   end
 
-  defp sanitize_utf8(nil), do: nil
+  defp sanitize_utf8(nil), do: ""
 
   defp strip_invalid_utf8(<<>>, acc), do: acc
 

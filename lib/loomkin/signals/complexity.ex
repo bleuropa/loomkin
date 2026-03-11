@@ -20,14 +20,4 @@ defmodule Loomkin.Signals.Complexity do
         complexity_score: [type: :integer, required: true]
       ]
   end
-
-  defmodule SpawnConfirmed do
-    use Jido.Signal,
-      type: "team.spawn.confirmed",
-      schema: [
-        team_id: [type: :string, required: true],
-        specialist_type: [type: :string, required: true],
-        child_team_id: [type: :string, required: true]
-      ]
-  end
 end

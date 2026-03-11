@@ -25,9 +25,10 @@ defmodule Loomkin.Tools.PeerChangeRole do
 
   require Logger
 
-  alias Loomkin.Teams.{Manager, Role}
+  alias Loomkin.Teams.Manager
+  alias Loomkin.Teams.Role
 
-  @built_in_names Enum.map(Role.built_in_roles(), &Atom.to_string/1)
+  @built_in_names Role.built_in_roles() |> Enum.map(&Atom.to_string/1)
 
   @impl true
   def run(params, context) do
@@ -36,6 +37,15 @@ defmodule Loomkin.Tools.PeerChangeRole do
     new_role_str = param!(params, :new_role)
     require_approval = param(params, :require_approval) || false
     session_id = param(context, :session_id)
+    caller_name = param(context, :agent_name)
+    caller_role = param(context, :agent_role)
+
+    require_approval =
+      if target != caller_name and caller_role != :lead and caller_role != "lead" do
+        true
+      else
+        require_approval
+      end
 
     case resolve_role(new_role_str, session_id) do
       {:built_in, role_atom} ->
@@ -59,7 +69,7 @@ defmodule Loomkin.Tools.PeerChangeRole do
     if new_role_str in @built_in_names do
       {:built_in, String.to_existing_atom(new_role_str)}
     else
-      generate_opts = fast_model_opts(session_id)
+      generate_opts = Role.fast_model_opts(session_id)
 
       case Role.generate(new_role_str, generate_opts) do
         {:ok, role_config} ->
@@ -92,15 +102,6 @@ defmodule Loomkin.Tools.PeerChangeRole do
         {:built_in, String.to_existing_atom(name)}
     end
   end
-
-  defp fast_model_opts(session_id) when is_binary(session_id) do
-    case Loomkin.Session.Manager.find_session(session_id) do
-      {:ok, pid} -> [model: Loomkin.Session.get_fast_model(pid)]
-      :error -> []
-    end
-  end
-
-  defp fast_model_opts(_), do: []
 
   defp apply_role_change(team_id, target, role_name, extra_opts, require_approval) do
     case Manager.find_agent(team_id, target) do

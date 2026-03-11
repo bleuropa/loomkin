@@ -139,10 +139,16 @@ defmodule Loomkin.Teams.Negotiation do
             {:reply, :ok, state}
 
           {:negotiate, reason, counter_proposal} ->
+            if neg.timeout_ref, do: Process.cancel_timer(neg.timeout_ref)
+
+            new_timer_ref =
+              Process.send_after(self(), {:negotiation_timeout, task_id}, @default_timeout_ms * 2)
+
             neg = %{
               neg
               | status: :negotiating,
-                proposal: %{reason: reason, counter_proposal: counter_proposal}
+                proposal: %{reason: reason, counter_proposal: counter_proposal},
+                timeout_ref: new_timer_ref
             }
 
             state = put_in(state.negotiations[task_id], neg)
@@ -259,7 +265,7 @@ defmodule Loomkin.Teams.Negotiation do
     end
   end
 
-  # Catch-all
+  @impl true
   def handle_info(_msg, state) do
     {:noreply, state}
   end

@@ -31,4 +31,13 @@ defmodule Loomkin.Signals do
   def replay(path, start_timestamp \\ 0) do
     Bus.replay(@bus, path, start_timestamp)
   end
+
+  @doc "Check whether a signal belongs to the given team (or has no team scope)."
+  def signal_for_team?(%Jido.Signal{} = sig, team_id) do
+    signal_team_id =
+      get_in(sig.data, [:team_id]) ||
+        get_in(sig, [Access.key(:extensions, %{}), "loomkin", "team_id"])
+
+    signal_team_id == nil or signal_team_id == team_id
+  end
 end

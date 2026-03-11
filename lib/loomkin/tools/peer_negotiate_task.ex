@@ -39,17 +39,33 @@ defmodule Loomkin.Tools.PeerNegotiateTask do
 
     response =
       case response_type do
-        "accept" -> :accept
-        "decline" -> :decline
-        "negotiate" -> {:negotiate, reason || "", counter_proposal || ""}
+        "accept" ->
+          :accept
+
+        "decline" ->
+          :decline
+
+        "negotiate" ->
+          {:negotiate, reason || "", counter_proposal || ""}
+
+        _ ->
+          {:error,
+           "Unknown response type: #{response_type}. Use 'accept', 'decline', or 'negotiate'."}
       end
 
-    case Negotiation.respond(team_id, task_id, response) do
-      :ok ->
-        {:ok, %{result: "Negotiation response '#{response_type}' submitted for task #{task_id}"}}
+    case response do
+      {:error, msg} ->
+        {:error, msg}
 
-      {:error, reason} ->
-        {:ok, %{result: "Negotiation response failed: #{inspect(reason)}"}}
+      _ ->
+        case Negotiation.respond(team_id, task_id, response) do
+          :ok ->
+            {:ok,
+             %{result: "Negotiation response '#{response_type}' submitted for task #{task_id}"}}
+
+          {:error, err} ->
+            {:error, "Negotiation response failed: #{inspect(err)}"}
+        end
     end
   end
 end

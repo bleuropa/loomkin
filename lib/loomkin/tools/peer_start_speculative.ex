@@ -32,31 +32,41 @@ defmodule Loomkin.Tools.PeerStartSpeculative do
     blocker_task_id = param!(params, :blocker_task_id)
     assumed_output = param!(params, :assumed_output)
 
-    case Tasks.get_task(task_id) do
-      {:error, :not_found} ->
+    with {:task, {:ok, task}} <- {:task, Tasks.get_task(task_id)},
+         :ok <- validate_team(task, team_id, task_id),
+         {:blocker, {:ok, _blocker}} <- {:blocker, Tasks.get_task(blocker_task_id)} do
+      case Tasks.start_speculative(task_id, blocker_task_id, assumed_output) do
+        {:ok, started_task} ->
+          summary = """
+          Speculative execution started:
+            Task: #{started_task.id} (#{started_task.title})
+            Based on blocker: #{blocker_task_id}
+            Assumed output: #{String.slice(assumed_output, 0, 100)}
+          """
+
+          {:ok, %{result: String.trim(summary), task_id: started_task.id}}
+
+        {:error, :invalid_transition} ->
+          {:error, "Task must be pending or blocked to start speculative execution"}
+
+        {:error, reason} ->
+          {:error, "Failed to start speculative execution: #{inspect(reason)}"}
+      end
+    else
+      {:task, {:error, :not_found}} ->
         {:error, "Task not found: #{task_id}"}
 
-      {:ok, task} when task.team_id != team_id ->
-        {:error, "Task #{task_id} belongs to a different team"}
+      {:blocker, {:error, :not_found}} ->
+        {:error, "Blocker task not found: #{blocker_task_id}"}
 
-      {:ok, _task} ->
-        case Tasks.start_speculative(task_id, blocker_task_id, assumed_output) do
-          {:ok, task} ->
-            summary = """
-            Speculative execution started:
-              Task: #{task.id} (#{task.title})
-              Based on blocker: #{blocker_task_id}
-              Assumed output: #{String.slice(assumed_output, 0, 100)}
-            """
-
-            {:ok, %{result: String.trim(summary), task_id: task.id}}
-
-          {:error, :invalid_transition} ->
-            {:error, "Task must be pending or blocked to start speculative execution"}
-
-          {:error, reason} ->
-            {:error, "Failed to start speculative execution: #{inspect(reason)}"}
-        end
+      {:error, _} = err ->
+        err
     end
+  end
+
+  defp validate_team(task, team_id, task_id) do
+    if task.team_id == team_id,
+      do: :ok,
+      else: {:error, "Task #{task_id} belongs to a different team"}
   end
 end

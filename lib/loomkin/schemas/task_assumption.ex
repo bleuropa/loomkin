@@ -22,6 +22,7 @@ defmodule Loomkin.Schemas.TaskAssumption do
     assumption
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
+    |> validate_length(:assumption_key, min: 1)
     |> foreign_key_constraint(:task_id)
   end
 end

@@ -60,7 +60,8 @@ defmodule Loomkin.Tools.PeerChangeRoleDynamicTest do
 
       agents = Manager.list_agents(team_id)
       agent = Enum.find(agents, &(&1.name == "flex-agent"))
-      assert agent.role == :"security-auditor"
+      assert is_binary(agent.role)
+      assert String.starts_with?(agent.role, "security-auditor_")
     end
 
     test "agent tools are updated after role change with custom config", %{team_id: team_id} do
@@ -99,7 +100,8 @@ defmodule Loomkin.Tools.PeerChangeRoleDynamicTest do
       :ok = Agent.change_role(pid, role_config.name, role_config: role_config)
 
       state = GenServer.call(pid, :get_state)
-      assert state.role == :"docs-writer"
+      assert is_binary(state.role)
+      assert String.starts_with?(state.role, "docs-writer_")
       assert Loomkin.Tools.FileRead in state.tools
       assert Loomkin.Tools.FileWrite in state.tools
     end

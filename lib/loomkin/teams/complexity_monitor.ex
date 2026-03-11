@@ -73,6 +73,9 @@ defmodule Loomkin.Teams.ComplexityMonitor do
     threshold = Keyword.get(opts, :threshold, @default_threshold)
     spawn_cooldown = Keyword.get(opts, :spawn_cooldown, @default_spawn_cooldown_ms)
 
+    # Signal types are global (e.g. "team.conflict.detected", "team.task.assigned").
+    # Publishers don't include team_id in the path, so we subscribe globally and
+    # filter per-team via Signals.signal_for_team?/2 in handle_info.
     Signals.subscribe("team.conflict.*")
     Signals.subscribe("team.task.*")
     Signals.subscribe("decision.*")
@@ -100,7 +103,7 @@ defmodule Loomkin.Teams.ComplexityMonitor do
 
   @impl true
   def handle_call(:get_score, _from, state) do
-    score = calculate_score(state)
+    {score, _metrics, _tasks} = fetch_and_calculate(state)
     {:reply, score, state}
   end
 
@@ -120,11 +123,11 @@ defmodule Loomkin.Teams.ComplexityMonitor do
 
   @impl true
   def handle_info(:check_complexity, state) do
-    score = calculate_score(state)
+    {score, metrics, tasks} = fetch_and_calculate(state)
 
     # Check spawn suggestion BEFORE adding new score to history,
     # so the historical average reflects only prior scores.
-    state = maybe_suggest_spawn(state, score)
+    state = maybe_suggest_spawn(state, score, metrics, tasks)
 
     scores = Enum.take([score | state.scores], @max_history)
     state = %{state | scores: scores}
@@ -138,7 +141,7 @@ defmodule Loomkin.Teams.ComplexityMonitor do
 
   # Unwrap signal bus delivery tuples
   def handle_info({:signal, %Jido.Signal{} = sig}, state) do
-    if signal_for_team?(sig, state.team_id) do
+    if Signals.signal_for_team?(sig, state.team_id) do
       handle_info(sig, state)
     else
       {:noreply, state}
@@ -182,7 +185,15 @@ defmodule Loomkin.Teams.ComplexityMonitor do
     end
   end
 
-  defp calculate_score(state) do
+  defp fetch_and_calculate(state) do
+    team_id = state.team_id
+    metrics = CollaborationMetrics.get_metrics(team_id)
+    tasks = Context.list_cached_tasks(team_id)
+    score = calculate_score(state, metrics, tasks)
+    {score, metrics, tasks}
+  end
+
+  defp calculate_score(state, collab_metrics, cached_tasks) do
     team_id = state.team_id
 
     # High-confidence decision options (>= 75): weight 20
@@ -196,20 +207,24 @@ defmodule Loomkin.Teams.ComplexityMonitor do
     debate_score = min(state.pending_events.debates, 3) * 5
 
     # Recent conflicts: weight 25
-    collab_metrics = CollaborationMetrics.get_metrics(team_id)
     conflict_count = collab_metrics.conflict_count + state.pending_events.conflicts
     conflict_score = min(conflict_count, 5) * 5
 
     # Pending unresolved tasks: weight 10
-    pending_tasks = Context.list_cached_tasks(team_id)
-    pending_count = Enum.count(pending_tasks, fn t -> t.status in [:pending, :assigned] end)
+    pending_count = Enum.count(cached_tasks, fn t -> t.status in [:pending, :assigned] end)
     task_score = min(pending_count, 5) * 2
+
+    # Task creation burst: weight 10
+    task_creation_score = min(state.pending_events.tasks_created, 5) * 2
 
     # Decision graph health (inverted — low health = high complexity): weight 30
     graph_health = Pulse.compute_health(team_id: team_id)
     graph_complexity = div(max(0, 100 - graph_health) * 30, 100)
 
-    score = high_confidence_score + debate_score + conflict_score + task_score + graph_complexity
+    score =
+      high_confidence_score + debate_score + conflict_score + task_score + task_creation_score +
+        graph_complexity
+
     min(score, 100)
   end
 
@@ -228,13 +243,13 @@ defmodule Loomkin.Teams.ComplexityMonitor do
     end
   end
 
-  defp maybe_suggest_spawn(state, score) do
+  defp maybe_suggest_spawn(state, score, metrics, tasks) do
     avg = historical_avg(state.scores)
     now = System.monotonic_time(:millisecond)
     cooldown_elapsed = now - state.last_spawn_suggested_at > state.spawn_cooldown
 
     if score >= avg + 25 and score > state.threshold and cooldown_elapsed do
-      drivers = identify_drivers(state)
+      drivers = identify_drivers(state, metrics, tasks)
       specialist_type = recommend_specialist(drivers)
       reason = "complexity spike: score #{score} vs avg #{avg}, drivers: #{inspect(drivers)}"
 
@@ -250,36 +265,19 @@ defmodule Loomkin.Teams.ComplexityMonitor do
     end
   end
 
-  defp identify_drivers(state) do
-    drivers = []
+  defp identify_drivers(state, collab_metrics, cached_tasks) do
+    pending_count = Enum.count(cached_tasks, fn t -> t.status in [:pending, :assigned] end)
 
-    collab_metrics = CollaborationMetrics.get_metrics(state.team_id)
-
-    drivers =
-      if collab_metrics.conflict_count + state.pending_events.conflicts > 0 do
-        [:conflicts | drivers]
-      else
-        drivers
-      end
-
-    pending_tasks = Context.list_cached_tasks(state.team_id)
-    pending_count = Enum.count(pending_tasks, fn t -> t.status in [:pending, :assigned] end)
-
-    drivers =
-      if pending_count > 3 do
-        [:pending_tasks | drivers]
-      else
-        drivers
-      end
-
-    drivers =
-      if state.pending_events.debates > 2 do
-        [:long_debates | drivers]
-      else
-        drivers
-      end
-
-    if drivers == [], do: [:general_complexity], else: drivers
+    [
+      collab_metrics.conflict_count + state.pending_events.conflicts > 0 && :conflicts,
+      pending_count > 3 && :pending_tasks,
+      state.pending_events.debates > 2 && :long_debates
+    ]
+    |> Enum.filter(& &1)
+    |> case do
+      [] -> [:general_complexity]
+      drivers -> drivers
+    end
   end
 
   defp recommend_specialist(drivers) do
@@ -330,6 +328,8 @@ defmodule Loomkin.Teams.ComplexityMonitor do
   end
 
   defp record_decision(team_id, specialist_type, score, drivers) do
+    # NOTE: DecisionNode schema has no team_id field — team_id is stored in
+    # metadata only. A schema migration would be needed for direct queryability.
     Graph.add_node(%{
       node_type: :goal,
       title: "Auto-spawn #{specialist_type} specialist team",
@@ -354,13 +354,5 @@ defmodule Loomkin.Teams.ComplexityMonitor do
         }
       })
     end)
-  end
-
-  defp signal_for_team?(sig, team_id) do
-    signal_team_id =
-      get_in(sig.data, [:team_id]) ||
-        get_in(sig, [Access.key(:extensions, %{}), "loomkin", "team_id"])
-
-    signal_team_id == nil or signal_team_id == team_id
   end
 end

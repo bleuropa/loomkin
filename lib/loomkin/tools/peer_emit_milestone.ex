@@ -21,10 +21,11 @@ defmodule Loomkin.Tools.PeerEmitMilestone do
   alias Loomkin.Teams.Tasks
 
   @impl true
-  def run(params, _context) do
+  def run(params, context) do
     team_id = param!(params, :team_id)
     task_id = param!(params, :task_id)
     milestone_name = param!(params, :milestone_name)
+    agent_name = param!(context, :agent_name)
 
     case Tasks.get_task(task_id) do
       {:error, :not_found} ->
@@ -32,6 +33,9 @@ defmodule Loomkin.Tools.PeerEmitMilestone do
 
       {:ok, task} when task.team_id != team_id ->
         {:error, "Task #{task_id} belongs to a different team"}
+
+      {:ok, task} when task.owner != agent_name ->
+        {:error, "Agent #{agent_name} does not own task #{task_id} (owner: #{task.owner})"}
 
       {:ok, _task} ->
         case Tasks.emit_milestone(team_id, task_id, milestone_name) do

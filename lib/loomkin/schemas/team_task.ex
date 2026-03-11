@@ -49,5 +49,7 @@ defmodule Loomkin.Schemas.TeamTask do
     task
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
+    |> validate_number(:confidence, greater_than_or_equal_to: 0, less_than_or_equal_to: 1)
+    |> foreign_key_constraint(:based_on_tentative, name: :team_tasks_based_on_tentative_fkey)
   end
 end

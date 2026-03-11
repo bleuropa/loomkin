@@ -1,6 +1,7 @@
 defmodule Loomkin.Teams.Tasks do
   @moduledoc "CRUD + coordination logic for team tasks."
 
+  require Logger
   import Ecto.Query
   alias Loomkin.Repo
   alias Loomkin.Schemas.TaskAssumption
@@ -98,7 +99,14 @@ defmodule Loomkin.Teams.Tasks do
         record_capability(task, :success)
         record_learning_metric(task, true)
         auto_schedule_unblocked(task.team_id)
-        validate_speculative_dependents(task)
+
+        case validate_speculative_dependents(task) do
+          {:error, reason} ->
+            Logger.warning("validate_speculative_dependents failed: #{inspect(reason)}")
+
+          _ ->
+            :ok
+        end
       end)
     end
   end
@@ -188,20 +196,16 @@ defmodule Loomkin.Teams.Tasks do
     if task.status != :in_progress do
       {:error, :invalid_transition}
     else
-      completed_items =
-        Map.get(partial_data, :completed_items) || Map.get(partial_data, "completed_items")
-
-      total_items =
-        Map.get(partial_data, :total_items) || Map.get(partial_data, "total_items")
-
-      output =
-        Map.get(partial_data, :output) || Map.get(partial_data, "output") || ""
+      completed_items = get_flexible(partial_data, :completed_items, "completed_items")
+      total_items = get_flexible(partial_data, :total_items, "total_items")
+      output = get_flexible(partial_data, :output, "output") || ""
+      next_steps = get_flexible(partial_data, :next_steps, "next_steps")
 
       partial_results = %{
         "completed_items" => completed_items,
         "total_items" => total_items,
         "output" => output,
-        "next_steps" => Map.get(partial_data, :next_steps) || Map.get(partial_data, "next_steps")
+        "next_steps" => next_steps
       }
 
       summary =
@@ -274,7 +278,7 @@ defmodule Loomkin.Teams.Tasks do
     * `:milestone_name` - optional milestone name for milestone-based deps
 
   Returns `{:ok, dep}` or `{:error, reason}`.
-  Rejects cycles (up to 10 levels deep).
+  Rejects cycles via recursive CTE.
   """
   def add_dependency(task_id, depends_on_id, dep_type \\ :blocks, opts \\ []) do
     milestone_name = Keyword.get(opts, :milestone_name)
@@ -394,12 +398,15 @@ defmodule Loomkin.Teams.Tasks do
   @doc """
   Detect if adding an edge from `from_id` to `to_id` would create a cycle.
 
-  Performs a DFS from `to_id` looking for `from_id`, limited to 10 levels deep.
+  Uses a recursive CTE to walk ancestors of `to_id` looking for `from_id`.
   Returns `true` if a cycle would be created.
   """
-  def detect_cycle?(from_id, to_id, max_depth \\ 10) do
-    visited = MapSet.new()
-    do_detect_cycle(to_id, from_id, visited, 0, max_depth)
+  def detect_cycle?(from_id, to_id) do
+    if from_id == to_id do
+      true
+    else
+      detect_cycle_cte(to_id, from_id)
+    end
   end
 
   @doc """
@@ -409,30 +416,42 @@ defmodule Loomkin.Teams.Tasks do
   that have a lower (numerically higher) priority value.
   """
   def propagate_priority(task_id, new_priority) do
-    predecessors =
-      Repo.all(
-        from d in TeamTaskDep,
-          join: dep in TeamTask,
-          on: d.depends_on_id == dep.id,
-          where: d.task_id == ^task_id and d.dep_type in [:blocks, :requires_output],
-          select: dep
-      )
-
-    Enum.each(predecessors, fn pred ->
-      if pred.priority > new_priority do
-        pred
-        |> TeamTask.changeset(%{priority: new_priority})
-        |> Repo.update()
-        |> tap_ok(fn updated ->
-          Comms.broadcast_task_event(
-            updated.team_id,
-            {:task_priority_changed, updated.id, updated.owner, new_priority}
-          )
-
-          propagate_priority(updated.id, new_priority)
-        end)
-      end
+    Repo.transaction(fn ->
+      do_propagate_priority(task_id, new_priority, MapSet.new())
     end)
+  end
+
+  defp do_propagate_priority(task_id, new_priority, visited) do
+    if MapSet.member?(visited, task_id) do
+      :ok
+    else
+      visited = MapSet.put(visited, task_id)
+
+      predecessors =
+        Repo.all(
+          from d in TeamTaskDep,
+            join: dep in TeamTask,
+            on: d.depends_on_id == dep.id,
+            where: d.task_id == ^task_id and d.dep_type in [:blocks, :requires_output],
+            select: dep
+        )
+
+      Enum.each(predecessors, fn pred ->
+        if pred.priority > new_priority do
+          pred
+          |> TeamTask.changeset(%{priority: new_priority})
+          |> Repo.update()
+          |> tap_ok(fn updated ->
+            Comms.broadcast_task_event(
+              updated.team_id,
+              {:task_priority_changed, updated.id, updated.owner, new_priority}
+            )
+
+            do_propagate_priority(updated.id, new_priority, visited)
+          end)
+        end
+      end)
+    end
   end
 
   def list_available(team_id) do
@@ -616,7 +635,7 @@ defmodule Loomkin.Teams.Tasks do
 
   Stores the assumption key and assumed value in the `task_assumptions` table.
   """
-  def record_assumption(task_id, assumption_key, assumed_value, _opts \\ []) do
+  def record_assumption(task_id, assumption_key, assumed_value) do
     %TaskAssumption{}
     |> TaskAssumption.changeset(%{
       task_id: task_id,
@@ -718,21 +737,34 @@ defmodule Loomkin.Teams.Tasks do
     if task.status not in [:completed_tentative, :pending_speculative] do
       {:error, :invalid_transition}
     else
-      task
-      |> TeamTask.changeset(%{status: :discarded_tentative})
-      |> Repo.update()
+      Repo.transaction(fn ->
+        case task
+             |> TeamTask.changeset(%{status: :discarded_tentative})
+             |> Repo.update() do
+          {:ok, updated_task} ->
+            from(a in TaskAssumption, where: a.task_id == ^task_id) |> Repo.delete_all()
+
+            if Keyword.get(opts, :requeue, false) do
+              case requeue_speculative(updated_task) do
+                {:ok, requeued} -> requeued
+                {:error, reason} -> Repo.rollback(reason)
+              end
+            else
+              updated_task
+            end
+
+          {:error, changeset} ->
+            Repo.rollback(changeset)
+        end
+      end)
       |> tap_ok(fn task ->
         Comms.broadcast_task_event(task.team_id, {:speculative_discarded, task.id})
 
         Context.cache_task(task.team_id, task.id, %{
           title: task.title,
-          status: :discarded_tentative,
+          status: task.status,
           owner: task.owner
         })
-
-        if Keyword.get(opts, :requeue, false) do
-          requeue_speculative(task)
-        end
       end)
     end
   end
@@ -745,13 +777,18 @@ defmodule Loomkin.Teams.Tasks do
   def complete_speculative(task_id, result) do
     task = get_task!(task_id)
 
-    if task.status not in [:pending_speculative, :in_progress] or not task.speculative do
+    if task.status != :pending_speculative or not task.speculative do
       {:error, :invalid_transition}
     else
       task
       |> TeamTask.changeset(%{status: :completed_tentative, result: result})
       |> Repo.update()
       |> tap_ok(fn task ->
+        Comms.broadcast_task_event(
+          task.team_id,
+          {:task_speculative_completed, task.id, task.owner, result}
+        )
+
         Context.cache_task(task.team_id, task.id, %{
           title: task.title,
           status: :completed_tentative,
@@ -771,52 +808,48 @@ defmodule Loomkin.Teams.Tasks do
   end
 
   defp blocked_task_ids(team_id) do
-    # :blocks deps only unblock when predecessor is :completed
     blocks_blocked =
-      Repo.all(
-        from d in TeamTaskDep,
-          join: t in TeamTask,
-          on: d.task_id == t.id,
-          join: dep in TeamTask,
-          on: d.depends_on_id == dep.id,
-          where:
-            t.team_id == ^team_id and d.dep_type == :blocks and
-              dep.status != :completed and is_nil(d.milestone_name),
-          select: d.task_id,
-          distinct: true
-      )
+      from d in TeamTaskDep,
+        join: t in TeamTask,
+        on: d.task_id == t.id,
+        join: dep in TeamTask,
+        on: d.depends_on_id == dep.id,
+        where:
+          t.team_id == ^team_id and d.dep_type == :blocks and
+            dep.status != :completed and is_nil(d.milestone_name),
+        select: d.task_id
 
-    # :requires_output deps unblock when predecessor is :completed OR :partially_complete
     requires_output_blocked =
-      Repo.all(
-        from d in TeamTaskDep,
-          join: t in TeamTask,
-          on: d.task_id == t.id,
-          join: dep in TeamTask,
-          on: d.depends_on_id == dep.id,
-          where:
-            t.team_id == ^team_id and d.dep_type == :requires_output and
-              dep.status not in [:completed, :partially_complete] and is_nil(d.milestone_name),
-          select: d.task_id,
-          distinct: true
-      )
+      from d in TeamTaskDep,
+        join: t in TeamTask,
+        on: d.task_id == t.id,
+        join: dep in TeamTask,
+        on: d.depends_on_id == dep.id,
+        where:
+          t.team_id == ^team_id and d.dep_type == :requires_output and
+            dep.status not in [:completed, :partially_complete] and is_nil(d.milestone_name),
+        select: d.task_id
 
-    # Tasks blocked by milestone deps where the milestone hasn't been emitted yet
     milestone_blocked =
-      Repo.all(
-        from d in TeamTaskDep,
-          join: t in TeamTask,
-          on: d.task_id == t.id,
-          join: dep in TeamTask,
-          on: d.depends_on_id == dep.id,
-          where:
-            t.team_id == ^team_id and not is_nil(d.milestone_name) and
-              fragment("? != ALL(?)", d.milestone_name, dep.milestones_emitted),
-          select: d.task_id,
-          distinct: true
-      )
+      from d in TeamTaskDep,
+        join: t in TeamTask,
+        on: d.task_id == t.id,
+        join: dep in TeamTask,
+        on: d.depends_on_id == dep.id,
+        where:
+          t.team_id == ^team_id and not is_nil(d.milestone_name) and
+            fragment(
+              "? != ALL(coalesce(?, ARRAY[]::varchar[]))",
+              d.milestone_name,
+              dep.milestones_emitted
+            ),
+        select: d.task_id
 
-    Enum.uniq(blocks_blocked ++ requires_output_blocked ++ milestone_blocked)
+    blocks_blocked
+    |> union(^requires_output_blocked)
+    |> union(^milestone_blocked)
+    |> distinct(true)
+    |> Repo.all()
   end
 
   defp auto_schedule_unblocked(team_id) do
@@ -867,30 +900,20 @@ defmodule Loomkin.Teams.Tasks do
     _ -> :ok
   end
 
-  defp do_detect_cycle(_current, _target, _visited, depth, max_depth) when depth >= max_depth do
-    false
-  end
+  defp detect_cycle_cte(start_id, target_id) do
+    sql = """
+    WITH RECURSIVE ancestors AS (
+      SELECT depends_on_id FROM team_task_deps WHERE task_id = $1 AND dep_type IN ('blocks', 'requires_output')
+      UNION
+      SELECT d.depends_on_id FROM team_task_deps d JOIN ancestors a ON d.task_id = a.depends_on_id WHERE d.dep_type IN ('blocks', 'requires_output')
+    )
+    SELECT 1 FROM ancestors WHERE depends_on_id = $2 LIMIT 1
+    """
 
-  defp do_detect_cycle(current, target, _visited, _depth, _max_depth) when current == target do
-    true
-  end
-
-  defp do_detect_cycle(current, target, visited, depth, max_depth) do
-    if MapSet.member?(visited, current) do
-      false
-    else
-      visited = MapSet.put(visited, current)
-
-      deps =
-        Repo.all(
-          from d in TeamTaskDep,
-            where: d.task_id == ^current,
-            select: d.depends_on_id
-        )
-
-      Enum.any?(deps, fn dep_id ->
-        do_detect_cycle(dep_id, target, visited, depth + 1, max_depth)
-      end)
+    case Repo.query(sql, [Ecto.UUID.dump!(start_id), Ecto.UUID.dump!(target_id)]) do
+      {:ok, %{num_rows: 0}} -> false
+      {:ok, _} -> true
+      {:error, _} -> false
     end
   end
 
@@ -902,24 +925,34 @@ defmodule Loomkin.Teams.Tasks do
           where: t.status in [:pending_speculative, :completed_tentative]
       )
 
-    Enum.each(speculative_tasks, fn spec_task ->
-      case validate_assumptions(spec_task.id) do
-        {:ok, true} ->
-          if spec_task.status == :completed_tentative do
-            confirm_tentative(spec_task.id)
-          end
+    errors =
+      Enum.reduce(speculative_tasks, [], fn spec_task, acc ->
+        case validate_assumptions(spec_task.id) do
+          {:ok, true} ->
+            if spec_task.status == :completed_tentative do
+              confirm_tentative(spec_task.id)
+            end
 
-        {:error, mismatches} ->
-          Enum.each(mismatches, fn m ->
-            Comms.broadcast_task_event(
-              spec_task.team_id,
-              {:assumption_violated, spec_task.id, m.key, m.assumed, m.actual}
-            )
-          end)
+            acc
 
-          discard_tentative(spec_task.id, requeue: true)
-      end
-    end)
+          {:error, mismatches} ->
+            Enum.each(mismatches, fn m ->
+              Comms.broadcast_task_event(
+                spec_task.team_id,
+                {:assumption_violated, spec_task.id, m.key, m.assumed, m.actual}
+              )
+            end)
+
+            discard_tentative(spec_task.id, requeue: true)
+            [{spec_task.id, mismatches} | acc]
+        end
+      end)
+
+    if errors == [] do
+      :ok
+    else
+      {:error, errors}
+    end
   end
 
   defp requeue_speculative(task) do
@@ -947,4 +980,11 @@ defmodule Loomkin.Teams.Tasks do
   end
 
   defp tap_ok(error, _fun), do: error
+
+  defp get_flexible(map, atom_key, string_key) do
+    case Map.fetch(map, atom_key) do
+      {:ok, val} -> val
+      :error -> Map.get(map, string_key)
+    end
+  end
 end

@@ -58,6 +58,12 @@ defmodule Loomkin.AgentLoop.Strategies do
       {:wait, ms} ->
         Process.sleep(min(ms, 5_000))
 
+        case maybe_acquire_rate_limit(config, provider) do
+          :ok -> :ok
+          {:wait, _} -> throw({:rate_limited, provider})
+          {:budget_exceeded, scope} -> throw({:budget_exceeded, scope})
+        end
+
       {:budget_exceeded, scope} ->
         throw({:budget_exceeded, scope})
     end
@@ -101,6 +107,9 @@ defmodule Loomkin.AgentLoop.Strategies do
   catch
     {:budget_exceeded, _scope} ->
       {:error, "Budget exceeded", messages}
+
+    {:rate_limited, _provider} ->
+      {:error, :rate_limited, messages}
   end
 
   # -- Strategy system prompt wrappers --

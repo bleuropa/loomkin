@@ -1077,7 +1077,7 @@ defmodule Loomkin.Teams.Agent do
             send(agent_pid, {:loop_resumed, result})
           end)
 
-          {:noreply, %{state | pending_permission: nil}}
+          {:noreply, state}
         end
     end
   end
@@ -1085,195 +1085,191 @@ defmodule Loomkin.Teams.Agent do
   # --- Async loop result handlers ---
 
   @impl true
-  def handle_info({ref, {:loop_ok, text, msgs, meta}}, state) when is_reference(ref) do
+  def handle_info(
+        {ref, {:loop_ok, text, msgs, meta}},
+        %{loop_task: {%Task{ref: task_ref}, _from}} = state
+      )
+      when ref == task_ref do
     Process.demonitor(ref, [:flush])
+    {%Task{}, from} = state.loop_task
+    task_id = state.task && state.task[:id]
 
-    case state.loop_task do
-      {%Task{ref: ^ref}, from} ->
-        task_id = state.task && state.task[:id]
+    if task_id,
+      do: ModelRouter.record_success(state.team_id, state.name, task_id, state.model)
 
-        if task_id,
-          do: ModelRouter.record_success(state.team_id, state.name, task_id, state.model)
-
-        # Mark cached task as completed and clear agent task
-        if task_id do
-          Context.cache_task(state.team_id, task_id, %{
-            title: (state.task && state.task[:title]) || "completed",
-            status: :completed,
-            owner: state.name
-          })
-        end
-
-        state = %{state | messages: msgs, failure_count: 0, loop_task: nil, task: nil}
-        state = track_usage(state, meta)
-
-        # Weaver stays idle and schedules next cycle
-        state =
-          if state.role == :weaver and is_nil(from) do
-            maybe_schedule_weaver_cycle(state)
-            set_status_and_broadcast(state, :idle)
-          else
-            set_status_and_broadcast(state, :idle)
-          end
-
-        if from do
-          GenServer.reply(from, {:ok, text})
-        else
-          if task_id, do: Loomkin.Teams.Tasks.complete_task(task_id, text)
-        end
-
-        {:noreply, drain_queues(maybe_apply_queued_pause(state, msgs))}
-
-      _ ->
-        {:noreply, state}
+    # Mark cached task as completed and clear agent task
+    if task_id do
+      Context.cache_task(state.team_id, task_id, %{
+        title: (state.task && state.task[:title]) || "completed",
+        status: :completed,
+        owner: state.name
+      })
     end
+
+    state = %{state | messages: msgs, failure_count: 0, loop_task: nil, task: nil}
+    state = track_usage(state, meta)
+
+    # Weaver stays idle and schedules next cycle
+    state =
+      if state.role == :weaver and is_nil(from) do
+        maybe_schedule_weaver_cycle(state)
+        set_status_and_broadcast(state, :idle)
+      else
+        set_status_and_broadcast(state, :idle)
+      end
+
+    if from do
+      GenServer.reply(from, {:ok, text})
+    else
+      if task_id, do: Loomkin.Teams.Tasks.complete_task(task_id, text)
+    end
+
+    {:noreply, drain_queues(maybe_apply_queued_pause(state, msgs))}
   end
 
   @impl true
-  def handle_info({ref, {:loop_ok_escalated, text, msgs, meta, new_model}}, state)
-      when is_reference(ref) do
+  def handle_info(
+        {ref, {:loop_ok_escalated, text, msgs, meta, new_model}},
+        %{loop_task: {%Task{ref: task_ref}, _from}} = state
+      )
+      when ref == task_ref do
     Process.demonitor(ref, [:flush])
+    {%Task{}, from} = state.loop_task
+    task_id = state.task && state.task[:id]
+    if task_id, do: ModelRouter.record_success(state.team_id, state.name, task_id, new_model)
 
-    case state.loop_task do
-      {%Task{ref: ^ref}, from} ->
-        task_id = state.task && state.task[:id]
-        if task_id, do: ModelRouter.record_success(state.team_id, state.name, task_id, new_model)
-
-        if task_id do
-          Context.cache_task(state.team_id, task_id, %{
-            title: (state.task && state.task[:title]) || "completed",
-            status: :completed,
-            owner: state.name
-          })
-        end
-
-        state =
-          %{state | messages: msgs, failure_count: 0, model: new_model, loop_task: nil, task: nil}
-
-        state = track_usage(state, meta)
-
-        # Weaver stays idle and schedules next cycle
-        state =
-          if state.role == :weaver and is_nil(from) do
-            maybe_schedule_weaver_cycle(state)
-            set_status_and_broadcast(state, :idle)
-          else
-            set_status_and_broadcast(state, :idle)
-          end
-
-        if from do
-          GenServer.reply(from, {:ok, text})
-        else
-          if task_id, do: Loomkin.Teams.Tasks.complete_task(task_id, text)
-        end
-
-        {:noreply, drain_queues(maybe_apply_queued_pause(state, msgs))}
-
-      _ ->
-        {:noreply, state}
+    if task_id do
+      Context.cache_task(state.team_id, task_id, %{
+        title: (state.task && state.task[:title]) || "completed",
+        status: :completed,
+        owner: state.name
+      })
     end
+
+    state =
+      %{state | messages: msgs, failure_count: 0, model: new_model, loop_task: nil, task: nil}
+
+    state = track_usage(state, meta)
+
+    # Weaver stays idle and schedules next cycle
+    state =
+      if state.role == :weaver and is_nil(from) do
+        maybe_schedule_weaver_cycle(state)
+        set_status_and_broadcast(state, :idle)
+      else
+        set_status_and_broadcast(state, :idle)
+      end
+
+    if from do
+      GenServer.reply(from, {:ok, text})
+    else
+      if task_id, do: Loomkin.Teams.Tasks.complete_task(task_id, text)
+    end
+
+    {:noreply, drain_queues(maybe_apply_queued_pause(state, msgs))}
   end
 
   @impl true
-  def handle_info({ref, {:loop_error, reason, msgs}}, state) when is_reference(ref) do
+  def handle_info(
+        {ref, {:loop_error, reason, msgs}},
+        %{loop_task: {%Task{ref: task_ref}, _from}} = state
+      )
+      when ref == task_ref do
     Process.demonitor(ref, [:flush])
+    {%Task{}, from} = state.loop_task
+    task_id = state.task && state.task[:id]
 
-    case state.loop_task do
-      {%Task{ref: ^ref}, from} ->
-        task_id = state.task && state.task[:id]
+    require Logger
 
-        require Logger
+    Logger.error(
+      "[Kin:agent] loop error name=#{state.name} team=#{state.team_id} reason=#{inspect(reason)}"
+    )
 
-        Logger.error(
-          "[Kin:agent] loop error name=#{state.name} team=#{state.team_id} reason=#{inspect(reason)}"
-        )
-
-        if task_id do
-          Context.cache_task(state.team_id, task_id, %{
-            title: (state.task && state.task[:title]) || "failed",
-            status: :failed,
-            owner: state.name
-          })
-        end
-
-        state = %{state | messages: msgs, loop_task: nil}
-
-        state =
-          if state.role == :weaver do
-            failure_count = state.failure_count + 1
-            state = %{state | failure_count: failure_count}
-
-            if failure_count <= 3 and team_still_active?(state) do
-              delay = min(30_000 * failure_count, 120_000)
-              Process.send_after(self(), :weaver_cycle, delay)
-            end
-
-            set_status_and_broadcast(state, :idle)
-          else
-            set_status_and_broadcast(state, :idle)
-          end
-
-        if from do
-          GenServer.reply(from, {:error, reason})
-        else
-          if task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, inspect(reason))
-        end
-
-        {:noreply, drain_queues(maybe_apply_queued_pause(state, msgs))}
-
-      _ ->
-        {:noreply, state}
+    if task_id do
+      Context.cache_task(state.team_id, task_id, %{
+        title: (state.task && state.task[:title]) || "failed",
+        status: :failed,
+        owner: state.name
+      })
     end
+
+    state = %{state | messages: msgs, loop_task: nil}
+
+    state =
+      if state.role == :weaver do
+        failure_count = state.failure_count + 1
+        state = %{state | failure_count: failure_count}
+
+        if failure_count <= 3 and team_still_active?(state) do
+          delay = min(30_000 * failure_count, 120_000)
+          Process.send_after(self(), :weaver_cycle, delay)
+        end
+
+        set_status_and_broadcast(state, :idle)
+      else
+        set_status_and_broadcast(state, :idle)
+      end
+
+    if from do
+      GenServer.reply(from, {:error, reason})
+    else
+      if task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, inspect(reason))
+    end
+
+    {:noreply, drain_queues(maybe_apply_queued_pause(state, msgs))}
   end
 
   @impl true
-  def handle_info({ref, {:loop_pending, pending_info, msgs}}, state) when is_reference(ref) do
+  def handle_info(
+        {ref, {:loop_pending, pending_info, msgs}},
+        %{loop_task: {%Task{ref: task_ref}, _from}} = state
+      )
+      when ref == task_ref do
     Process.demonitor(ref, [:flush])
+    {%Task{}, from} = state.loop_task
+    state = %{state | messages: msgs, pending_permission: pending_info, loop_task: nil}
+    state = set_status(state, :waiting_permission)
 
-    case state.loop_task do
-      {%Task{ref: ^ref}, from} ->
-        state = %{state | messages: msgs, pending_permission: pending_info, loop_task: nil}
-        state = set_status(state, :waiting_permission)
+    if from, do: GenServer.reply(from, {:ok, :pending_permission})
 
-        if from, do: GenServer.reply(from, {:ok, :pending_permission})
-
-        {:noreply, drain_queues(state)}
-
-      _ ->
-        {:noreply, state}
-    end
+    {:noreply, drain_queues(state)}
   end
 
   @impl true
-  def handle_info({ref, {:loop_paused, reason, msgs, iteration}}, state)
-      when is_reference(ref) do
+  def handle_info(
+        {ref, {:loop_paused, reason, msgs, iteration}},
+        %{loop_task: {%Task{ref: task_ref}, _from}} = state
+      )
+      when ref == task_ref do
     Process.demonitor(ref, [:flush])
+    {%Task{}, from} = state.loop_task
 
-    case state.loop_task do
-      {%Task{ref: ^ref}, from} ->
-        paused_state = %{
-          messages: msgs,
-          iteration: iteration,
-          reason: reason
-        }
+    paused_state = %{
+      messages: msgs,
+      iteration: iteration,
+      reason: reason
+    }
 
-        state = %{
-          state
-          | messages: msgs,
-            loop_task: nil,
-            pause_requested: false,
-            paused_state: paused_state
-        }
+    state = %{
+      state
+      | messages: msgs,
+        loop_task: nil,
+        pause_requested: false,
+        paused_state: paused_state
+    }
 
-        state = set_status_and_broadcast(state, :paused)
+    state = set_status_and_broadcast(state, :paused)
 
-        if from, do: GenServer.reply(from, {:ok, :paused})
+    if from, do: GenServer.reply(from, {:ok, :paused})
 
-        {:noreply, drain_queues(state)}
+    {:noreply, drain_queues(state)}
+  end
 
-      _ ->
-        {:noreply, state}
-    end
+  # Fallthrough for unrecognized Task refs (e.g. from stale or external tasks)
+  @impl true
+  def handle_info({ref, _msg}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, state}
   end
 
   @impl true
@@ -1929,7 +1925,15 @@ defmodule Loomkin.Teams.Agent do
     task_id = state.task && state.task[:id]
     if task_id, do: ModelRouter.record_success(state.team_id, state.name, task_id, state.model)
 
-    state = %{state | messages: messages, failure_count: 0, loop_task: nil, task: nil}
+    state = %{
+      state
+      | messages: messages,
+        failure_count: 0,
+        loop_task: nil,
+        task: nil,
+        pending_permission: nil
+    }
+
     state = track_usage(state, metadata)
     maybe_schedule_weaver_cycle(state)
     state = set_status_and_broadcast(state, :idle)
@@ -1944,7 +1948,7 @@ defmodule Loomkin.Teams.Agent do
 
   @impl true
   def handle_info({:loop_resumed, {:error, _reason, messages}}, state) do
-    state = %{state | messages: messages, loop_task: nil, task: nil}
+    state = %{state | messages: messages, loop_task: nil, task: nil, pending_permission: nil}
     maybe_schedule_weaver_cycle(state)
     state = set_status_and_broadcast(state, :idle)
     {:noreply, drain_queues(state)}
@@ -1965,7 +1969,8 @@ defmodule Loomkin.Teams.Agent do
       state
       | messages: messages,
         pause_requested: false,
-        paused_state: paused_state
+        paused_state: paused_state,
+        pending_permission: nil
     }
 
     state = set_status_and_broadcast(state, :paused)

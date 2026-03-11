@@ -105,7 +105,7 @@ defmodule Loomkin.Tools.TeamSpawnTest do
       on_exit(fn -> Manager.dissolve_team(parent_team_id) end)
     end
 
-    test "resolve_role maps 'coordinator' to weaver not lead" do
+    test "resolve_role maps 'coordinator' to lead via fuzzy match" do
       {:ok, parent_team_id} = Manager.create_team(name: "role-res-coord")
 
       params = %{
@@ -123,8 +123,7 @@ defmodule Loomkin.Tools.TeamSpawnTest do
       }
 
       {:ok, result} = TeamSpawn.run(params, context)
-      # coordinator should resolve to weaver, not lead
-      assert result.result =~ "c1 (weaver): spawned"
+      assert result.result =~ "c1 (lead): spawned"
 
       on_exit(fn -> Manager.dissolve_team(parent_team_id) end)
     end

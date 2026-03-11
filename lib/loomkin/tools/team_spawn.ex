@@ -1,7 +1,7 @@
 defmodule Loomkin.Tools.TeamSpawn do
   @moduledoc "Spawn a team with agents."
 
-  @valid_roles ~w(lead researcher coder reviewer tester concierge weaver)
+  @valid_roles Loomkin.Teams.Role.built_in_roles() |> Enum.map(&Atom.to_string/1)
 
   use Jido.Action,
     name: "team_spawn",
@@ -110,7 +110,7 @@ defmodule Loomkin.Tools.TeamSpawn do
             end
 
           {:custom, role_desc} ->
-            generate_opts = fast_model_opts(session_id)
+            generate_opts = Role.fast_model_opts(session_id)
 
             case Role.generate(role_desc, generate_opts) do
               {:ok, %Role{} = role_config} ->
@@ -228,15 +228,6 @@ defmodule Loomkin.Tools.TeamSpawn do
         nil
     end
   end
-
-  defp fast_model_opts(session_id) when is_binary(session_id) do
-    case Loomkin.Session.Manager.find_session(session_id) do
-      {:ok, pid} -> [model: Loomkin.Session.get_fast_model(pid)]
-      :error -> []
-    end
-  end
-
-  defp fast_model_opts(_), do: []
 
   defp format_personal_manifest(my_name, team_name, purpose, teammates) do
     teammate_lines =

@@ -22,13 +22,16 @@ defmodule Loomkin.Teams.Role do
   @type reasoning_strategy :: :react | :cot | :cod | :tot | :adaptive
 
   @type t :: %__MODULE__{
-          name: atom(),
+          name: atom() | String.t(),
           model_tier: atom(),
           tools: [module()],
           system_prompt: String.t(),
           budget_limit: float() | nil,
           reasoning_strategy: reasoning_strategy()
         }
+
+  @max_role_name_length 64
+  @valid_reasoning_strategies [:react, :cot, :cod, :tot, :adaptive]
 
   # Legacy tier map — kept only for backward-compatible `model_for_tier/1` calls
   # and legacy config parsing. New code should use `ModelRouter.default_model/0`.
@@ -778,6 +781,17 @@ defmodule Loomkin.Teams.Role do
     Map.keys(@built_in_role_data)
   end
 
+  @doc "Resolve fast model options from a session ID. Shared by TeamSpawn and PeerChangeRole."
+  @spec fast_model_opts(String.t() | nil) :: keyword()
+  def fast_model_opts(session_id) when is_binary(session_id) do
+    case Loomkin.Session.Manager.find_session(session_id) do
+      {:ok, pid} -> [model: Loomkin.Session.get_fast_model(pid)]
+      :error -> []
+    end
+  end
+
+  def fast_model_opts(_), do: []
+
   # -- Tool catalog descriptions (for LLM-based role generation) --
 
   @tool_descriptions %{
@@ -952,12 +966,21 @@ defmodule Loomkin.Teams.Role do
   end
 
   defp build_validated_role(name_str, prompt, tool_names) do
-    # Validate role name — must be a safe atom-compatible string
-    role_name =
+    built_in_names = MapSet.new(built_in_roles(), &Atom.to_string/1)
+
+    sanitized =
       name_str
       |> String.downcase()
       |> String.replace(~r/[^a-z0-9_-]/, "_")
-      |> String.to_atom()
+      |> String.slice(0, @max_role_name_length)
+
+    role_name =
+      if MapSet.member?(built_in_names, sanitized) do
+        String.to_existing_atom(sanitized)
+      else
+        hash = :crypto.hash(:sha256, name_str) |> Base.encode16(case: :lower) |> binary_part(0, 6)
+        sanitized <> "_" <> hash
+      end
 
     # Cap the role-specific prompt at ~2048 tokens
     capped_prompt =
@@ -1020,13 +1043,20 @@ defmodule Loomkin.Teams.Role do
         :error -> %__MODULE__{name: name}
       end
 
+    raw_strategy = get_config_value(config, :reasoning_strategy, base.reasoning_strategy)
+
+    strategy =
+      if raw_strategy in @valid_reasoning_strategies,
+        do: raw_strategy,
+        else: :adaptive
+
     %__MODULE__{
       name: name,
       model_tier: get_config_value(config, :model_tier, base.model_tier),
       tools: resolve_tools(config, base.tools),
       system_prompt: get_config_value(config, :system_prompt, base.system_prompt),
       budget_limit: get_config_value(config, :budget_limit, base.budget_limit),
-      reasoning_strategy: get_config_value(config, :reasoning_strategy, base.reasoning_strategy)
+      reasoning_strategy: strategy
     }
   end
 

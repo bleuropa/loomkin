@@ -120,15 +120,15 @@ defmodule Loomkin.Teams.Rebalancer do
   end
 
   def handle_info(%Jido.Signal{type: "team.task.started", data: %{owner: owner}}, state) do
-    {:noreply, record_activity(state, to_string(owner))}
+    {:noreply, record_activity(state, to_string(owner), :task_change)}
   end
 
   def handle_info(%Jido.Signal{type: "team.task.completed", data: %{owner: owner}}, state) do
-    {:noreply, record_activity(state, to_string(owner))}
+    {:noreply, record_activity(state, to_string(owner), :task_change)}
   end
 
   def handle_info(%Jido.Signal{type: "collaboration.peer.message", data: %{from: from}}, state) do
-    {:noreply, record_activity(state, to_string(from))}
+    {:noreply, record_activity(state, to_string(from), :message)}
   end
 
   # Catch-all
@@ -142,8 +142,7 @@ defmodule Loomkin.Teams.Rebalancer do
     now = System.monotonic_time(:millisecond)
 
     Enum.reduce(state.working_since, state, fn {agent_name, working_since}, acc ->
-      # Weaver cycles intentionally with idle pauses; never flag as stuck
-      if agent_name == "weaver" do
+      if coordination_role?(state.team_id, agent_name) do
         acc
       else
         last_activity = Map.get(acc.last_activity, agent_name, working_since)
@@ -229,16 +228,29 @@ defmodule Loomkin.Teams.Rebalancer do
     end
   end
 
-  defp record_activity(state, agent_name) do
+  @substantive_signals [:tool_use, :task_change]
+
+  defp record_activity(state, agent_name, signal_type \\ :tool_use) do
     now = System.monotonic_time(:millisecond)
 
-    state
-    |> put_in([:last_activity, Access.key(agent_name)], now)
-    |> update_in([:nudge_counts], &Map.delete(&1, agent_name))
+    state = put_in(state, [:last_activity, Access.key(agent_name)], now)
+
+    if signal_type in @substantive_signals do
+      update_in(state, [:nudge_counts], &Map.delete(&1, agent_name))
+    else
+      state
+    end
   end
 
   defp schedule_check(interval) do
     Process.send_after(self(), :check_stuck, interval)
+  end
+
+  defp coordination_role?(team_id, agent_name) do
+    case Context.get_agent(team_id, agent_name) do
+      {:ok, %{role: role}} -> role in [:weaver, "weaver"]
+      _ -> false
+    end
   end
 
   defp signal_for_team?(sig, team_id) do

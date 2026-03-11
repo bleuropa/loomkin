@@ -22,5 +22,6 @@ defmodule Loomkin.Schemas.TeamTaskDep do
     |> validate_required(@required_fields)
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:depends_on_id)
+    |> unique_constraint(:task_id, name: :team_task_deps_task_id_depends_on_id_dep_type_index)
   end
 end
