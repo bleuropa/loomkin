@@ -11,6 +11,7 @@ defmodule Loomkin.Teams.Manager do
   alias Loomkin.Teams.Distributed
   alias Loomkin.Teams.MessageScheduler
   alias Loomkin.Teams.Rebalancer
+  alias Loomkin.Teams.Rendezvous
   alias Loomkin.Teams.TableRegistry
 
   @default_max_nesting_depth 2
@@ -494,7 +495,8 @@ defmodule Loomkin.Teams.Manager do
         {Broadcaster, team_id: team_id},
         {Rebalancer, team_id: team_id},
         {ConflictDetector, team_id: team_id},
-        {MessageScheduler, team_id: team_id}
+        {MessageScheduler, team_id: team_id},
+        {Rendezvous, team_id: team_id}
       ]
 
       for {mod, opts} <- components do
@@ -516,7 +518,8 @@ defmodule Loomkin.Teams.Manager do
           {:broadcaster, team_id},
           {:rebalancer, team_id},
           {:conflict_detector, team_id},
-          {:message_scheduler, team_id}
+          {:message_scheduler, team_id},
+          {:rendezvous, team_id}
         ] do
       case Registry.lookup(Loomkin.Teams.AgentRegistry, key) do
         [{pid, _}] -> Distributed.terminate_child(pid)

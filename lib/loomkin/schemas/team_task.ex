@@ -9,18 +9,32 @@ defmodule Loomkin.Schemas.TeamTask do
     field :team_id, :string
     field :title, :string
     field :description, :string
-    field :status, Ecto.Enum, values: [:pending, :assigned, :in_progress, :completed, :failed]
+
+    field :status, Ecto.Enum,
+      values: [
+        :pending,
+        :assigned,
+        :in_progress,
+        :completed,
+        :failed,
+        :ready_for_review,
+        :blocked,
+        :partially_complete
+      ]
+
     field :owner, :string
     field :priority, :integer, default: 3
     field :model_hint, :string
     field :result, :string
     field :cost_usd, :decimal, default: 0
     field :tokens_used, :integer, default: 0
+    field :milestones_emitted, {:array, :string}, default: []
+    field :milestones_required, {:array, :string}, default: []
     timestamps(type: :utc_datetime)
   end
 
   @required_fields ~w(team_id title status)a
-  @optional_fields ~w(description owner priority model_hint result cost_usd tokens_used)a
+  @optional_fields ~w(description owner priority model_hint result cost_usd tokens_used milestones_emitted milestones_required)a
 
   def changeset(task, attrs) do
     task

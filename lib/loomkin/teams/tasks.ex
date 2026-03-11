@@ -122,14 +122,219 @@ defmodule Loomkin.Teams.Tasks do
     end
   end
 
-  def add_dependency(task_id, depends_on_id, dep_type \\ :blocks) do
-    %TeamTaskDep{}
-    |> TeamTaskDep.changeset(%{
-      task_id: task_id,
-      depends_on_id: depends_on_id,
-      dep_type: dep_type
-    })
-    |> Repo.insert()
+  def mark_ready_for_review(task_id, summary) do
+    task = get_task!(task_id)
+
+    if task.status != :in_progress do
+      {:error, :invalid_transition}
+    else
+      task
+      |> TeamTask.changeset(%{status: :ready_for_review, result: summary})
+      |> Repo.update()
+      |> tap_ok(fn task ->
+        Comms.broadcast_task_event(
+          task.team_id,
+          {:task_ready_for_review, task.id, task.owner, summary}
+        )
+
+        Context.cache_task(task.team_id, task.id, %{
+          title: task.title,
+          status: :ready_for_review,
+          owner: task.owner
+        })
+      end)
+    end
+  end
+
+  def mark_blocked(task_id, reason) do
+    task = get_task!(task_id)
+
+    if task.status not in [:assigned, :in_progress] do
+      {:error, :invalid_transition}
+    else
+      task
+      |> TeamTask.changeset(%{status: :blocked, result: reason})
+      |> Repo.update()
+      |> tap_ok(fn task ->
+        Comms.broadcast_task_event(task.team_id, {:task_blocked, task.id, task.owner, reason})
+
+        Context.cache_task(task.team_id, task.id, %{
+          title: task.title,
+          status: :blocked,
+          owner: task.owner
+        })
+      end)
+    end
+  end
+
+  def mark_partially_complete(task_id, partial_result) do
+    task = get_task!(task_id)
+
+    if task.status != :in_progress do
+      {:error, :invalid_transition}
+    else
+      task
+      |> TeamTask.changeset(%{status: :partially_complete, result: partial_result})
+      |> Repo.update()
+      |> tap_ok(fn task ->
+        Comms.broadcast_task_event(
+          task.team_id,
+          {:task_partially_complete, task.id, task.owner, partial_result}
+        )
+
+        Context.cache_task(task.team_id, task.id, %{
+          title: task.title,
+          status: :partially_complete,
+          owner: task.owner
+        })
+      end)
+    end
+  end
+
+  @doc """
+  Add a dependency between two tasks.
+
+  ## Options
+
+    * `:milestone_name` - optional milestone name for milestone-based deps
+
+  Returns `{:ok, dep}` or `{:error, reason}`.
+  Rejects cycles (up to 10 levels deep).
+  """
+  def add_dependency(task_id, depends_on_id, dep_type \\ :blocks, opts \\ []) do
+    milestone_name = Keyword.get(opts, :milestone_name)
+
+    if detect_cycle?(depends_on_id, task_id) do
+      {:error, :cycle_detected}
+    else
+      %TeamTaskDep{}
+      |> TeamTaskDep.changeset(%{
+        task_id: task_id,
+        depends_on_id: depends_on_id,
+        dep_type: dep_type,
+        milestone_name: milestone_name
+      })
+      |> Repo.insert()
+    end
+  end
+
+  @doc """
+  Returns predecessor output data for all completed `:requires_output` dependencies.
+
+  Returns `[%{task_id: id, title: title, result: result}]`.
+  """
+  def get_predecessor_outputs(task_id) do
+    Repo.all(
+      from d in TeamTaskDep,
+        join: dep in TeamTask,
+        on: d.depends_on_id == dep.id,
+        where:
+          d.task_id == ^task_id and d.dep_type == :requires_output and dep.status == :completed,
+        select: %{task_id: dep.id, title: dep.title, result: dep.result}
+    )
+  end
+
+  @doc """
+  Emit a named milestone for a task.
+
+  Appends the milestone to `milestones_emitted`, broadcasts a signal,
+  and checks if any milestone-dependent tasks are now unblocked.
+  """
+  def emit_milestone(team_id, task_id, milestone_name) do
+    task = get_task!(task_id)
+
+    if milestone_name in (task.milestones_emitted || []) do
+      {:ok, task}
+    else
+      new_milestones = (task.milestones_emitted || []) ++ [milestone_name]
+
+      task
+      |> TeamTask.changeset(%{milestones_emitted: new_milestones})
+      |> Repo.update()
+      |> tap_ok(fn updated_task ->
+        Comms.broadcast_task_event(
+          team_id,
+          {:task_milestone, updated_task.id, updated_task.owner, milestone_name}
+        )
+
+        check_milestone_unblocks(team_id, milestone_name)
+      end)
+    end
+  end
+
+  @doc """
+  Check if any tasks depending on the given milestone are now fully unblocked.
+
+  Queries deps with matching `milestone_name`, then verifies if the dependent
+  tasks have all their blocking deps satisfied.
+  """
+  def check_milestone_unblocks(team_id, milestone_name) do
+    # Find task_ids that depend on this milestone
+    dependent_task_ids =
+      Repo.all(
+        from d in TeamTaskDep,
+          join: t in TeamTask,
+          on: d.task_id == t.id,
+          where: t.team_id == ^team_id and d.milestone_name == ^milestone_name,
+          select: d.task_id,
+          distinct: true
+      )
+
+    if dependent_task_ids != [] do
+      blocked_ids = blocked_task_ids(team_id)
+
+      newly_unblocked =
+        dependent_task_ids
+        |> Enum.reject(fn id -> id in blocked_ids end)
+
+      if newly_unblocked != [] do
+        Comms.broadcast_task_event(team_id, {:tasks_unblocked, newly_unblocked})
+      end
+    end
+  end
+
+  @doc """
+  Detect if adding an edge from `from_id` to `to_id` would create a cycle.
+
+  Performs a DFS from `to_id` looking for `from_id`, limited to 10 levels deep.
+  Returns `true` if a cycle would be created.
+  """
+  def detect_cycle?(from_id, to_id, max_depth \\ 10) do
+    visited = MapSet.new()
+    do_detect_cycle(to_id, from_id, visited, 0, max_depth)
+  end
+
+  @doc """
+  Propagate priority to blocking predecessors.
+
+  When a task's priority is raised, recursively propagate to predecessors
+  that have a lower (numerically higher) priority value.
+  """
+  def propagate_priority(task_id, new_priority) do
+    predecessors =
+      Repo.all(
+        from d in TeamTaskDep,
+          join: dep in TeamTask,
+          on: d.depends_on_id == dep.id,
+          where: d.task_id == ^task_id and d.dep_type in [:blocks, :requires_output],
+          select: dep
+      )
+
+    Enum.each(predecessors, fn pred ->
+      if pred.priority > new_priority do
+        pred
+        |> TeamTask.changeset(%{priority: new_priority})
+        |> Repo.update()
+        |> tap_ok(fn updated ->
+          Comms.broadcast_task_event(
+            updated.team_id,
+            {:task_priority_changed, updated.id, updated.owner, new_priority}
+          )
+
+          propagate_priority(updated.id, new_priority)
+        end)
+      end
+    end)
   end
 
   def list_available(team_id) do
@@ -279,23 +484,58 @@ defmodule Loomkin.Teams.Tasks do
   end
 
   defp blocked_task_ids(team_id) do
-    Repo.all(
-      from d in TeamTaskDep,
-        join: t in TeamTask,
-        on: d.task_id == t.id,
-        join: dep in TeamTask,
-        on: d.depends_on_id == dep.id,
-        where: t.team_id == ^team_id and d.dep_type == :blocks and dep.status != :completed,
-        select: d.task_id,
-        distinct: true
-    )
+    blocking_types = [:blocks, :requires_output]
+
+    # Tasks blocked by incomplete :blocks or :requires_output deps
+    task_blocked =
+      Repo.all(
+        from d in TeamTaskDep,
+          join: t in TeamTask,
+          on: d.task_id == t.id,
+          join: dep in TeamTask,
+          on: d.depends_on_id == dep.id,
+          where:
+            t.team_id == ^team_id and d.dep_type in ^blocking_types and
+              dep.status != :completed and is_nil(d.milestone_name),
+          select: d.task_id,
+          distinct: true
+      )
+
+    # Tasks blocked by milestone deps where the milestone hasn't been emitted yet
+    milestone_blocked =
+      Repo.all(
+        from d in TeamTaskDep,
+          join: t in TeamTask,
+          on: d.task_id == t.id,
+          join: dep in TeamTask,
+          on: d.depends_on_id == dep.id,
+          where:
+            t.team_id == ^team_id and not is_nil(d.milestone_name) and
+              fragment("? != ALL(?)", d.milestone_name, dep.milestones_emitted),
+          select: d.task_id,
+          distinct: true
+      )
+
+    Enum.uniq(task_blocked ++ milestone_blocked)
   end
 
   defp auto_schedule_unblocked(team_id) do
     available = list_available(team_id)
 
     if available != [] do
-      Comms.broadcast_task_event(team_id, {:tasks_unblocked, Enum.map(available, & &1.id)})
+      task_ids = Enum.map(available, & &1.id)
+
+      # Gather predecessor outputs for tasks with :requires_output deps
+      predecessor_outputs =
+        task_ids
+        |> Enum.map(fn id -> {id, get_predecessor_outputs(id)} end)
+        |> Enum.reject(fn {_id, outputs} -> outputs == [] end)
+        |> Enum.into(%{})
+
+      Comms.broadcast_task_event(
+        team_id,
+        {:tasks_unblocked, task_ids, predecessor_outputs}
+      )
     end
   end
 
@@ -325,6 +565,33 @@ defmodule Loomkin.Teams.Tasks do
     end
   rescue
     _ -> :ok
+  end
+
+  defp do_detect_cycle(_current, _target, _visited, depth, max_depth) when depth >= max_depth do
+    false
+  end
+
+  defp do_detect_cycle(current, target, _visited, _depth, _max_depth) when current == target do
+    true
+  end
+
+  defp do_detect_cycle(current, target, visited, depth, max_depth) do
+    if MapSet.member?(visited, current) do
+      false
+    else
+      visited = MapSet.put(visited, current)
+
+      deps =
+        Repo.all(
+          from d in TeamTaskDep,
+            where: d.task_id == ^current,
+            select: d.depends_on_id
+        )
+
+      Enum.any?(deps, fn dep_id ->
+        do_detect_cycle(dep_id, target, visited, depth + 1, max_depth)
+      end)
+    end
   end
 
   defp tap_ok({:ok, val} = result, fun) do

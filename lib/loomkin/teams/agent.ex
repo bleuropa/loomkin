@@ -1461,12 +1461,52 @@ defmodule Loomkin.Teams.Agent do
     end
   end
 
+  def handle_info(%Jido.Signal{type: "team.task.ready_for_review"} = sig, state) do
+    handle_info(
+      {:task_ready_for_review, sig.data.task_id, sig.data.owner, sig.data[:summary]},
+      state
+    )
+  end
+
+  def handle_info(%Jido.Signal{type: "team.task.blocked"} = sig, state) do
+    handle_info({:task_blocked, sig.data.task_id, sig.data.owner, sig.data[:reason]}, state)
+  end
+
+  def handle_info(%Jido.Signal{type: "team.task.partially_complete"} = sig, state) do
+    handle_info(
+      {:task_partially_complete, sig.data.task_id, sig.data.owner, sig.data[:partial_result]},
+      state
+    )
+  end
+
+  def handle_info(%Jido.Signal{type: "team.rendezvous." <> _}, state) do
+    {:noreply, state}
+  end
+
+  def handle_info(%Jido.Signal{type: "agent.ready"}, state) do
+    {:noreply, state}
+  end
+
   def handle_info(%Jido.Signal{type: "team.task.completed"} = sig, state) do
     handle_info({:sub_team_completed, sig.data[:sub_team_id] || sig.data.task_id}, state)
   end
 
   def handle_info(%Jido.Signal{type: "team.task.started"} = sig, state) do
     handle_info({:tasks_unblocked, [sig.data.task_id]}, state)
+  end
+
+  def handle_info(%Jido.Signal{type: "team.task.milestone"} = sig, state) do
+    handle_info(
+      {:task_milestone, sig.data.task_id, sig.data.owner, sig.data.milestone_name},
+      state
+    )
+  end
+
+  def handle_info(%Jido.Signal{type: "team.task.priority_changed"} = sig, state) do
+    handle_info(
+      {:task_priority_changed, sig.data.task_id, sig.data.owner, sig.data.new_priority},
+      state
+    )
   end
 
   def handle_info(%Jido.Signal{type: "collaboration.vote.response"} = sig, state) do
@@ -1956,11 +1996,91 @@ defmodule Loomkin.Teams.Agent do
   end
 
   @impl true
-  def handle_info({:tasks_unblocked, task_ids}, state) do
+  def handle_info({:task_ready_for_review, task_id, owner, summary}, state) do
     msg = %{
       role: :system,
       content:
-        "[System] Tasks now available: #{Enum.join(task_ids, ", ")}. Use team_progress to see details."
+        "[System] Task #{task_id} by #{owner} is ready for review. Summary: #{summary || "none"}"
+    }
+
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
+  def handle_info({:task_blocked, task_id, owner, reason}, state) do
+    msg = %{
+      role: :system,
+      content: "[System] Task #{task_id} by #{owner} is blocked. Reason: #{reason || "unknown"}"
+    }
+
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
+  def handle_info({:task_partially_complete, task_id, owner, partial_result}, state) do
+    msg = %{
+      role: :system,
+      content:
+        "[System] Task #{task_id} by #{owner} is partially complete. " <>
+          "Partial result: #{String.slice(partial_result || "", 0, 200)}"
+    }
+
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
+  def handle_info({:tasks_unblocked, task_ids}, state) do
+    handle_info({:tasks_unblocked, task_ids, %{}}, state)
+  end
+
+  @impl true
+  def handle_info({:tasks_unblocked, task_ids, predecessor_outputs}, state) do
+    output_context =
+      predecessor_outputs
+      |> Enum.map(fn {task_id, outputs} ->
+        output_lines =
+          outputs
+          |> Enum.map(fn %{title: title, result: result} ->
+            "  - #{title}: #{result}"
+          end)
+          |> Enum.join("\n")
+
+        "Task #{task_id} has predecessor outputs:\n#{output_lines}"
+      end)
+      |> Enum.join("\n")
+
+    base_content =
+      "[System] Tasks now available: #{Enum.join(task_ids, ", ")}. Use team_progress to see details."
+
+    content =
+      if output_context == "" do
+        base_content
+      else
+        base_content <> "\n\nPredecessor outputs:\n" <> output_context
+      end
+
+    msg = %{role: :system, content: content}
+
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
+  def handle_info({:task_milestone, _task_id, owner, milestone_name}, state) do
+    msg = %{
+      role: :system,
+      content:
+        "[System] Agent #{owner} reached milestone '#{milestone_name}'. " <>
+          "Dependent tasks may now be unblocked."
+    }
+
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
+  def handle_info({:task_priority_changed, task_id, _owner, new_priority}, state) do
+    msg = %{
+      role: :system,
+      content: "[System] Task #{task_id} priority changed to #{new_priority}."
     }
 
     {:noreply, %{state | messages: state.messages ++ [msg]}}
@@ -3361,17 +3481,38 @@ defmodule Loomkin.Teams.Agent do
     if state.status == new_status do
       state
     else
-      previous_status = state.status
+      old_status = state.status
       state = set_status(state, new_status)
 
       broadcast_team(
         state,
         {:agent_status, state.name, new_status,
-         %{previous_status: previous_status, pause_queued: state.pause_queued}}
+         %{previous_status: old_status, pause_queued: state.pause_queued}}
       )
+
+      # Emit agent ready signal when transitioning from working to idle
+      if new_status == :idle and old_status in [:working, :waiting_permission] do
+        maybe_broadcast_agent_ready(state)
+      end
 
       state
     end
+  end
+
+  defp maybe_broadcast_agent_ready(state) do
+    task_id = state.task && state.task[:id]
+
+    signal =
+      Loomkin.Signals.Agent.Ready.new!(%{
+        agent_name: to_string(state.name),
+        team_id: state.team_id,
+        ready_for: "new_task",
+        task_id: if(task_id, do: to_string(task_id), else: nil)
+      })
+
+    Loomkin.Signals.publish(signal)
+  rescue
+    _ -> :ok
   end
 
   defp handle_peer_message_signal(sig, state) do

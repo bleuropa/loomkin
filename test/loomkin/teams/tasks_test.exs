@@ -229,7 +229,7 @@ defmodule Loomkin.Teams.TasksTest do
       assert_receive {:signal,
                       %Jido.Signal{
                         type: "collaboration.peer.message",
-                        data: %{message: {:tasks_unblocked, ids}}
+                        data: %{message: {:tasks_unblocked, ids, _predecessor_outputs}}
                       }}
 
       assert blocked.id in ids

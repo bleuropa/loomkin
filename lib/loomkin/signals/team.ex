@@ -123,4 +123,86 @@ defmodule Loomkin.Signals.Team do
         team_id: [type: :string, required: true]
       ]
   end
+
+  defmodule TaskMilestoneReached do
+    use Jido.Signal,
+      type: "team.task.milestone",
+      schema: [
+        task_id: [type: :string, required: true],
+        milestone_name: [type: :string, required: true],
+        owner: [type: :string, required: true],
+        team_id: [type: :string, required: true]
+      ]
+  end
+
+  defmodule TaskPriorityChanged do
+    use Jido.Signal,
+      type: "team.task.priority_changed",
+      schema: [
+        task_id: [type: :string, required: true],
+        owner: [type: :string, required: true],
+        new_priority: [type: :integer, required: true],
+        team_id: [type: :string, required: true]
+      ]
+  end
+
+  defmodule TaskReadyForReview do
+    use Jido.Signal,
+      type: "team.task.ready_for_review",
+      schema: [
+        task_id: [type: :string, required: true],
+        owner: [type: :string, required: true],
+        team_id: [type: :string, required: true]
+      ]
+  end
+
+  defmodule TaskBlocked do
+    use Jido.Signal,
+      type: "team.task.blocked",
+      schema: [
+        task_id: [type: :string, required: true],
+        owner: [type: :string, required: true],
+        team_id: [type: :string, required: true]
+      ]
+  end
+
+  defmodule TaskPartiallyComplete do
+    use Jido.Signal,
+      type: "team.task.partially_complete",
+      schema: [
+        task_id: [type: :string, required: true],
+        owner: [type: :string, required: true],
+        team_id: [type: :string, required: true]
+      ]
+  end
+
+  defmodule RendezvousCreated do
+    use Jido.Signal,
+      type: "team.rendezvous.created",
+      schema: [
+        rendezvous_id: [type: :string, required: true],
+        name: [type: :string, required: true],
+        team_id: [type: :string, required: true]
+      ]
+  end
+
+  defmodule RendezvousCompleted do
+    use Jido.Signal,
+      type: "team.rendezvous.completed",
+      schema: [
+        rendezvous_id: [type: :string, required: true],
+        name: [type: :string, required: true],
+        team_id: [type: :string, required: true]
+      ]
+  end
+
+  defmodule RendezvousTimedOut do
+    use Jido.Signal,
+      type: "team.rendezvous.timed_out",
+      schema: [
+        rendezvous_id: [type: :string, required: true],
+        name: [type: :string, required: true],
+        team_id: [type: :string, required: true]
+      ]
+  end
 end

@@ -141,4 +141,16 @@ defmodule Loomkin.Signals.Agent do
         crash_count: [type: :integer, required: false]
       ]
   end
+
+  defmodule Ready do
+    use Jido.Signal,
+      type: "agent.ready",
+      schema: [
+        agent_name: [type: :string, required: true],
+        team_id: [type: :string, required: true],
+        ready_for: [type: :string, required: false],
+        task_id: [type: :string, required: false],
+        rendezvous_id: [type: :string, required: false]
+      ]
+  end
 end

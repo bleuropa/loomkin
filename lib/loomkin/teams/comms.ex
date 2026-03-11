@@ -229,6 +229,75 @@ defmodule Loomkin.Teams.Comms do
     |> Signals.publish()
   end
 
+  def broadcast_task_event(team_id, {:task_milestone, task_id, owner, milestone_name}) do
+    Loomkin.Signals.Team.TaskMilestoneReached.new!(%{
+      task_id: task_id,
+      milestone_name: milestone_name,
+      owner: to_string(owner || "unknown"),
+      team_id: team_id
+    })
+    |> Causality.attach(
+      team_id: team_id,
+      agent_name: to_string(owner || "unknown"),
+      task_id: task_id
+    )
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:task_priority_changed, task_id, owner, new_priority}) do
+    Loomkin.Signals.Team.TaskPriorityChanged.new!(%{
+      task_id: task_id,
+      owner: to_string(owner || "unknown"),
+      new_priority: new_priority,
+      team_id: team_id
+    })
+    |> Causality.attach(
+      team_id: team_id,
+      agent_name: to_string(owner || "unknown"),
+      task_id: task_id
+    )
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:task_ready_for_review, task_id, owner, summary}) do
+    signal =
+      Loomkin.Signals.Team.TaskReadyForReview.new!(%{
+        task_id: task_id,
+        owner: to_string(owner),
+        team_id: team_id
+      })
+
+    %{signal | data: Map.put(signal.data, :summary, summary)}
+    |> Causality.attach(team_id: team_id, agent_name: to_string(owner), task_id: task_id)
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:task_blocked, task_id, owner, reason}) do
+    signal =
+      Loomkin.Signals.Team.TaskBlocked.new!(%{
+        task_id: task_id,
+        owner: to_string(owner),
+        team_id: team_id
+      })
+
+    %{signal | data: Map.put(signal.data, :reason, reason)}
+    |> Causality.attach(team_id: team_id, agent_name: to_string(owner), task_id: task_id)
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:task_partially_complete, task_id, owner, partial_result}) do
+    signal =
+      Loomkin.Signals.Team.TaskPartiallyComplete.new!(%{
+        task_id: task_id,
+        owner: to_string(owner),
+        team_id: team_id
+      })
+
+    %{signal | data: Map.put(signal.data, :partial_result, partial_result)}
+    |> Causality.attach(team_id: team_id, agent_name: to_string(owner), task_id: task_id)
+    |> Signals.publish()
+  end
+
   def broadcast_task_event(team_id, event) do
     # Fallback for other task events
     signal = Loomkin.Signals.Collaboration.PeerMessage.new!(%{from: "tasks", team_id: team_id})
