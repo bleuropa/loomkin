@@ -692,10 +692,33 @@ Hooks.SortableQueue = {
   }
 }
 
+// SessionMemory: persists the active session per project to localStorage
+// so code reloads snap back to the right session instead of the first one.
+Hooks.SessionMemory = {
+  mounted() {
+    this.save()
+  },
+  updated() {
+    this.save()
+  },
+  save() {
+    const sessionId = this.el.dataset.sessionId
+    const projectPath = this.el.dataset.projectPath
+    if (sessionId && projectPath) {
+      const sessions = JSON.parse(localStorage.getItem("loomkin_sessions") || "{}")
+      sessions[projectPath] = sessionId
+      localStorage.setItem("loomkin_sessions", JSON.stringify(sessions))
+    }
+  }
+}
+
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
-  params: {_csrf_token: csrfToken},
+  params: () => ({
+    _csrf_token: csrfToken,
+    stored_sessions: JSON.parse(localStorage.getItem("loomkin_sessions") || "{}")
+  }),
   hooks: Hooks
 })
 

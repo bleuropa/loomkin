@@ -195,14 +195,32 @@ defmodule Loomkin.Session do
           messages: messages,
           status: :idle,
           tools: tools,
-          auto_approve: auto_approve
+          auto_approve: auto_approve,
+          team_id: db_session.team_id
         }
 
-        {:ok, state}
+        # If this session was previously bootstrapped and has a team,
+        # auto-rebuild agents so dev reloads don't lose multi-agent state.
+        if db_session.bootstrap_spawned && db_session.team_id do
+          {:ok, state, {:continue, :rebuild_team}}
+        else
+          {:ok, state}
+        end
 
       {:error, reason} ->
         {:stop, reason}
     end
+  end
+
+  @impl true
+  def handle_continue(:rebuild_team, state) do
+    Logger.info("[Kin:session] auto-rebuilding team session=#{state.id} team=#{state.team_id}")
+
+    # Check if team is still alive — if not, the backing team will be
+    # recreated when the LiveView calls Manager.start_session.
+    # Either way, re-spawn bootstrap agents so multi-agent state survives reloads.
+    state = maybe_spawn_bootstrap_agents(%{state | bootstrap_spawned: false})
+    {:noreply, state}
   end
 
   @impl true
@@ -734,6 +752,9 @@ defmodule Loomkin.Session do
 
       Loomkin.Teams.Manager.spawn_agent(team_id, kin.name, kin.role, spawn_opts)
     end)
+
+    # Persist bootstrap flag so agents auto-rebuild on session restart
+    Persistence.update_session(state.db_session, %{bootstrap_spawned: true})
 
     %{state | bootstrap_spawned: true}
   end

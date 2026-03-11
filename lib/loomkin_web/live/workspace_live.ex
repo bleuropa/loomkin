@@ -101,11 +101,19 @@ defmodule LoomkinWeb.WorkspaceLive do
         project_path = params["project_path"] || File.cwd!()
 
         if connected?(socket) do
-          case Loomkin.Session.Persistence.find_latest_active_session(project_path) do
-            %{id: session_id} ->
-              {:ok, push_navigate(socket, to: ~p"/sessions/#{session_id}")}
+          # Check localStorage-stored session first (survives code reloads),
+          # then fall back to most recently updated active session in DB.
+          stored_sessions = get_connect_params(socket)["stored_sessions"] || %{}
+          stored_id = stored_sessions[project_path]
 
-            nil ->
+          cond do
+            stored_id && Loomkin.Session.Persistence.get_session(stored_id) ->
+              {:ok, push_navigate(socket, to: ~p"/sessions/#{stored_id}")}
+
+            latest = Loomkin.Session.Persistence.find_latest_active_session(project_path) ->
+              {:ok, push_navigate(socket, to: ~p"/sessions/#{latest.id}")}
+
+            true ->
               session_id = Ecto.UUID.generate()
               {:ok, start_and_subscribe(socket, session_id, project_path)}
           end
@@ -3189,6 +3197,15 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   def render(assigns) do
     ~H"""
+    <%!-- Session memory: persists active session to localStorage so reloads snap back --%>
+    <div
+      id="session-memory"
+      phx-hook="SessionMemory"
+      data-session-id={@session_id}
+      data-project-path={@project_path}
+      class="hidden"
+    />
+
     <div
       class="flex flex-col h-screen overflow-hidden bg-surface-0 gradient-mesh text-gray-100"
       phx-hook="KeyboardShortcuts"
