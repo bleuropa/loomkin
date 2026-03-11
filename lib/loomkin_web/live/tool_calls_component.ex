@@ -143,72 +143,100 @@ defmodule LoomkinWeb.ToolCallsComponent do
     meta = event.metadata || %{}
     tool_name = meta[:tool_name] || "tool"
     file_path = meta[:file_path]
+    command = meta[:command]
     result = meta[:result]
     has_result = is_binary(result) and result != ""
+    has_command = is_binary(command) and command != ""
+    has_details = has_result or has_command
     expanded = MapSet.member?(assigns.expanded_ids, event.id)
     config = Map.get(@tool_config, String.downcase(tool_name), @default_tool_config)
+
+    command_preview =
+      if has_command do
+        if String.length(command) > 40, do: String.slice(command, 0, 40) <> "...", else: command
+      end
 
     assigns =
       assigns
       |> assign(:event, event)
       |> assign(:tool_name, tool_name)
       |> assign(:file_path, file_path)
+      |> assign(:command, command)
+      |> assign(:command_preview, command_preview)
       |> assign(:result, result)
       |> assign(:has_result, has_result)
+      |> assign(:has_command, has_command)
+      |> assign(:has_details, has_details)
       |> assign(:expanded, expanded)
       |> assign(:config, config)
 
     ~H"""
     <div
       class={[
-        "flex items-start gap-2 py-1.5 px-2 rounded transition-colors",
-        @has_result && "cursor-pointer hover:bg-white/5"
+        "flex flex-col py-1.5 px-2 rounded transition-colors",
+        @has_details && "cursor-pointer hover:bg-white/5"
       ]}
-      phx-click={if @has_result, do: "expand_event"}
-      phx-target={if @has_result, do: @myself}
-      phx-value-id={if @has_result, do: @event.id}
+      phx-click={if @has_details, do: "expand_event"}
+      phx-target={if @has_details, do: @myself}
+      phx-value-id={if @has_details, do: @event.id}
     >
-      <%!-- Agent dot --%>
-      <span
-        class="flex-shrink-0 mt-0.5"
-        style={"width: 5px; height: 5px; border-radius: 9999px; background-color: #{agent_color(@event.agent)};"}
-      >
-      </span>
+      <div class="flex items-start gap-2 min-w-0">
+        <%!-- Agent dot --%>
+        <span
+          class="flex-shrink-0 mt-0.5"
+          style={"width: 5px; height: 5px; border-radius: 9999px; background-color: #{agent_color(@event.agent)};"}
+        >
+        </span>
 
-      <%!-- Agent name --%>
-      <span
-        class="flex-shrink-0 text-[10px] font-medium"
-        style={"color: #{agent_color(@event.agent)};"}
-      >
-        {@event.agent}
-      </span>
+        <%!-- Agent name --%>
+        <span
+          class="flex-shrink-0 text-[10px] font-medium"
+          style={"color: #{agent_color(@event.agent)};"}
+        >
+          {@event.agent}
+        </span>
 
-      <%!-- Tool icon + name --%>
-      <span
-        class="flex-shrink-0 text-[10px]"
-        style={"color: #{@config.color};"}
-      >
-        {Phoenix.HTML.raw(@config.icon)} {@tool_name}
-      </span>
+        <%!-- Tool icon + name --%>
+        <span
+          class="flex-shrink-0 text-[10px]"
+          style={"color: #{@config.color};"}
+        >
+          {Phoenix.HTML.raw(@config.icon)} {@tool_name}
+        </span>
 
-      <%!-- Target file/path --%>
-      <span
-        :if={@file_path}
-        class="flex-shrink truncate text-[10px] font-mono text-muted max-w-[120px]"
-        title={@file_path}
-      >
-        {Path.basename(@file_path)}
-      </span>
+        <%!-- Target file/path --%>
+        <span
+          :if={@file_path}
+          class="flex-shrink truncate text-[10px] font-mono text-muted max-w-[120px]"
+          title={@file_path}
+        >
+          {Path.basename(@file_path)}
+        </span>
 
-      <%!-- Timestamp --%>
-      <span class="ml-auto flex-shrink-0 text-[9px] font-mono text-muted">
-        {relative_time(@event.timestamp)}
-      </span>
+        <%!-- Timestamp --%>
+        <span class="ml-auto flex-shrink-0 text-[9px] font-mono text-muted">
+          {relative_time(@event.timestamp)}
+        </span>
+      </div>
+
+      <%!-- Shell command preview (always visible) --%>
+      <div :if={@has_command} class="ml-4 mt-0.5">
+        <code class="text-[9px] font-mono text-emerald-400/80 truncate block max-w-full">
+          $ {@command_preview}
+        </code>
+      </div>
     </div>
 
-    <%!-- Result preview (on hover/expand) --%>
-    <div :if={@has_result && @expanded} class="ml-6 mt-1 mb-2">
-      <pre class="overflow-auto text-[10px] font-mono text-muted whitespace-pre-wrap break-all bg-surface-2 border border-subtle rounded px-2 py-1.5 max-h-32">{String.slice(@result, 0, 500)}{if String.length(@result) > 500, do: "...", else: ""}</pre>
+    <%!-- Expanded details --%>
+    <div :if={@has_details && @expanded} class="ml-6 mt-1 mb-2 space-y-1">
+      <pre
+        :if={@has_command}
+        class="overflow-auto text-[10px] font-mono text-emerald-300 whitespace-pre-wrap break-all bg-zinc-950 border border-emerald-500/10 rounded px-2 py-1.5 max-h-24"
+      >$ {@command}</pre>
+      <pre
+        :if={@has_result}
+        class="overflow-auto text-[10px] font-mono text-muted whitespace-pre-wrap break-all bg-surface-2 border border-subtle rounded px-2 py-1.5 max-h-32"
+      >{String.slice(@result, 0, 500)}{if String.length(@result) > 500, do: "...", else: ""}</pre>
     </div>
     """
   end

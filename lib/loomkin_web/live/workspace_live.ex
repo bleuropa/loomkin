@@ -4304,6 +4304,7 @@ defmodule LoomkinWeb.WorkspaceLive do
       metadata: %{
         tool_name: name,
         file_path: target,
+        command: if(name == "shell", do: to_string(payload[:command] || ""), else: nil),
         result: nil
       }
     }

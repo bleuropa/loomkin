@@ -1,5 +1,5 @@
 defmodule LoomkinWeb.DecisionGraphComponent do
-  @moduledoc "LiveComponent for interactive SVG decision graph visualization."
+  @moduledoc "LiveComponent for interactive decision graph with tree view and fullscreen SVG."
 
   use LoomkinWeb, :live_component
 
@@ -43,6 +43,18 @@ defmodule LoomkinWeb.DecisionGraphComponent do
     {:revisit, "Revisit"}
   ]
 
+  # Depth-based colors for tree indent guides
+  @depth_colors %{
+    0 => "#5b8fd4",
+    1 => "#d4a930",
+    2 => "#3dba6e",
+    3 => "#9366d4",
+    4 => "#2aada0"
+  }
+
+  # Forward edge types that define parent-child hierarchy
+  @forward_edge_types [:leads_to, :chosen, :requires, :enables, :supports]
+
   # Pulse cache TTL in seconds
   @pulse_ttl_seconds 30
 
@@ -59,12 +71,15 @@ defmodule LoomkinWeb.DecisionGraphComponent do
        nodes: [],
        edges: [],
        positioned: [],
+       tree: [],
        pulse: nil,
        pulse_data: nil,
        pulse_generated_at: nil,
        selected_node: nil,
        agent_filter: nil,
        new_node_ids: MapSet.new(),
+       collapsed_ids: MapSet.new(),
+       fullscreen: false,
        refresh_ref: nil,
        reload_timer: nil,
        subscribed: false,
@@ -187,6 +202,7 @@ defmodule LoomkinWeb.DecisionGraphComponent do
 
     positioned = layout_nodes(visible_nodes)
     {svg_w, svg_h} = compute_svg_dimensions(positioned)
+    tree = build_tree(visible_nodes, visible_edges)
 
     pulse_assigns = [pulse_data: pulse, pulse_generated_at: System.monotonic_time(:second)]
 
@@ -197,6 +213,7 @@ defmodule LoomkinWeb.DecisionGraphComponent do
          {:nodes, nodes},
          {:edges, relevant_edges},
          {:positioned, positioned},
+         {:tree, tree},
          {:pulse, pulse},
          {:agents, agents},
          {:conflict_ids, conflict_ids},
@@ -233,14 +250,48 @@ defmodule LoomkinWeb.DecisionGraphComponent do
     {:noreply, recompute_visible(socket, agent_name)}
   end
 
+  def handle_event("toggle_tree_node", %{"id" => node_id}, socket) do
+    collapsed_ids = socket.assigns.collapsed_ids
+
+    collapsed_ids =
+      if MapSet.member?(collapsed_ids, node_id) do
+        MapSet.delete(collapsed_ids, node_id)
+      else
+        MapSet.put(collapsed_ids, node_id)
+      end
+
+    {:noreply, assign(socket, collapsed_ids: collapsed_ids)}
+  end
+
+  def handle_event("open_fullscreen", _params, socket) do
+    {:noreply, assign(socket, fullscreen: true)}
+  end
+
+  def handle_event("close_fullscreen", _params, socket) do
+    {:noreply, assign(socket, fullscreen: false)}
+  end
+
+  # ──────────────────────────────────────────────
+  # Render
+  # ──────────────────────────────────────────────
+
   @impl true
   def render(assigns) do
     ~H"""
     <div class="flex flex-col h-full bg-gray-950 text-gray-100">
-      <div class="px-3 py-2.5 border-b border-gray-800">
+      <div class="px-3 py-2.5 border-b border-gray-800 flex items-center justify-between">
         <h3 class="text-[10px] font-semibold text-gray-500 uppercase tracking-widest">
           Decision Graph
         </h3>
+        <button
+          :if={@nodes != []}
+          phx-click="open_fullscreen"
+          phx-target={@myself}
+          class="p-1 rounded hover:bg-gray-800 text-gray-500 hover:text-gray-300 transition-colors"
+          title="Open full graph view"
+        >
+          <.icon name="hero-arrows-pointing-out-mini" class="w-3.5 h-3.5" />
+        </button>
       </div>
 
       <%!-- Agent filter buttons --%>
@@ -287,6 +338,7 @@ defmodule LoomkinWeb.DecisionGraphComponent do
         </button>
       </div>
 
+      <%!-- Main content: tree view --%>
       <div class="flex-1 overflow-auto relative">
         <%= if @nodes == [] do %>
           <div class="flex flex-col items-center justify-center h-full px-6 text-center">
@@ -299,98 +351,16 @@ defmodule LoomkinWeb.DecisionGraphComponent do
             </p>
           </div>
         <% else %>
-          <svg
-            width={@svg_width}
-            height={@svg_height}
-            viewBox={"0 0 #{@svg_width} #{@svg_height}"}
-            class="block"
-          >
-            <defs>
-              <marker
-                id="arrowhead-gray"
-                markerWidth="8"
-                markerHeight="6"
-                refX="8"
-                refY="3"
-                orient="auto"
-              >
-                <polygon points="0 0, 8 3, 0 6" fill="#6b7280" />
-              </marker>
-              <marker
-                id="arrowhead-green"
-                markerWidth="8"
-                markerHeight="6"
-                refX="8"
-                refY="3"
-                orient="auto"
-              >
-                <polygon points="0 0, 8 3, 0 6" fill="#22c55e" />
-              </marker>
-              <marker
-                id="arrowhead-red"
-                markerWidth="8"
-                markerHeight="6"
-                refX="8"
-                refY="3"
-                orient="auto"
-              >
-                <polygon points="0 0, 8 3, 0 6" fill="#ef4444" />
-              </marker>
-              <marker
-                id="arrowhead-orange"
-                markerWidth="8"
-                markerHeight="6"
-                refX="8"
-                refY="3"
-                orient="auto"
-              >
-                <polygon points="0 0, 8 3, 0 6" fill="#f97316" />
-              </marker>
-            </defs>
-
-            <%!-- Edges --%>
-            <.graph_edge
-              :for={edge <- @visible_edges}
-              edge={edge}
-              positioned={@positioned}
-            />
-
-            <%!-- Nodes --%>
-            <.graph_node
-              :for={pos <- @positioned}
-              pos={pos}
-              selected={@selected_node && @selected_node.id == pos.node.id}
-              conflict={MapSet.member?(@conflict_ids, pos.node.id)}
-              is_new={MapSet.member?(@new_node_ids, pos.node.id)}
+          <div class="py-1.5">
+            <.tree_node
+              :for={item <- @tree}
+              item={item}
+              collapsed_ids={@collapsed_ids}
+              selected_node={@selected_node}
+              conflict_ids={@conflict_ids}
+              new_node_ids={@new_node_ids}
               myself={@myself}
             />
-          </svg>
-
-          <%!-- Node type legend --%>
-          <div class="px-3 py-2 border-t border-gray-800/50 flex flex-wrap gap-x-3 gap-y-1.5">
-            <span class="text-[10px] text-gray-600 uppercase tracking-wider mr-1">Types:</span>
-            <div :for={{type, label} <- node_type_labels()} class="flex items-center gap-1.5">
-              <span
-                class="inline-block w-2.5 h-2.5 rounded-sm border"
-                style={"background-color: #{node_type_fill(type)}; border-color: #{node_type_stroke(type)}"}
-              />
-              <span class="text-[10px] text-gray-500">{label}</span>
-            </div>
-          </div>
-
-          <%!-- Agent legend --%>
-          <div
-            :if={@agents != []}
-            class="px-3 py-2 border-t border-gray-800/50 flex flex-wrap gap-x-3 gap-y-1.5"
-          >
-            <span class="text-[10px] text-gray-600 uppercase tracking-wider mr-1">Agents:</span>
-            <div :for={agent <- @agents} class="flex items-center gap-1.5">
-              <span
-                class="inline-block w-2 h-2 rounded-full"
-                style={"background-color: #{agent_color(agent)}"}
-              />
-              <span class="text-[10px] text-gray-500">{agent}</span>
-            </div>
           </div>
 
           <%!-- Node detail panel --%>
@@ -407,11 +377,330 @@ defmodule LoomkinWeb.DecisionGraphComponent do
       <div :if={@pulse} class="px-3 py-2 border-t border-gray-800 text-[10px] text-gray-600">
         {format_pulse(@pulse)}
       </div>
+
+      <%!-- Fullscreen SVG overlay --%>
+      <.fullscreen_overlay
+        :if={@fullscreen}
+        positioned={@positioned}
+        visible_edges={@visible_edges}
+        selected_node={@selected_node}
+        conflict_ids={@conflict_ids}
+        new_node_ids={@new_node_ids}
+        agents={@agents}
+        agent_filter={@agent_filter}
+        edges={@edges}
+        nodes={@nodes}
+        svg_width={@svg_width}
+        svg_height={@svg_height}
+        myself={@myself}
+      />
     </div>
     """
   end
 
-  # --- SVG Sub-components ---
+  # ──────────────────────────────────────────────
+  # Tree view sub-components
+  # ──────────────────────────────────────────────
+
+  defp tree_node(assigns) do
+    node = assigns.item.node
+    depth = assigns.item.depth
+    children = assigns.item.children
+    has_children = children != []
+    collapsed = MapSet.member?(assigns.collapsed_ids, node.id)
+    selected = assigns.selected_node && assigns.selected_node.id == node.id
+    conflict = MapSet.member?(assigns.conflict_ids, node.id)
+    is_new = MapSet.member?(assigns.new_node_ids, node.id)
+    depth_color = depth_color(depth)
+    type_stroke = node_type_stroke(node.node_type)
+
+    assigns =
+      assigns
+      |> assign(:node, node)
+      |> assign(:depth, depth)
+      |> assign(:children, children)
+      |> assign(:has_children, has_children)
+      |> assign(:collapsed, collapsed)
+      |> assign(:selected, selected)
+      |> assign(:conflict, conflict)
+      |> assign(:is_new, is_new)
+      |> assign(:depth_color, depth_color)
+      |> assign(:type_stroke, type_stroke)
+
+    ~H"""
+    <div>
+      <div
+        class={[
+          "flex items-center gap-1.5 py-1 px-2 group cursor-pointer transition-colors duration-100",
+          "hover:bg-gray-800/40",
+          @selected && "bg-gray-800/60",
+          @is_new && "bg-gray-800/30"
+        ]}
+        style={"padding-left: #{8 + @depth * 16}px"}
+      >
+        <%!-- Indent guide --%>
+        <div
+          :if={@depth > 0}
+          class="absolute left-0 top-0 bottom-0 w-0.5"
+          style={"left: #{@depth * 16}px; background-color: #{@depth_color}33"}
+        />
+
+        <%!-- Expand/collapse chevron --%>
+        <%= if @has_children do %>
+          <button
+            phx-click="toggle_tree_node"
+            phx-value-id={@node.id}
+            phx-target={@myself}
+            class="p-0.5 rounded hover:bg-gray-700/50 text-gray-500 hover:text-gray-300 flex-shrink-0"
+          >
+            <.icon
+              name={if @collapsed, do: "hero-chevron-right-mini", else: "hero-chevron-down-mini"}
+              class="w-3.5 h-3.5"
+            />
+          </button>
+        <% else %>
+          <span class="w-[18px] flex-shrink-0" />
+        <% end %>
+
+        <%!-- Node type dot --%>
+        <span
+          class={[
+            "inline-block w-2 h-2 rounded-full flex-shrink-0",
+            @conflict && "ring-1 ring-red-500"
+          ]}
+          style={"background-color: #{@type_stroke}"}
+        />
+
+        <%!-- Title & metadata --%>
+        <button
+          phx-click="select_node"
+          phx-value-id={@node.id}
+          phx-target={@myself}
+          class="flex items-center gap-1.5 min-w-0 flex-1 text-left"
+        >
+          <span class={[
+            "text-xs truncate",
+            if(@selected, do: "text-gray-100 font-medium", else: "text-gray-300")
+          ]}>
+            {@node.title}
+          </span>
+          <span class="text-[10px] text-gray-600 flex-shrink-0">
+            {Atom.to_string(@node.node_type)}
+          </span>
+          <span
+            :if={@node.status != :active}
+            class={["text-[10px] flex-shrink-0", status_text_class(@node.status)]}
+          >
+            {Atom.to_string(@node.status)}
+          </span>
+          <span
+            :if={@node.agent_name}
+            class="text-[10px] flex-shrink-0"
+            style={"color: #{agent_color(@node.agent_name)}"}
+          >
+            {@node.agent_name}
+          </span>
+          <span
+            :if={@node.confidence}
+            class={["text-[10px] font-medium flex-shrink-0", confidence_text_class(@node.confidence)]}
+          >
+            {@node.confidence}%
+          </span>
+        </button>
+      </div>
+
+      <%!-- Children (recursive) --%>
+      <div :if={@has_children && !@collapsed}>
+        <.tree_node
+          :for={child <- @children}
+          item={child}
+          collapsed_ids={@collapsed_ids}
+          selected_node={@selected_node}
+          conflict_ids={@conflict_ids}
+          new_node_ids={@new_node_ids}
+          myself={@myself}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  # ──────────────────────────────────────────────
+  # Fullscreen SVG overlay
+  # ──────────────────────────────────────────────
+
+  defp fullscreen_overlay(assigns) do
+    ~H"""
+    <div
+      class="fixed inset-0 z-50 bg-gray-950/95 backdrop-blur-sm flex flex-col"
+      phx-window-keydown="close_fullscreen"
+      phx-key="Escape"
+      phx-target={@myself}
+    >
+      <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+        <h3 class="text-sm font-semibold text-gray-300">Decision Graph</h3>
+        <div class="flex items-center gap-2">
+          <%!-- Agent filter in fullscreen --%>
+          <div :if={@agents != []} class="flex flex-wrap gap-1">
+            <button
+              phx-click="filter_agent"
+              phx-value-agent=""
+              phx-target={@myself}
+              class={[
+                "px-2 py-1 text-xs rounded-full border transition-colors duration-200",
+                if(@agent_filter == nil,
+                  do: "border-violet-400 text-violet-400 bg-violet-400/10",
+                  else: "border-gray-700 text-gray-400 hover:border-gray-500"
+                )
+              ]}
+            >
+              All
+            </button>
+            <button
+              :for={agent <- @agents}
+              phx-click="filter_agent"
+              phx-value-agent={agent}
+              phx-target={@myself}
+              class={[
+                "px-2 py-1 text-xs rounded-full border flex items-center gap-1 transition-colors duration-200",
+                if(@agent_filter == agent,
+                  do: "bg-white/10",
+                  else: "hover:border-gray-500"
+                )
+              ]}
+              style={
+                if @agent_filter == agent do
+                  "border-color: #{agent_color(agent)}; color: #{agent_color(agent)}"
+                else
+                  "border-color: #374151; color: #9ca3af"
+                end
+              }
+            >
+              <span
+                class="inline-block w-2 h-2 rounded-full"
+                style={"background-color: #{agent_color(agent)}"}
+              />
+              {agent}
+            </button>
+          </div>
+
+          <button
+            phx-click="close_fullscreen"
+            phx-target={@myself}
+            class="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors"
+          >
+            <.icon name="hero-x-mark" class="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-auto p-4 relative">
+        <svg
+          width={@svg_width}
+          height={@svg_height}
+          viewBox={"0 0 #{@svg_width} #{@svg_height}"}
+          class="block"
+        >
+          <defs>
+            <marker
+              id="fs-arrowhead-gray"
+              markerWidth="8"
+              markerHeight="6"
+              refX="8"
+              refY="3"
+              orient="auto"
+            >
+              <polygon points="0 0, 8 3, 0 6" fill="#6b7280" />
+            </marker>
+            <marker
+              id="fs-arrowhead-green"
+              markerWidth="8"
+              markerHeight="6"
+              refX="8"
+              refY="3"
+              orient="auto"
+            >
+              <polygon points="0 0, 8 3, 0 6" fill="#22c55e" />
+            </marker>
+            <marker
+              id="fs-arrowhead-red"
+              markerWidth="8"
+              markerHeight="6"
+              refX="8"
+              refY="3"
+              orient="auto"
+            >
+              <polygon points="0 0, 8 3, 0 6" fill="#ef4444" />
+            </marker>
+            <marker
+              id="fs-arrowhead-orange"
+              markerWidth="8"
+              markerHeight="6"
+              refX="8"
+              refY="3"
+              orient="auto"
+            >
+              <polygon points="0 0, 8 3, 0 6" fill="#f97316" />
+            </marker>
+          </defs>
+
+          <.graph_edge
+            :for={edge <- @visible_edges}
+            edge={edge}
+            positioned={@positioned}
+            marker_prefix="fs-"
+          />
+
+          <.graph_node
+            :for={pos <- @positioned}
+            pos={pos}
+            selected={@selected_node && @selected_node.id == pos.node.id}
+            conflict={MapSet.member?(@conflict_ids, pos.node.id)}
+            is_new={MapSet.member?(@new_node_ids, pos.node.id)}
+            myself={@myself}
+          />
+        </svg>
+
+        <%!-- Node detail panel (fullscreen) --%>
+        <.node_detail
+          :if={@selected_node}
+          node={@selected_node}
+          edges={@edges}
+          nodes={@nodes}
+          myself={@myself}
+        />
+      </div>
+
+      <%!-- Legends --%>
+      <div class="border-t border-gray-800 px-4 py-2 flex flex-wrap gap-x-6 gap-y-1.5">
+        <div class="flex flex-wrap gap-x-3 gap-y-1.5">
+          <span class="text-[10px] text-gray-600 uppercase tracking-wider mr-1">Types:</span>
+          <div :for={{type, label} <- node_type_labels()} class="flex items-center gap-1.5">
+            <span
+              class="inline-block w-2.5 h-2.5 rounded-sm border"
+              style={"background-color: #{node_type_fill(type)}; border-color: #{node_type_stroke(type)}"}
+            />
+            <span class="text-[10px] text-gray-500">{label}</span>
+          </div>
+        </div>
+        <div :if={@agents != []} class="flex flex-wrap gap-x-3 gap-y-1.5">
+          <span class="text-[10px] text-gray-600 uppercase tracking-wider mr-1">Agents:</span>
+          <div :for={agent <- @agents} class="flex items-center gap-1.5">
+            <span
+              class="inline-block w-2 h-2 rounded-full"
+              style={"background-color: #{agent_color(agent)}"}
+            />
+            <span class="text-[10px] text-gray-500">{agent}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # ──────────────────────────────────────────────
+  # SVG sub-components
+  # ──────────────────────────────────────────────
 
   defp graph_node(assigns) do
     node = assigns.pos.node
@@ -545,6 +834,7 @@ defmodule LoomkinWeb.DecisionGraphComponent do
   defp graph_edge(assigns) do
     edge = assigns.edge
     positioned = assigns.positioned
+    prefix = Map.get(assigns, :marker_prefix, "")
 
     from_pos = Enum.find(positioned, fn p -> p.node.id == edge.from_node_id end)
     to_pos = Enum.find(positioned, fn p -> p.node.id == edge.to_node_id end)
@@ -563,7 +853,7 @@ defmodule LoomkinWeb.DecisionGraphComponent do
         assigns
         |> assign(:path_d, path_d)
         |> assign(:color, color)
-        |> assign(:marker, marker)
+        |> assign(:marker, prefix <> marker)
 
       ~H"""
       <path
@@ -644,7 +934,69 @@ defmodule LoomkinWeb.DecisionGraphComponent do
     """
   end
 
-  # --- Layout ---
+  # ──────────────────────────────────────────────
+  # Tree building
+  # ──────────────────────────────────────────────
+
+  defp build_tree(nodes, edges) do
+    # Build adjacency from forward edges only
+    forward_edges = Enum.filter(edges, &(&1.edge_type in @forward_edge_types))
+
+    children_map =
+      Enum.reduce(forward_edges, %{}, fn edge, acc ->
+        Map.update(acc, edge.from_node_id, [edge.to_node_id], &[edge.to_node_id | &1])
+      end)
+
+    # IDs that have a parent (appear as to_node_id in forward edges)
+    child_ids = MapSet.new(forward_edges, & &1.to_node_id)
+
+    # Roots: nodes without incoming forward edges
+    node_map = Map.new(nodes, &{&1.id, &1})
+
+    roots =
+      nodes
+      |> Enum.reject(&MapSet.member?(child_ids, &1.id))
+      |> Enum.sort_by(&Map.get(@layer_order, &1.node_type, 2))
+
+    # If no roots found, use all nodes as roots
+    roots = if roots == [], do: Enum.sort_by(nodes, & &1.inserted_at), else: roots
+
+    # Walk tree recursively
+    {tree, _visited} =
+      Enum.reduce(roots, {[], MapSet.new()}, fn root, {acc, visited} ->
+        {subtree, visited} = walk_tree(root, children_map, node_map, visited, 0)
+        {acc ++ [subtree], visited}
+      end)
+
+    tree
+  end
+
+  defp walk_tree(node, children_map, node_map, visited, depth) do
+    visited = MapSet.put(visited, node.id)
+
+    child_ids = Map.get(children_map, node.id, [])
+
+    {children, visited} =
+      child_ids
+      |> Enum.reject(&MapSet.member?(visited, &1))
+      |> Enum.reduce({[], visited}, fn child_id, {acc, vis} ->
+        case Map.get(node_map, child_id) do
+          nil ->
+            {acc, vis}
+
+          child_node ->
+            {subtree, vis} = walk_tree(child_node, children_map, node_map, vis, depth + 1)
+            {acc ++ [subtree], vis}
+        end
+      end)
+
+    item = %{node: node, children: children, depth: depth}
+    {item, visited}
+  end
+
+  # ──────────────────────────────────────────────
+  # Layout
+  # ──────────────────────────────────────────────
 
   defp layout_nodes(nodes) do
     grouped =
@@ -675,7 +1027,13 @@ defmodule LoomkinWeb.DecisionGraphComponent do
     end
   end
 
-  # --- Node styling (softer colors) ---
+  # ──────────────────────────────────────────────
+  # Styling helpers
+  # ──────────────────────────────────────────────
+
+  defp depth_color(depth) do
+    Map.get(@depth_colors, min(depth, 4))
+  end
 
   defp node_colors(node_type, _status) do
     case Map.get(@node_type_colors, node_type) do
@@ -709,6 +1067,10 @@ defmodule LoomkinWeb.DecisionGraphComponent do
   defp confidence_color(c) when c >= 40, do: "#eab308"
   defp confidence_color(_), do: "#ef4444"
 
+  defp confidence_text_class(c) when c >= 70, do: "text-green-400"
+  defp confidence_text_class(c) when c >= 40, do: "text-yellow-400"
+  defp confidence_text_class(_), do: "text-red-400"
+
   defp edge_style(:chosen), do: {"#22c55e", "arrowhead-green"}
   defp edge_style(:rejected), do: {"#ef4444", "arrowhead-red"}
   defp edge_style(:supersedes), do: {"#f97316", "arrowhead-orange"}
@@ -724,12 +1086,13 @@ defmodule LoomkinWeb.DecisionGraphComponent do
   defp edge_text_class(:supersedes), do: "text-orange-400"
   defp edge_text_class(_), do: "text-gray-500"
 
-  # --- Agent helpers ---
+  # ──────────────────────────────────────────────
+  # Agent helpers
+  # ──────────────────────────────────────────────
 
   defp agent_color(agent_name), do: LoomkinWeb.AgentColors.agent_color(agent_name)
 
   defp detect_conflicts(nodes, edges) do
-    # Find nodes connected by :supersedes edges where they share a title but have different agents
     supersedes_pairs =
       edges
       |> Enum.filter(&(&1.edge_type == :supersedes))
@@ -744,7 +1107,6 @@ defmodule LoomkinWeb.DecisionGraphComponent do
         end
       end)
 
-    # Also detect same-title nodes from different agents where one is superseded
     title_conflicts =
       nodes
       |> Enum.filter(& &1.agent_name)
@@ -763,18 +1125,19 @@ defmodule LoomkinWeb.DecisionGraphComponent do
     MapSet.new(supersedes_pairs ++ title_conflicts)
   end
 
-  # Recalculate visible nodes/edges after a filter change (without reloading from DB)
   defp recompute_visible(socket, agent_filter) do
     {visible_nodes, visible_edges} =
       apply_agent_filter(socket.assigns.nodes, socket.assigns.edges, agent_filter)
 
     positioned = layout_nodes(visible_nodes)
     {svg_w, svg_h} = compute_svg_dimensions(positioned)
+    tree = build_tree(visible_nodes, visible_edges)
 
     assign(socket,
       agent_filter: agent_filter,
       positioned: positioned,
       visible_edges: visible_edges,
+      tree: tree,
       svg_width: max(svg_w, 400),
       svg_height: max(svg_h, 200)
     )
@@ -804,7 +1167,9 @@ defmodule LoomkinWeb.DecisionGraphComponent do
     {filtered_nodes, filtered_edges}
   end
 
-  # --- Helpers ---
+  # ──────────────────────────────────────────────
+  # Helpers
+  # ──────────────────────────────────────────────
 
   defp truncate_text(nil, _), do: ""
 
