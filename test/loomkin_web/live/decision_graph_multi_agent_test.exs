@@ -101,7 +101,8 @@ defmodule LoomkinWeb.DecisionGraphMultiAgentTest do
           session_id: session_id
         })
 
-      assert html =~ "Agents:"
+      # In compact tree view, agents appear as filter buttons (not "Agents:" legend)
+      assert html =~ "filter_agent"
       assert html =~ "coder"
     end
   end
@@ -136,8 +137,8 @@ defmodule LoomkinWeb.DecisionGraphMultiAgentTest do
           session_id: session_id
         })
 
-      # Conflict glow rect should be present (rendered with class="conflict-glow")
-      assert html =~ ~s(class="conflict-glow")
+      # In compact tree view, conflict shows as ring-1 ring-red-500 on the node dot
+      assert html =~ "ring-red-500"
     end
 
     test "no conflict glow when same agent supersedes own node" do
@@ -169,8 +170,8 @@ defmodule LoomkinWeb.DecisionGraphMultiAgentTest do
           session_id: session_id
         })
 
-      # Same agent superseding its own node should NOT have the conflict glow rect
-      refute html =~ ~s(class="conflict-glow")
+      # Same agent superseding its own node should NOT show conflict indicator
+      refute html =~ "ring-red-500"
     end
   end
 

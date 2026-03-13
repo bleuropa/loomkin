@@ -24,12 +24,13 @@ defmodule Loomkin.Teams.Supervisor do
         Loomkin.Teams.TableRegistry,
         {Registry, keys: :unique, name: Loomkin.Teams.AgentRegistry},
         {DynamicSupervisor, name: Loomkin.Teams.AgentSupervisor, strategy: :one_for_one},
+        {Loomkin.Teams.AgentWatcher, name: Loomkin.Teams.AgentWatcher},
         Loomkin.Teams.RateLimiter,
         Loomkin.Teams.QueryRouter,
         {Task.Supervisor, name: Loomkin.Teams.TaskSupervisor}
       ] ++ cluster_children()
 
-    Supervisor.init(children, strategy: :one_for_all)
+    Supervisor.init(children, strategy: :one_for_one)
   end
 
   defp cluster_children do

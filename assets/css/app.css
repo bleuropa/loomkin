@@ -15,11 +15,11 @@
   --surface-2: #16161d;
   --surface-3: #1e1e28;
 
-  /* Brand + accent */
+  /* Brand — base color; variants derived via oklch relative colors */
   --brand: #7C3AED;
-  --brand-hover: #8b5cf6;
-  --brand-subtle: rgba(124, 58, 237, 0.12);
-  --brand-muted: rgba(124, 58, 237, 0.06);
+  --brand-hover: oklch(from var(--brand) calc(l + 0.1) c h);
+  --brand-subtle: oklch(from var(--brand) l c h / 12%);
+  --brand-muted: oklch(from var(--brand) l c h / 6%);
   --accent-cyan: #22d3ee;
   --accent-amber: #f59e0b;
   --accent-emerald: #10b981;
@@ -29,7 +29,7 @@
   --border-subtle: rgba(255, 255, 255, 0.06);
   --border-default: rgba(255, 255, 255, 0.10);
   --border-hover: rgba(255, 255, 255, 0.15);
-  --border-brand: rgba(124, 58, 237, 0.25);
+  --border-brand: oklch(from var(--brand) l c h / 25%);
 
   /* Text */
   --text-primary: #f4f4f5;
@@ -40,7 +40,10 @@
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-glow: 0 0 20px rgba(124, 58, 237, 0.15);
+  --shadow-glow: 0 0 20px oklch(from var(--brand) l c h / 15%);
+
+  /* Glows */
+  --glow-brand: 0 0 24px oklch(from var(--brand) l c h / 20%);
 
   /* Transitions */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -1076,6 +1079,213 @@ body {
   );
   background-size: 200% 100%;
   animation: shimmer 2s linear infinite;
+}
+
+/* ══════════════════════════════════════════
+   :has() — State-Driven Parent Styling
+   ══════════════════════════════════════════ */
+
+/* Accent bar glows when agent is actively working — no extra class needed */
+.kin-card:has(.agent-dot-working) .kin-accent-bar {
+  box-shadow: 2px 0 16px currentColor;
+}
+
+/* Composer textarea focus ring — replaces inline onfocus/onblur JS */
+#message-input:focus {
+  border-color: var(--border-brand);
+  box-shadow: 0 0 0 1px oklch(from var(--brand) l c h / 20%);
+}
+
+/* ══════════════════════════════════════════
+   @starting-style — Native Entry Animations
+   ══════════════════════════════════════════ */
+
+/* Command palette fades/scales in when first inserted into the DOM */
+#command-palette {
+  transition: opacity 0.2s ease-out, transform 0.2s ease-out;
+}
+
+@starting-style {
+  #command-palette {
+    opacity: 0;
+    transform: scale(0.95) translateY(-6px);
+  }
+}
+
+/* ══════════════════════════════════════════
+   View Transitions — Tab Content
+   ══════════════════════════════════════════ */
+
+.tab-content-panel {
+  view-transition-name: tab-content;
+}
+
+@keyframes vt-tab-out {
+  to { opacity: 0; transform: translateY(-4px); }
+}
+
+@keyframes vt-tab-in {
+  from { opacity: 0; transform: translateY(4px); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(tab-content) {
+    animation: 150ms ease-out both vt-tab-out;
+  }
+  ::view-transition-new(tab-content) {
+    animation: 200ms ease-out both vt-tab-in;
+  }
+}
+
+/* ══════════════════════════════════════════
+   Container Queries — Adaptive Agent Cards
+   ══════════════════════════════════════════ */
+
+.agent-card-grid {
+  container-type: inline-size;
+  container-name: agent-grid;
+}
+
+/* Compact: hide capability bars when cards are very narrow */
+@container agent-grid (inline-size < 220px) {
+  .capability-bar {
+    display: none;
+  }
+}
+
+/* Very compact: shrink thought well text */
+@container agent-grid (inline-size < 180px) {
+  .kin-thought-well {
+    font-size: 0.625rem;
+  }
+}
+
+/* ══════════════════════════════════════════
+   Scroll-Driven Animations — Activity Feed
+   ══════════════════════════════════════════ */
+
+/* Thin progress bar at the top of the activity feed scroll container.
+   Animates from 0 → full width as the user scrolls. Falls back gracefully
+   (invisible at scaleX(0)) when scroll-timeline is unsupported. */
+.activity-scroll-indicator {
+  position: sticky;
+  top: 0;
+  height: 2px;
+  background: var(--brand);
+  transform-origin: left;
+  transform: scaleX(0);
+  z-index: 10;
+  pointer-events: none;
+}
+
+@supports (animation-timeline: scroll()) {
+  .activity-scroll-indicator {
+    animation: activity-scroll-progress linear both;
+    animation-timeline: scroll(nearest block);
+  }
+}
+
+@keyframes activity-scroll-progress {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+/* ══════════════════════════════════════════
+   Agent Card Lifecycle Animations
+   ══════════════════════════════════════════ */
+
+/* Agent card insertion glow — one-shot animation */
+@keyframes cardInsertGlow {
+  0% { opacity: 0; box-shadow: 0 0 20px rgba(129, 140, 248, 0.4); }
+  30% { opacity: 1; box-shadow: 0 0 15px rgba(129, 140, 248, 0.3); }
+  100% { opacity: 1; box-shadow: none; }
+}
+
+.agent-card-enter {
+  animation: cardInsertGlow 1.5s ease-out forwards;
+}
+
+/* Terminated agent dimming and fade-out */
+@keyframes cardTerminate {
+  0% { opacity: 1; filter: none; }
+  50% { opacity: 0.5; filter: grayscale(80%); }
+  100% { opacity: 0; filter: grayscale(100%); }
+}
+
+.agent-card-terminated {
+  animation: cardTerminate 2.5s ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes conflict-pulse {
+  0%, 100% { stroke-opacity: 0.5; }
+  50% { stroke-opacity: 1; }
+}
+.conflict-glow {
+  animation: conflict-pulse 1.5s ease-in-out infinite;
+}
+
+/* ══════════════════════════════════════════
+   Tooltips — CSS Anchor Positioning
+   ══════════════════════════════════════════ */
+[data-tooltip] { position: relative; }
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  /* Absolute fallback */
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  /* Styling */
+  background: var(--surface-3);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  line-height: 1.4;
+  padding: 4px 8px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 9999;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  transition-delay: 0s;
+}
+
+[data-tooltip]:hover::after,
+[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transition-delay: 500ms;
+}
+
+@supports (anchor-name: --x) {
+  @position-try --tooltip-below {
+    bottom: auto;
+    top: anchor(bottom);
+    margin-top: 6px;
+    margin-bottom: 0;
+  }
+
+  [data-tooltip]:hover,
+  [data-tooltip]:focus-visible,
+  [data-tooltip].tooltip-exiting {
+    anchor-name: --tooltip-active;
+  }
+
+  [data-tooltip]::after {
+    position: fixed;
+    position-anchor: --tooltip-active;
+    bottom: anchor(top);
+    margin-bottom: 6px;
+    left: anchor(center);
+    transform: translateX(-50%);
+    /* Reset absolute fallback values */
+    inset-block-start: auto;
+    position-try-fallbacks: --tooltip-below;
+  }
 }
 
 /* ══════════════════════════════════════════

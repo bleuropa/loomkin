@@ -1,13 +1,19 @@
 defmodule Loomkin.Teams.Manager do
   @moduledoc "Public API for team lifecycle management."
 
+  require Logger
+
   alias Loomkin.Decisions.AutoLogger
   alias Loomkin.Decisions.Broadcaster
+  alias Loomkin.Signals.Team.ChildTeamCreated
   alias Loomkin.Teams.Comms
+  alias Loomkin.Teams.ComplexityMonitor
   alias Loomkin.Teams.ConflictDetector
   alias Loomkin.Teams.Distributed
   alias Loomkin.Teams.MessageScheduler
+  alias Loomkin.Teams.Negotiation
   alias Loomkin.Teams.Rebalancer
+  alias Loomkin.Teams.Rendezvous
   alias Loomkin.Teams.TableRegistry
 
   @default_max_nesting_depth 2
@@ -95,6 +101,17 @@ defmodule Loomkin.Teams.Manager do
           # Start decision graph nervous system processes
           start_nervous_system(sub_team_id)
 
+          # Publish ChildTeamCreated so LiveView can render tree nodes from signal data
+          signal =
+            ChildTeamCreated.new!(%{
+              team_id: sub_team_id,
+              parent_team_id: parent_team_id,
+              team_name: name,
+              depth: parent_depth + 1
+            })
+
+          Loomkin.Signals.publish(signal)
+
           {:ok, sub_team_id}
         end
 
@@ -109,25 +126,25 @@ defmodule Loomkin.Teams.Manager do
     get_sub_team_ids(parent_team_id)
   end
 
-  @doc "Get the parent team ID for a given team, or nil if it's a root team."
-  @spec get_parent_team(String.t()) :: {:ok, String.t()} | :none
+  @doc "Get the parent team ID for a given team, or :error if it's a root team or not found."
+  @spec get_parent_team(String.t()) :: {:ok, String.t()} | :error
   def get_parent_team(team_id) do
     case get_team_meta(team_id) do
       {:ok, %{parent_team_id: parent_id}} when is_binary(parent_id) -> {:ok, parent_id}
-      _ -> :none
+      _ -> :error
     end
   end
 
   @doc "Get sibling team IDs (other sub-teams under the same parent)."
-  @spec get_sibling_teams(String.t()) :: {:ok, [String.t()]} | :none
+  @spec get_sibling_teams(String.t()) :: {:ok, [String.t()]} | :error
   def get_sibling_teams(team_id) do
     case get_parent_team(team_id) do
       {:ok, parent_id} ->
         siblings = get_sub_team_ids(parent_id) -- [team_id]
         {:ok, siblings}
 
-      :none ->
-        :none
+      :error ->
+        :error
     end
   end
 
@@ -152,8 +169,6 @@ defmodule Loomkin.Teams.Manager do
   Starts a Teams.Agent GenServer under the AgentSupervisor.
   """
   def spawn_agent(team_id, name, role, opts \\ []) do
-    require Logger
-
     child_opts = [
       team_id: team_id,
       name: name,
@@ -161,6 +176,11 @@ defmodule Loomkin.Teams.Manager do
       project_path: opts[:project_path] || get_team_project_path(team_id),
       model: opts[:model]
     ]
+
+    child_opts =
+      if opts[:role_config],
+        do: Keyword.put(child_opts, :role_config, opts[:role_config]),
+        else: child_opts
 
     child_opts =
       if opts[:permission_mode],
@@ -172,11 +192,17 @@ defmodule Loomkin.Teams.Manager do
         do: Keyword.put(child_opts, :kin_agents, opts[:kin_agents]),
         else: child_opts
 
+    child_opts =
+      if opts[:session_id],
+        do: Keyword.put(child_opts, :session_id, opts[:session_id]),
+        else: child_opts
+
     result = Distributed.start_child({Loomkin.Teams.Agent, child_opts})
 
     case result do
       {:ok, pid} ->
         Logger.info("[Kin:spawn] agent=#{name} role=#{role} team=#{team_id} pid=#{inspect(pid)}")
+        Loomkin.Teams.AgentWatcher.watch(Loomkin.Teams.AgentWatcher, pid, team_id, name)
 
       {:error, reason} ->
         Logger.error(
@@ -236,7 +262,7 @@ defmodule Loomkin.Teams.Manager do
         end
 
         # Notify all running agents in this team
-        for %{pid: pid} <- list_agents(team_id) do
+        for %{pid: pid} <- list_agents(team_id), Process.alive?(pid) do
           Loomkin.Teams.Agent.update_project_path(pid, new_path)
         end
 
@@ -250,6 +276,20 @@ defmodule Loomkin.Teams.Manager do
       {:error, :not_found} ->
         {:error, :not_found}
     end
+  end
+
+  @doc "Update the model on all agents in a team and its sub-teams."
+  @spec update_all_models(String.t(), String.t()) :: :ok
+  def update_all_models(team_id, new_model) do
+    for %{pid: pid} <- list_agents(team_id) do
+      Loomkin.Teams.Agent.update_model(pid, new_model)
+    end
+
+    for sub_id <- list_sub_teams(team_id) do
+      update_all_models(sub_id, new_model)
+    end
+
+    :ok
   end
 
   @doc "Cancel active agent loops across a team and its sub-teams."
@@ -283,16 +323,14 @@ defmodule Loomkin.Teams.Manager do
 
   @doc "List all agents in a team (excludes keepers and other non-agent entries)."
   def list_agents(team_id) do
-    require Logger
-
     raw =
       Registry.select(Loomkin.Teams.AgentRegistry, [
         {{{team_id, :"$1"}, :"$2", :"$3"}, [], [%{name: :"$1", pid: :"$2", meta: :"$3"}]}
       ])
 
     filtered =
-      Enum.filter(raw, fn %{meta: meta} ->
-        is_map(meta) and meta[:type] != :keeper and
+      Enum.filter(raw, fn %{pid: pid, meta: meta} ->
+        Process.alive?(pid) and is_map(meta) and meta[:type] != :keeper and
           (Map.has_key?(meta, :role) or Map.has_key?(meta, "role"))
       end)
 
@@ -454,14 +492,26 @@ defmodule Loomkin.Teams.Manager do
 
   defp start_nervous_system(team_id) do
     if Application.get_env(:loomkin, :start_nervous_system, true) do
-      try do
-        Distributed.start_child({AutoLogger, team_id: team_id})
-        Distributed.start_child({Broadcaster, team_id: team_id})
-        Distributed.start_child({Rebalancer, team_id: team_id})
-        Distributed.start_child({ConflictDetector, team_id: team_id})
-        Distributed.start_child({MessageScheduler, team_id: team_id})
-      catch
-        :exit, _ -> :ok
+      components = [
+        {AutoLogger, team_id: team_id},
+        {Broadcaster, team_id: team_id},
+        {Rebalancer, team_id: team_id},
+        {ConflictDetector, team_id: team_id},
+        {MessageScheduler, team_id: team_id},
+        {Negotiation, team_id: team_id},
+        {Rendezvous, team_id: team_id},
+        {ComplexityMonitor, team_id: team_id}
+      ]
+
+      for {mod, opts} <- components do
+        try do
+          Distributed.start_child({mod, opts})
+        catch
+          :exit, reason ->
+            Logger.warning(
+              "[Kin:team] Failed to start #{inspect(mod)} for team #{team_id}: #{inspect(reason)}"
+            )
+        end
       end
     end
   end
@@ -472,7 +522,10 @@ defmodule Loomkin.Teams.Manager do
           {:broadcaster, team_id},
           {:rebalancer, team_id},
           {:conflict_detector, team_id},
-          {:message_scheduler, team_id}
+          {:message_scheduler, team_id},
+          {:negotiation, team_id},
+          {:rendezvous, team_id},
+          {:complexity_monitor, team_id}
         ] do
       case Registry.lookup(Loomkin.Teams.AgentRegistry, key) do
         [{pid, _}] -> Distributed.terminate_child(pid)

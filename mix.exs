@@ -7,7 +7,7 @@ defmodule Loomkin.MixProject do
     [
       app: :loomkin,
       version: @version,
-      elixir: "~> 1.18",
+      elixir: "~> 1.20-rc",
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
@@ -76,7 +76,7 @@ defmodule Loomkin.MixProject do
       # Config
       {:toml, github: "vinnymac/toml-elixir", ref: "ae7f122", override: true},
       {:abacus, github: "vinnymac/abacus", ref: "de9f489", override: true},
-      {:sched_ex, github: "vinnymac/SchedEx", ref: "9d2a99d", override: true},
+      {:sched_ex, github: "vinnymac/SchedEx", ref: "938861d", override: true},
       {:yaml_elixir, "~> 2.12"},
 
       # OAuth
@@ -117,6 +117,7 @@ defmodule Loomkin.MixProject do
 
       # Dev/Test
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:live_debugger, "~> 0.6.0", only: :dev},
       {:tidewave, "~> 0.5", only: :dev},
       {:mox, "~> 1.0", only: :test},
       {:floki, "~> 0.37", only: :test},

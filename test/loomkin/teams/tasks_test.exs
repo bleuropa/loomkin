@@ -229,7 +229,7 @@ defmodule Loomkin.Teams.TasksTest do
       assert_receive {:signal,
                       %Jido.Signal{
                         type: "collaboration.peer.message",
-                        data: %{message: {:tasks_unblocked, ids}}
+                        data: %{message: {:tasks_unblocked, ids, _predecessor_outputs}}
                       }}
 
       assert blocked.id in ids
@@ -292,6 +292,181 @@ defmodule Loomkin.Teams.TasksTest do
       {:ok, task} = Tasks.create_task(team_id, %{title: "Implement something"})
       assert {:ok, assigned, _reason} = Tasks.smart_assign(team_id, task.id)
       assert assigned.owner == "bob"
+    end
+  end
+
+  # -- Partial Results --
+
+  describe "mark_partially_complete/2 with structured data" do
+    test "accepts structured partial data with progress tracking", %{team_id: team_id} do
+      {:ok, task} = Tasks.create_task(team_id, %{title: "Multi-step task"})
+      Tasks.assign_task(task.id, "coder")
+      Tasks.start_task(task.id)
+
+      partial_data = %{
+        completed_items: 3,
+        total_items: 10,
+        output: "First 3 items processed",
+        next_steps: "Continue with items 4-10"
+      }
+
+      assert {:ok, updated} = Tasks.mark_partially_complete(task.id, partial_data)
+      assert updated.status == :partially_complete
+      assert updated.completed_items == 3
+      assert updated.total_items == 10
+      assert updated.partial_results["completed_items"] == 3
+      assert updated.partial_results["total_items"] == 10
+      assert updated.partial_results["output"] == "First 3 items processed"
+      assert updated.result =~ "3/10 items complete"
+    end
+
+    test "accepts string partial result for backward compatibility", %{team_id: team_id} do
+      {:ok, task} = Tasks.create_task(team_id, %{title: "Simple partial"})
+      Tasks.assign_task(task.id, "coder")
+      Tasks.start_task(task.id)
+
+      assert {:ok, updated} = Tasks.mark_partially_complete(task.id, "halfway done")
+      assert updated.status == :partially_complete
+      assert updated.partial_results["output"] == "halfway done"
+    end
+
+    test "rejects transition from non-in_progress status", %{team_id: team_id} do
+      {:ok, task} = Tasks.create_task(team_id, %{title: "Not started"})
+
+      assert {:error, :invalid_transition} =
+               Tasks.mark_partially_complete(task.id, %{output: "nope"})
+    end
+
+    test "triggers auto_schedule_unblocked after partial completion", %{team_id: team_id} do
+      {:ok, producer} = Tasks.create_task(team_id, %{title: "Producer"})
+      {:ok, consumer} = Tasks.create_task(team_id, %{title: "Consumer"})
+      Tasks.add_dependency(consumer.id, producer.id, :requires_output)
+
+      Tasks.assign_task(producer.id, "coder")
+      Tasks.start_task(producer.id)
+
+      # Before partial completion, consumer is blocked
+      available_before = Tasks.list_available(team_id) |> Enum.map(& &1.id)
+      refute consumer.id in available_before
+
+      Tasks.mark_partially_complete(producer.id, %{output: "partial data"})
+
+      # After partial completion, consumer should be unblocked
+      available_after = Tasks.list_available(team_id) |> Enum.map(& &1.id)
+      assert consumer.id in available_after
+    end
+  end
+
+  describe "partial results unblock dependents" do
+    test "requires_output dep unblocks on partially_complete", %{team_id: team_id} do
+      {:ok, producer} = Tasks.create_task(team_id, %{title: "Data producer"})
+      {:ok, consumer} = Tasks.create_task(team_id, %{title: "Data consumer"})
+      Tasks.add_dependency(consumer.id, producer.id, :requires_output)
+
+      Tasks.assign_task(producer.id, "coder")
+      Tasks.start_task(producer.id)
+      Tasks.mark_partially_complete(producer.id, %{output: "partial output"})
+
+      available = Tasks.list_available(team_id) |> Enum.map(& &1.id)
+      assert consumer.id in available
+    end
+
+    test "blocks dep does NOT unblock on partially_complete", %{team_id: team_id} do
+      {:ok, blocker} = Tasks.create_task(team_id, %{title: "Blocker"})
+      {:ok, blocked} = Tasks.create_task(team_id, %{title: "Blocked"})
+      Tasks.add_dependency(blocked.id, blocker.id, :blocks)
+
+      Tasks.assign_task(blocker.id, "coder")
+      Tasks.start_task(blocker.id)
+      Tasks.mark_partially_complete(blocker.id, %{output: "partial"})
+
+      available = Tasks.list_available(team_id) |> Enum.map(& &1.id)
+      refute blocked.id in available
+    end
+
+    test "get_predecessor_outputs includes partial results", %{team_id: team_id} do
+      {:ok, producer} = Tasks.create_task(team_id, %{title: "Producer"})
+      {:ok, consumer} = Tasks.create_task(team_id, %{title: "Consumer"})
+      Tasks.add_dependency(consumer.id, producer.id, :requires_output)
+
+      Tasks.assign_task(producer.id, "coder")
+      Tasks.start_task(producer.id)
+
+      Tasks.mark_partially_complete(producer.id, %{
+        output: "partial data",
+        completed_items: 2,
+        total_items: 5
+      })
+
+      outputs = Tasks.get_predecessor_outputs(consumer.id)
+      assert length(outputs) == 1
+      output = hd(outputs)
+      assert output.partial == true
+      assert output.partial_results["output"] == "partial data"
+    end
+  end
+
+  describe "resume_task/1" do
+    test "resumes a partially complete task to in_progress", %{team_id: team_id} do
+      {:ok, task} = Tasks.create_task(team_id, %{title: "Resume me"})
+      Tasks.assign_task(task.id, "coder")
+      Tasks.start_task(task.id)
+      Tasks.mark_partially_complete(task.id, %{output: "halfway"})
+
+      assert {:ok, resumed} = Tasks.resume_task(task.id)
+      assert resumed.status == :in_progress
+    end
+
+    test "preserves partial_results after resume", %{team_id: team_id} do
+      {:ok, task} = Tasks.create_task(team_id, %{title: "Resume with context"})
+      Tasks.assign_task(task.id, "coder")
+      Tasks.start_task(task.id)
+
+      Tasks.mark_partially_complete(task.id, %{
+        output: "progress",
+        completed_items: 3,
+        total_items: 10
+      })
+
+      {:ok, resumed} = Tasks.resume_task(task.id)
+      assert resumed.partial_results["output"] == "progress"
+      assert resumed.partial_results["completed_items"] == 3
+    end
+
+    test "rejects resume from non-partially_complete status", %{team_id: team_id} do
+      {:ok, task} = Tasks.create_task(team_id, %{title: "Not partial"})
+      Tasks.assign_task(task.id, "coder")
+      Tasks.start_task(task.id)
+
+      assert {:error, :invalid_transition} = Tasks.resume_task(task.id)
+    end
+
+    test "broadcasts task_resumed signal", %{team_id: team_id} do
+      {:ok, task} = Tasks.create_task(team_id, %{title: "Resume broadcast"})
+      Tasks.assign_task(task.id, "coder")
+      Tasks.start_task(task.id)
+      Tasks.mark_partially_complete(task.id, %{output: "partial"})
+      Tasks.resume_task(task.id)
+
+      assert_receive {:signal,
+                      %Jido.Signal{
+                        type: "team.task.resumed",
+                        data: %{task_id: task_id, owner: "coder"}
+                      }}
+
+      assert task_id == task.id
+    end
+
+    test "can complete task after resume", %{team_id: team_id} do
+      {:ok, task} = Tasks.create_task(team_id, %{title: "Full lifecycle"})
+      Tasks.assign_task(task.id, "coder")
+      Tasks.start_task(task.id)
+      Tasks.mark_partially_complete(task.id, %{output: "first pass"})
+      Tasks.resume_task(task.id)
+
+      assert {:ok, completed} = Tasks.complete_task(task.id, "all done")
+      assert completed.status == :completed
+      assert completed.result == "all done"
     end
   end
 end

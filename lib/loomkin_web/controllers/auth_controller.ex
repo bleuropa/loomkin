@@ -204,13 +204,17 @@ defmodule LoomkinWeb.AuthController do
   end
 
   defp callback_url(conn, provider) do
-    scheme = if conn.scheme == :https, do: "https", else: "http"
-    host = conn.host
-    port = conn.port
+    base =
+      case Loomkin.Config.get(:auth, :callback_base_url) do
+        url when is_binary(url) ->
+          String.trim_trailing(url, "/")
 
-    # Build the callback URL manually since we're in a controller (not LiveView)
-    # and the auth routes are outside the standard scope
-    port_str = if port in [80, 443], do: "", else: ":#{port}"
-    "#{scheme}://#{host}#{port_str}/auth/#{provider}/callback"
+        _ ->
+          scheme = if conn.scheme == :https, do: "https", else: "http"
+          port_str = if conn.port in [80, 443], do: "", else: ":#{conn.port}"
+          "#{scheme}://#{conn.host}#{port_str}"
+      end
+
+    "#{base}/auth/#{provider}/callback"
   end
 end

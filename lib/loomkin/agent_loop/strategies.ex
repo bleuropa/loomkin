@@ -5,7 +5,7 @@ defmodule Loomkin.AgentLoop.Strategies do
   Bridges Loomkin's AgentLoop domain context (system prompt, model, rate limiting,
   event callbacks) into jido_ai's reasoning APIs. Non-ReAct strategies skip the
   tool loop entirely — they perform a single LLM reasoning pass and return the
-  result, which is cheaper and faster for analysis-only agents (e.g. Orienter).
+  result, which is cheaper and faster for analysis-only agents.
 
   The existing ReAct path in AgentLoop.run/2 remains completely unchanged.
   """
@@ -58,6 +58,12 @@ defmodule Loomkin.AgentLoop.Strategies do
       {:wait, ms} ->
         Process.sleep(min(ms, 5_000))
 
+        case maybe_acquire_rate_limit(config, provider) do
+          :ok -> :ok
+          {:wait, _} -> throw({:rate_limited, provider})
+          {:budget_exceeded, scope} -> throw({:budget_exceeded, scope})
+        end
+
       {:budget_exceeded, scope} ->
         throw({:budget_exceeded, scope})
     end
@@ -101,6 +107,9 @@ defmodule Loomkin.AgentLoop.Strategies do
   catch
     {:budget_exceeded, _scope} ->
       {:error, "Budget exceeded", messages}
+
+    {:rate_limited, _provider} ->
+      {:error, :rate_limited, messages}
   end
 
   # -- Strategy system prompt wrappers --

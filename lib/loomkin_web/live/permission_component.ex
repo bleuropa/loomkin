@@ -7,15 +7,26 @@ defmodule LoomkinWeb.PermissionComponent do
 
   def render(assigns) do
     ~H"""
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 animate-fade-in">
-      <div class="bg-gray-900 border border-gray-700/50 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4 animate-scale-in">
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 animate-fade-in"
+      aria-hidden="true"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="permission-dialog-title"
+        aria-hidden="false"
+        class="bg-gray-900 border border-gray-700/50 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4 animate-scale-in"
+      >
         <%!-- Header --%>
         <div class="flex items-center gap-3 mb-4">
           <div class="w-10 h-10 rounded-xl bg-violet-500/10 flex items-center justify-center flex-shrink-0">
             <.icon name="hero-shield-check" class="w-5 h-5 text-violet-400" />
           </div>
           <div>
-            <h3 class="text-sm font-semibold text-gray-100">Permission Required</h3>
+            <h3 id="permission-dialog-title" class="text-sm font-semibold text-gray-100">
+              Permission Required
+            </h3>
             <p class="text-[10px] text-gray-500 mt-0.5">
               Review this tool execution before proceeding
             </p>

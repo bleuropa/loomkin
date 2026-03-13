@@ -19,6 +19,9 @@ config :loomkin,
   max_repo_map_tokens: 2048,
   max_decision_context_tokens: 1024
 
+# Approval gate default timeout (5 minutes); override per gate via params[:timeout] (seconds)
+config :loomkin, :approval_gate_timeout_ms, 300_000
+
 # Phoenix endpoint configuration
 config :loomkin, LoomkinWeb.Endpoint,
   url: [host: "localhost"],

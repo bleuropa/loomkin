@@ -31,14 +31,22 @@ defmodule Loomkin.LLM do
   @spec stream_text(String.t() | term(), term(), keyword()) ::
           {:ok, ReqLLM.StreamResponse.t()} | {:error, term()}
   def stream_text(model_spec, messages, opts \\ []) do
-    case maybe_resolve_oauth(model_spec) do
-      {:oauth, model, provider_module} ->
+    case maybe_resolve_local(model_spec) do
+      {:local, model, provider_module} ->
         with {:ok, context} <- ReqLLM.Context.normalize(messages, opts) do
           ReqLLM.Streaming.start_stream(provider_module, model, context, opts)
         end
 
-      :passthrough ->
-        ReqLLM.stream_text(model_spec, messages, opts)
+      :not_local ->
+        case maybe_resolve_oauth(model_spec) do
+          {:oauth, model, provider_module} ->
+            with {:ok, context} <- ReqLLM.Context.normalize(messages, opts) do
+              ReqLLM.Streaming.start_stream(provider_module, model, context, opts)
+            end
+
+          :passthrough ->
+            ReqLLM.stream_text(model_spec, messages, opts)
+        end
     end
   end
 
@@ -50,8 +58,8 @@ defmodule Loomkin.LLM do
   @spec generate_text(String.t() | term(), term(), keyword()) ::
           {:ok, ReqLLM.Response.t()} | {:error, term()}
   def generate_text(model_spec, messages, opts \\ []) do
-    case maybe_resolve_oauth(model_spec) do
-      {:oauth, model, provider_module} ->
+    case maybe_resolve_local(model_spec) do
+      {:local, model, provider_module} ->
         with {:ok, request} <- provider_module.prepare_request(:chat, model, messages, opts),
              {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-
                Req.request(request) do
@@ -69,8 +77,30 @@ defmodule Loomkin.LLM do
             {:error, error}
         end
 
-      :passthrough ->
-        ReqLLM.generate_text(model_spec, messages, opts)
+      :not_local ->
+        case maybe_resolve_oauth(model_spec) do
+          {:oauth, model, provider_module} ->
+            with {:ok, request} <-
+                   provider_module.prepare_request(:chat, model, messages, opts),
+                 {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-
+                   Req.request(request) do
+              {:ok, body}
+            else
+              {:ok, %Req.Response{status: status, body: body}} ->
+                {:error,
+                 ReqLLM.Error.API.Request.exception(
+                   reason: "HTTP #{status}: Request failed",
+                   status: status,
+                   response_body: body
+                 )}
+
+              {:error, error} ->
+                {:error, error}
+            end
+
+          :passthrough ->
+            ReqLLM.generate_text(model_spec, messages, opts)
+        end
     end
   end
 
@@ -111,6 +141,26 @@ defmodule Loomkin.LLM do
   def oauth_providers, do: ProviderRegistry.oauth_provider_map()
 
   # ── Internal ─────────────────────────────────────────────────────────
+
+  # Local providers (Ollama, etc.) bypass LLMDB entirely since their models
+  # aren't cataloged. We intercept these before OAuth resolution.
+  @spec maybe_resolve_local(term()) :: {:local, struct(), module()} | :not_local
+  defp maybe_resolve_local(model_spec) when is_binary(model_spec) do
+    case String.split(model_spec, ":", parts: 2) do
+      ["ollama", model_id] ->
+        model = Loomkin.Providers.Ollama.build_model(model_id)
+
+        case ReqLLM.provider(:ollama) do
+          {:ok, provider_module} -> {:local, model, provider_module}
+          _ -> :not_local
+        end
+
+      _ ->
+        :not_local
+    end
+  end
+
+  defp maybe_resolve_local(_), do: :not_local
 
   # For OAuth providers, we resolve the model via LLMDB using the canonical
   # provider name (e.g. "anthropic") but route through the custom OAuth provider

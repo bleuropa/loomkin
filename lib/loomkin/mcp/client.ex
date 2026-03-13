@@ -179,11 +179,11 @@ defmodule Loomkin.MCP.Client do
       # Register endpoint in application env for jido_mcp
       existing = Application.get_env(:jido_mcp, :endpoints, [])
 
-      unless Keyword.has_key?(existing, endpoint_id) do
+      unless List.keymember?(existing, endpoint_id, 0) do
         Application.put_env(
           :jido_mcp,
           :endpoints,
-          Keyword.put(existing, endpoint_id, endpoint_config)
+          [{endpoint_id, endpoint_config} | existing]
         )
       end
 

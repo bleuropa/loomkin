@@ -16,6 +16,8 @@ defmodule Loomkin.Session.Architect do
      Reports back results per plan item.
   """
 
+  require Logger
+
   alias Loomkin.Session.ContextWindow
   alias Loomkin.Session.Persistence
   alias Loomkin.Telemetry, as: LoomkinTelemetry
@@ -42,15 +44,13 @@ defmodule Loomkin.Session.Architect do
 
     # Fast-path: skip planning for trivial messages (greetings, thanks, etc.)
     if trivial_message?(user_text) do
-      # Save user message to conversation
-      {:ok, _} =
-        Persistence.save_message(%{session_id: state.id, role: :user, content: user_text})
-
+      # Add user message to in-memory state and broadcast for UI,
+      # but defer DB save until response is ready (atomic exchange).
       user_msg = %{role: :user, content: user_text}
       state = %{state | messages: state.messages ++ [user_msg]}
       broadcast(state.id, {:new_message, state.id, user_msg})
 
-      conversational_fallback(user_text, state, architect_model)
+      conversational_fallback(user_text, state, architect_model, defer_user_save: true)
     else
       run_planning(user_text, state, architect_model, editor_model, opts)
     end
@@ -330,8 +330,9 @@ defmodule Loomkin.Session.Architect do
     end
   end
 
-  defp conversational_fallback(_user_text, state, model) do
+  defp conversational_fallback(user_text, state, model, opts \\ []) do
     {provider, model_id} = parse_model(model)
+    defer_user_save = Keyword.get(opts, :defer_user_save, false)
 
     system_prompt = """
     You are Loomkin, an AI coding assistant. Respond helpfully to the user's request.
@@ -369,8 +370,13 @@ defmodule Loomkin.Session.Architect do
       {:ok, response} ->
         text = extract_text(response)
 
-        {:ok, _} =
-          Persistence.save_message(%{session_id: state.id, role: :assistant, content: text})
+        # When user save was deferred, save both atomically to prevent orphans
+        if defer_user_save do
+          {:ok, _} = Persistence.save_exchange(state.id, user_text, text)
+        else
+          {:ok, _} =
+            Persistence.save_message(%{session_id: state.id, role: :assistant, content: text})
+        end
 
         assistant_msg = %{role: :assistant, content: text, from: "Architect"}
         state = %{state | messages: state.messages ++ [assistant_msg]}
@@ -887,7 +893,7 @@ defmodule Loomkin.Session.Architect do
 
   defp extract_text(response) do
     classified = ReqLLM.Response.classify(response)
-    classified.text || ""
+    classified.text
   end
 
   defp call_llm(provider, model_id, messages, opts) do
@@ -1014,7 +1020,8 @@ defmodule Loomkin.Session.Architect do
     signal = Loomkin.Signals.Session.NewMessage.new!(%{session_id: session_id})
     Loomkin.Signals.publish(%{signal | data: Map.put(signal.data, :message, msg)})
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[Architect] broadcast :new_message failed: #{inspect(e)}")
   end
 
   defp broadcast(session_id, {:permission_request, _sid, tool_name, tool_path, :session}) do
@@ -1027,16 +1034,52 @@ defmodule Loomkin.Session.Architect do
 
     Loomkin.Signals.publish(signal)
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[Architect] broadcast :permission_request failed: #{inspect(e)}")
+  end
+
+  defp broadcast(session_id, {:stream_start, _sid}) do
+    signal =
+      Loomkin.Signals.Session.StatusChanged.new!(%{session_id: session_id, status: :streaming})
+
+    Loomkin.Signals.publish(%{
+      signal
+      | data: Map.put(signal.data, :raw_event, {:stream_start, session_id})
+    })
+  rescue
+    e ->
+      Logger.warning("[Architect] broadcast :stream_start failed: #{inspect(e)}")
+  end
+
+  defp broadcast(session_id, {:stream_delta, _sid, payload}) do
+    signal =
+      Loomkin.Signals.Session.StatusChanged.new!(%{session_id: session_id, status: :streaming})
+
+    Loomkin.Signals.publish(%{
+      signal
+      | data: Map.put(signal.data, :raw_event, {:stream_delta, session_id, payload})
+    })
+  rescue
+    e ->
+      Logger.warning("[Architect] broadcast :stream_delta failed: #{inspect(e)}")
+  end
+
+  defp broadcast(session_id, {:stream_end, _sid}) do
+    signal =
+      Loomkin.Signals.Session.StatusChanged.new!(%{session_id: session_id, status: :idle})
+
+    Loomkin.Signals.publish(%{
+      signal
+      | data: Map.put(signal.data, :raw_event, {:stream_end, session_id})
+    })
+  rescue
+    e ->
+      Logger.warning("[Architect] broadcast :stream_end failed: #{inspect(e)}")
   end
 
   defp broadcast(session_id, event) do
-    # Catch-all for architect-specific events (phase, plan, step, stream, tool, retry)
-    signal =
-      Loomkin.Signals.Session.StatusChanged.new!(%{session_id: session_id, status: :unknown})
-
-    Loomkin.Signals.publish(%{signal | data: Map.put(signal.data, :raw_event, event)})
-  rescue
-    _ -> :ok
+    Logger.warning(
+      "[Architect] unhandled broadcast event for #{session_id}: #{inspect(event, limit: 200)}"
+    )
   end
 end

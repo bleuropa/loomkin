@@ -369,7 +369,15 @@ defmodule LoomkinWeb.TeamActivityComponent do
 
       <%!-- Event Feed --%>
       <div class="flex-1 overflow-auto" id={"activity-feed-#{@id}"} phx-hook="ScrollToBottom">
-        <div id={"activity-stream-#{@id}"} phx-update="stream" class="flex flex-col gap-1.5 p-2.5">
+        <div class="activity-scroll-indicator" aria-hidden="true" />
+        <div
+          id={"activity-stream-#{@id}"}
+          phx-update="stream"
+          role="log"
+          aria-label="Team activity"
+          aria-live="polite"
+          class="flex flex-col gap-1.5 p-2.5"
+        >
           <div class="hidden only:flex items-center justify-center h-48">
             <div class="text-center space-y-3">
               <div class="text-muted text-3xl opacity-30">&#9673;</div>
@@ -401,9 +409,18 @@ defmodule LoomkinWeb.TeamActivityComponent do
     meta = Map.get(event, :metadata, %{})
     tool_name = meta[:tool_name] || extract_tool_name(event.content)
     file_path = meta[:file_path]
+    command = meta[:command]
     result_preview = meta[:result] || meta[:result_preview]
     has_result = is_binary(result_preview) and result_preview != ""
+    has_command = is_binary(command) and command != ""
+    has_details = has_result or has_command
     expanded = MapSet.member?(assigns.expanded_ids, event.id)
+
+    # For shell commands, show a truncated preview inline
+    command_preview =
+      if has_command do
+        if String.length(command) > 60, do: String.slice(command, 0, 60) <> "...", else: command
+      end
 
     assigns =
       assigns
@@ -411,8 +428,12 @@ defmodule LoomkinWeb.TeamActivityComponent do
       |> assign(:config, config)
       |> assign(:tool_name, tool_name)
       |> assign(:file_path, file_path)
+      |> assign(:command, command)
+      |> assign(:command_preview, command_preview)
       |> assign(:result_preview, result_preview)
       |> assign(:has_result, has_result)
+      |> assign(:has_command, has_command)
+      |> assign(:has_details, has_details)
       |> assign(:expanded, expanded)
 
     ~H"""
@@ -455,8 +476,14 @@ defmodule LoomkinWeb.TeamActivityComponent do
           {relative_time(@event.timestamp)}
         </span>
       </div>
-      <%!-- Collapsible result --%>
-      <div :if={@has_result} class="px-3 pb-2">
+      <%!-- Shell command preview --%>
+      <div :if={@has_command} class="px-3 pb-1.5">
+        <code class="text-[11px] font-mono text-emerald-400/90 bg-emerald-500/5 border border-emerald-500/10 rounded px-1.5 py-0.5 inline-block max-w-full truncate">
+          $ {@command_preview}
+        </code>
+      </div>
+      <%!-- Expandable details: full command + result --%>
+      <div :if={@has_details} class="px-3 pb-2">
         <button
           :if={!@expanded}
           phx-click="expand_event"
@@ -464,22 +491,29 @@ defmodule LoomkinWeb.TeamActivityComponent do
           phx-target={@myself}
           class="text-11 text-muted transition-colors duration-200"
         >
-          &#9656; Result ({format_result_size(@result_preview)})
+          &#9656; {expand_label(@has_command, @has_result, @command, @result_preview)}
         </button>
-        <div :if={@expanded} class="animate-fade-in-up">
-          <pre class="overflow-auto mt-1 text-11 font-mono text-secondary whitespace-pre-wrap break-words bg-surface-0 border border-subtle rounded-md px-3 py-2 max-h-64">{@result_preview}</pre>
+        <div :if={@expanded} class="animate-fade-in-up space-y-1.5">
+          <div :if={@has_command}>
+            <p class="text-[10px] text-muted uppercase tracking-wider mb-0.5">Command</p>
+            <pre class="overflow-auto text-11 font-mono text-emerald-300 whitespace-pre-wrap break-words bg-zinc-950 border border-emerald-500/10 rounded-md px-3 py-2 max-h-32">$ {@command}</pre>
+          </div>
+          <div :if={@has_result}>
+            <p class="text-[10px] text-muted uppercase tracking-wider mb-0.5">Output</p>
+            <pre class="overflow-auto text-11 font-mono text-secondary whitespace-pre-wrap break-words bg-surface-0 border border-subtle rounded-md px-3 py-2 max-h-64">{@result_preview}</pre>
+          </div>
           <button
             phx-click="expand_event"
             phx-value-id={@event.id}
             phx-target={@myself}
-            class="mt-1 text-11 text-muted transition-colors duration-200"
+            class="mt-0.5 text-11 text-muted transition-colors duration-200"
           >
             &#9662; Collapse
           </button>
         </div>
       </div>
-      <%!-- Fallback: show content if no result --%>
-      <div :if={!@has_result && String.length(@event.content) > 0} class="px-3 pb-2">
+      <%!-- Fallback: show content if no details --%>
+      <div :if={!@has_details && String.length(@event.content) > 0} class="px-3 pb-2">
         <p class="text-xs text-secondary break-words">
           {@event.content}
         </p>
@@ -1276,7 +1310,7 @@ defmodule LoomkinWeb.TeamActivityComponent do
 
   # Fallback for any unknown event type
   defp render_event_card(assigns, event) do
-    config = Map.get(@type_config, event.type, fallback_config())
+    config = @type_config[event.type] || fallback_config()
     expanded = MapSet.member?(assigns.expanded_ids, event.id)
 
     assigns =
@@ -1408,6 +1442,13 @@ defmodule LoomkinWeb.TeamActivityComponent do
   defp format_tokens(n) when is_integer(n) and n >= 1000, do: "#{Float.round(n / 1000, 1)}k"
   defp format_tokens(n) when is_integer(n), do: to_string(n)
   defp format_tokens(_), do: "?"
+
+  defp expand_label(true, true, cmd, result),
+    do: "Details (#{format_result_size(cmd)} cmd + #{format_result_size(result)} output)"
+
+  defp expand_label(true, false, cmd, _), do: "Command (#{format_result_size(cmd)})"
+  defp expand_label(false, true, _, result), do: "Result (#{format_result_size(result)})"
+  defp expand_label(_, _, _, _), do: "Details"
 
   defp format_result_size(str) when is_binary(str) do
     lines = str |> String.split("\n") |> length()

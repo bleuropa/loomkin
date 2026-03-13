@@ -38,17 +38,23 @@ defmodule Loomkin.Models do
   @doc """
   Returns `[{provider_name, [{model_label, "provider:model_id"}, ...]}]`
   for all providers that have an API key set or an active OAuth connection.
+  Includes local providers (Ollama) when available.
   """
   def available_models do
-    @providers
-    |> Enum.filter(fn {provider, {_name, _env_var}} ->
-      provider_available?(provider)
-    end)
-    |> Enum.map(fn {provider, {display_name, _env_var}} ->
-      models = fetch_provider_models(provider)
-      {display_name, models}
-    end)
-    |> Enum.reject(fn {_name, models} -> models == [] end)
+    cloud_models =
+      @providers
+      |> Enum.filter(fn {provider, {_name, _env_var}} ->
+        provider_available?(provider)
+      end)
+      |> Enum.map(fn {provider, {display_name, _env_var}} ->
+        models = fetch_provider_models(provider)
+        {display_name, models}
+      end)
+      |> Enum.reject(fn {_name, models} -> models == [] end)
+
+    local_models = fetch_ollama_models()
+
+    (local_models ++ cloud_models)
     |> Enum.sort_by(fn {name, _} -> name end)
   end
 
@@ -83,6 +89,9 @@ defmodule Loomkin.Models do
             {:missing, env_var}
         end
 
+      nil when provider_atom == :ollama ->
+        if Loomkin.Providers.Ollama.available?(), do: :local, else: :local_offline
+
       nil ->
         {:missing, "UNKNOWN_API_KEY"}
     end
@@ -114,15 +123,20 @@ defmodule Loomkin.Models do
   Returns `[{provider_name, [{label, "provider:model_id", context_label}, ...]}]`
   """
   def available_models_enriched do
-    @providers
-    |> Enum.filter(fn {provider, {_name, _env_var}} ->
-      provider_available?(provider)
-    end)
-    |> Enum.map(fn {provider, {display_name, _env_var}} ->
-      models = fetch_provider_models_enriched(provider)
-      {display_name, models}
-    end)
-    |> Enum.reject(fn {_name, models} -> models == [] end)
+    cloud_models =
+      @providers
+      |> Enum.filter(fn {provider, {_name, _env_var}} ->
+        provider_available?(provider)
+      end)
+      |> Enum.map(fn {provider, {display_name, _env_var}} ->
+        models = fetch_provider_models_enriched(provider)
+        {display_name, models}
+      end)
+      |> Enum.reject(fn {_name, models} -> models == [] end)
+
+    local_models = fetch_ollama_models_enriched()
+
+    (local_models ++ cloud_models)
     |> Enum.sort_by(fn {name, _} -> name end)
   end
 
@@ -133,27 +147,33 @@ defmodule Loomkin.Models do
   sorted with keyed/OAuth-connected providers first, then alphabetical.
   """
   def all_providers_enriched do
-    @providers
-    |> Enum.map(fn {provider, {display_name, _env_var}} ->
-      status = api_key_status(provider)
+    cloud_providers =
+      @providers
+      |> Enum.map(fn {provider, {display_name, _env_var}} ->
+        status = api_key_status(provider)
 
-      models =
-        case status do
-          {:set, _} -> fetch_provider_models_enriched(provider)
-          {:oauth, :connected} -> fetch_provider_models_enriched(provider)
-          _ -> []
-        end
+        models =
+          case status do
+            {:set, _} -> fetch_provider_models_enriched(provider)
+            {:oauth, :connected} -> fetch_provider_models_enriched(provider)
+            _ -> []
+          end
 
-      {provider, display_name, status, models}
-    end)
+        {provider, display_name, status, models}
+      end)
+
+    ollama_entry = build_ollama_provider_entry()
+
+    (ollama_entry ++ cloud_providers)
     |> Enum.sort_by(fn {_p, name, status, _m} ->
-      # Providers with keys or OAuth first, then OAuth-capable, then rest
       priority =
         case status do
           {:set, _} -> 0
           {:oauth, :connected} -> 0
+          :local -> 0
           {:oauth, :disconnected} -> 1
           {:missing, _} -> 2
+          :local_offline -> 2
         end
 
       {priority, name}
@@ -212,4 +232,70 @@ defmodule Loomkin.Models do
   end
 
   defp format_context_window(_), do: nil
+
+  # ── Ollama (local) helpers ──────────────────────────────────────────
+
+  defp fetch_ollama_models do
+    case Loomkin.Providers.Ollama.list_models() do
+      {:ok, models} ->
+        entries =
+          models
+          |> Enum.map(fn m ->
+            name = m["name"] || m["model"]
+            {name, "ollama:#{name}"}
+          end)
+
+        if entries == [], do: [], else: [{"Ollama (Local)", entries}]
+
+      _ ->
+        []
+    end
+  end
+
+  defp fetch_ollama_models_enriched do
+    case Loomkin.Providers.Ollama.list_models() do
+      {:ok, models} ->
+        entries =
+          models
+          |> Enum.map(fn m ->
+            name = m["name"] || m["model"]
+            size = format_ollama_size(m["size"])
+            {name, "ollama:#{name}", size}
+          end)
+
+        if entries == [], do: [], else: [{"Ollama (Local)", entries}]
+
+      _ ->
+        []
+    end
+  end
+
+  defp build_ollama_provider_entry do
+    case Loomkin.Providers.Ollama.list_models() do
+      {:ok, models} ->
+        entries =
+          Enum.map(models, fn m ->
+            name = m["name"] || m["model"]
+            size = format_ollama_size(m["size"])
+            {name, "ollama:#{name}", size}
+          end)
+
+        [{:ollama, "Ollama (Local)", :local, entries}]
+
+      _ ->
+        [{:ollama, "Ollama (Local)", :local_offline, []}]
+    end
+  end
+
+  defp format_ollama_size(nil), do: "local"
+
+  defp format_ollama_size(bytes) when is_integer(bytes) and bytes >= 1_000_000_000 do
+    "#{Float.round(bytes / 1_000_000_000, 1)}GB"
+  end
+
+  defp format_ollama_size(bytes) when is_integer(bytes) and bytes >= 1_000_000 do
+    "#{div(bytes, 1_000_000)}MB"
+  end
+
+  defp format_ollama_size(_), do: "local"
 end

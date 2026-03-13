@@ -57,7 +57,10 @@ defmodule Loomkin.Config do
       google: %{
         client_id: nil,
         client_secret: nil,
-        scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+        scopes: [
+          "https://www.googleapis.com/auth/cloud-platform",
+          "https://www.googleapis.com/auth/generative-language.retriever"
+        ],
         api_surface: "generative_language"
       },
       openai: %{
@@ -158,7 +161,21 @@ defmodule Loomkin.Config do
   @impl true
   def init(_opts) do
     table = :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
-    store_config(@defaults)
+
+    # Auto-load .loomkin.toml from the working directory so auth credentials
+    # (and other settings) are available before any explicit Config.load/1 call.
+    project_path = File.cwd!()
+    toml_path = Path.join(project_path, ".loomkin.toml")
+
+    config =
+      case Toml.decode_file(toml_path) do
+        {:ok, parsed} -> deep_merge(@defaults, atomize_keys(parsed))
+        {:error, _} -> @defaults
+      end
+
+    store_config(resolve_env_vars(config))
+    :ets.insert(table, {:project_path, project_path})
+
     {:ok, %{table: table}}
   end
 
@@ -207,7 +224,7 @@ defmodule Loomkin.Config do
     models grunt standard expert architect escalation
     templates agents role count
     consensus quorum max_rounds scope on_deadlock
-    anthropic google openai client_id client_secret authorize_url token_url scopes mode api_surface
+    anthropic google openai client_id client_secret authorize_url token_url scopes mode api_surface callback_base_url gcp_project_id
     telegram discord bot_token webhook_url webhook_path secret_token chat_id allowed_chat_ids allow_user_ids guild_ids)a
 
   # Pre-compute a string→atom lookup map so atomize_keys never raises

@@ -1,22 +1,45 @@
 defmodule Loomkin.Teams.Comms do
   @moduledoc "Convenience functions wrapping Jido Signal Bus for team communication."
 
+  require Logger
+
   alias Loomkin.Signals
   alias Loomkin.Signals.Extensions.Causality
+  alias Loomkin.Teams.Topics
 
-  @doc "Subscribe agent to all team signal paths."
+  @doc """
+  Subscribe agent to all team signal paths.
+
+  Returns `{:ok, subscription_ids}` where `subscription_ids` is a list of
+  subscription references that can be passed to `unsubscribe/1` for cleanup.
+  """
   def subscribe(_team_id, _agent_name) do
-    # Subscribe to all team-scoped signals via the bus
-    Signals.subscribe("agent.**")
-    Signals.subscribe("team.**")
-    Signals.subscribe("context.**")
-    Signals.subscribe("collaboration.**")
-    Signals.subscribe("decision.**")
-    :ok
+    paths = [
+      Topics.agent_all(),
+      Topics.team_all(),
+      Topics.context_all(),
+      Topics.collaboration_all(),
+      Topics.decision_all()
+    ]
+
+    subscription_ids =
+      Enum.reduce(paths, [], fn path, acc ->
+        case Signals.subscribe(path) do
+          {:ok, sub_id} -> [sub_id | acc]
+          _other -> acc
+        end
+      end)
+
+    {:ok, Enum.reverse(subscription_ids)}
   end
 
-  @doc "Unsubscribe agent from all team topics (no-op with signal bus — handled by process termination)."
-  def unsubscribe(_team_id, _agent_name) do
+  @doc """
+  Unsubscribe from the signal bus using previously tracked subscription IDs.
+
+  Accepts the list of subscription IDs returned by `subscribe/2`.
+  """
+  def unsubscribe(subscription_ids) when is_list(subscription_ids) do
+    Enum.each(subscription_ids, &Signals.unsubscribe/1)
     :ok
   end
 
@@ -52,7 +75,17 @@ defmodule Loomkin.Teams.Comms do
       `:blocker` type discoveries. Defaults to `true`.
 
   """
-  def broadcast_context(team_id, %{from: from} = payload, opts \\ []) do
+  def broadcast_context(team_id, payload, opts \\ [])
+
+  def broadcast_context(_team_id, %{from: nil} = payload, _opts) do
+    Logger.warning(
+      "[Kin:data] broadcast_context called with nil :from, keys=#{inspect(Map.keys(payload))}"
+    )
+
+    :ok
+  end
+
+  def broadcast_context(team_id, %{from: from} = payload, opts) do
     signal = Loomkin.Signals.Context.Update.new!(%{from: to_string(from), team_id: team_id})
 
     %{signal | data: Map.merge(signal.data, %{payload: payload})}
@@ -82,10 +115,15 @@ defmodule Loomkin.Teams.Comms do
     if agents == [] do
       broadcast_context(team_id, payload)
     else
-      relevant =
-        agents
-        |> Enum.reject(fn agent -> to_string(agent.name) == to_string(from) end)
-        |> RelevanceScorer.filter_relevant(payload, threshold)
+      other_agents = Enum.reject(agents, fn agent -> to_string(agent.name) == to_string(from) end)
+
+      all_scored =
+        Enum.map(other_agents, fn agent -> {agent, RelevanceScorer.score(payload, agent)} end)
+
+      {relevant, skipped} =
+        Enum.split_with(all_scored, fn {_agent, score} -> score >= threshold end)
+
+      relevant = Enum.sort_by(relevant, fn {_agent, s} -> s end, :desc)
 
       if relevant == [] do
         broadcast_context(team_id, payload)
@@ -93,6 +131,24 @@ defmodule Loomkin.Teams.Comms do
         Enum.each(relevant, fn {agent, _score} ->
           send_to(team_id, agent.name, {:context_update, from, payload})
         end)
+
+        # Emit a context.update signal with relevance metadata for UI visibility
+        recipients = Enum.map(relevant, fn {agent, score} -> {to_string(agent.name), score} end)
+        skipped_list = Enum.map(skipped, fn {agent, score} -> {to_string(agent.name), score} end)
+
+        signal =
+          Loomkin.Signals.Context.Update.new!(%{from: to_string(from), team_id: team_id})
+
+        %{
+          signal
+          | data:
+              Map.merge(signal.data, %{
+                payload: payload,
+                relevance: %{recipients: recipients, skipped: skipped_list}
+              })
+        }
+        |> Causality.attach(team_id: team_id, agent_name: to_string(from))
+        |> Signals.publish()
       end
     end
   end
@@ -121,7 +177,7 @@ defmodule Loomkin.Teams.Comms do
 
         :ok
 
-      :none ->
+      :error ->
         :ok
     end
   end
@@ -173,6 +229,131 @@ defmodule Loomkin.Teams.Comms do
     |> Signals.publish()
   end
 
+  def broadcast_task_event(team_id, {:task_milestone, task_id, owner, milestone_name}) do
+    Loomkin.Signals.Team.TaskMilestoneReached.new!(%{
+      task_id: task_id,
+      milestone_name: milestone_name,
+      owner: to_string(owner || "unknown"),
+      team_id: team_id
+    })
+    |> Causality.attach(
+      team_id: team_id,
+      agent_name: to_string(owner || "unknown"),
+      task_id: task_id
+    )
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:task_priority_changed, task_id, owner, new_priority}) do
+    Loomkin.Signals.Team.TaskPriorityChanged.new!(%{
+      task_id: task_id,
+      owner: to_string(owner || "unknown"),
+      new_priority: new_priority,
+      team_id: team_id
+    })
+    |> Causality.attach(
+      team_id: team_id,
+      agent_name: to_string(owner || "unknown"),
+      task_id: task_id
+    )
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:task_ready_for_review, task_id, owner, summary}) do
+    signal =
+      Loomkin.Signals.Team.TaskReadyForReview.new!(%{
+        task_id: task_id,
+        owner: to_string(owner),
+        team_id: team_id
+      })
+
+    %{signal | data: Map.put(signal.data, :summary, summary)}
+    |> Causality.attach(team_id: team_id, agent_name: to_string(owner), task_id: task_id)
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:task_blocked, task_id, owner, reason}) do
+    signal =
+      Loomkin.Signals.Team.TaskBlocked.new!(%{
+        task_id: task_id,
+        owner: to_string(owner),
+        team_id: team_id
+      })
+
+    %{signal | data: Map.put(signal.data, :reason, reason)}
+    |> Causality.attach(team_id: team_id, agent_name: to_string(owner), task_id: task_id)
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:task_resumed, task_id, owner}) do
+    Loomkin.Signals.Team.TaskResumed.new!(%{
+      task_id: task_id,
+      owner: to_string(owner),
+      team_id: team_id
+    })
+    |> Causality.attach(team_id: team_id, agent_name: to_string(owner), task_id: task_id)
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:task_partially_complete, task_id, owner, partial_result}) do
+    signal =
+      Loomkin.Signals.Team.TaskPartiallyComplete.new!(%{
+        task_id: task_id,
+        owner: to_string(owner),
+        team_id: team_id
+      })
+
+    %{signal | data: Map.put(signal.data, :partial_result, partial_result)}
+    |> Causality.attach(team_id: team_id, agent_name: to_string(owner), task_id: task_id)
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(
+        team_id,
+        {:task_speculative_started, task_id, based_on_task_id, assumed_output}
+      ) do
+    signal =
+      Loomkin.Signals.Team.TaskSpeculativeStarted.new!(%{
+        task_id: task_id,
+        based_on_task_id: based_on_task_id,
+        team_id: team_id
+      })
+
+    %{signal | data: Map.put(signal.data, :assumed_output, assumed_output)}
+    |> Causality.attach(team_id: team_id, task_id: task_id)
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:assumption_violated, task_id, key, assumed, actual}) do
+    Loomkin.Signals.Team.AssumptionViolated.new!(%{
+      task_id: task_id,
+      assumption_key: key,
+      assumed_value: assumed,
+      actual_value: actual,
+      team_id: team_id
+    })
+    |> Causality.attach(team_id: team_id, task_id: task_id)
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:speculative_confirmed, task_id}) do
+    Loomkin.Signals.Team.SpeculativeConfirmed.new!(%{
+      task_id: task_id,
+      team_id: team_id
+    })
+    |> Causality.attach(team_id: team_id, task_id: task_id)
+    |> Signals.publish()
+  end
+
+  def broadcast_task_event(team_id, {:speculative_discarded, task_id}) do
+    Loomkin.Signals.Team.SpeculativeDiscarded.new!(%{
+      task_id: task_id,
+      team_id: team_id
+    })
+    |> Causality.attach(team_id: team_id, task_id: task_id)
+    |> Signals.publish()
+  end
+
   def broadcast_task_event(team_id, event) do
     # Fallback for other task events
     signal = Loomkin.Signals.Collaboration.PeerMessage.new!(%{from: "tasks", team_id: team_id})
@@ -215,7 +396,7 @@ defmodule Loomkin.Teams.Comms do
           |> Causality.attach(team_id: team_id, agent_name: to_string(from))
           |> Signals.publish()
 
-        :none ->
+        :error ->
           :ok
       end
     end

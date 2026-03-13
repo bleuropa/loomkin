@@ -45,6 +45,8 @@ defmodule Loomkin.Teams.AgentCheckpointTest do
 
     test "request_pause sets the flag" do
       %{pid: pid} = start_agent()
+      # Agent must be :working for request_pause to set the flag (idle is a no-op)
+      :sys.replace_state(pid, fn s -> %{s | status: :working} end)
       Agent.request_pause(pid)
       # Allow cast to process
       _ = :sys.get_state(pid)
@@ -62,6 +64,8 @@ defmodule Loomkin.Teams.AgentCheckpointTest do
 
     test "returns {:pause, :user_requested} when pause is requested" do
       %{pid: pid} = start_agent()
+      # Agent must be :working for request_pause to set the flag (idle is a no-op)
+      :sys.replace_state(pid, fn s -> %{s | status: :working} end)
       Agent.request_pause(pid)
       _ = :sys.get_state(pid)
 

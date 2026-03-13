@@ -70,7 +70,7 @@ defmodule LoomkinWeb.CostDashboardLiveTest do
       # The broadcast_update() in the telemetry handler fires before the GenServer
       # processes the cast, so the first re-render may read stale ETS data.
       Process.sleep(100)
-      Phoenix.PubSub.broadcast(Loomkin.PubSub, "telemetry:updates", :metrics_updated)
+      Loomkin.Signals.publish(Loomkin.Signals.System.MetricsUpdated.new!())
       Process.sleep(50)
 
       html = render(view)

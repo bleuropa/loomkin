@@ -4,6 +4,7 @@ defmodule Loomkin.Teams.NestedTeamsTest do
   alias Loomkin.Teams.{Manager, TableRegistry}
 
   setup do
+    Loomkin.Signals.subscribe("team.**")
     {:ok, parent_id} = Manager.create_team(name: "parent-team")
 
     on_exit(fn ->
@@ -77,6 +78,24 @@ defmodule Loomkin.Teams.NestedTeamsTest do
       assert {:error, :parent_not_found} =
                Manager.create_sub_team("nonexistent-team", "lead", name: "orphan")
     end
+
+    test "publishes ChildTeamCreated with team_name and depth", %{parent_id: parent_id} do
+      {:ok, sub_id} = Manager.create_sub_team(parent_id, "lead-agent", name: "signal-child")
+
+      assert_receive {:signal,
+                      %Jido.Signal{
+                        type: "team.child.created",
+                        data: %{
+                          team_id: ^sub_id,
+                          parent_team_id: ^parent_id,
+                          team_name: "signal-child",
+                          depth: 1
+                        }
+                      }},
+                     500
+
+      TableRegistry.delete_table(sub_id)
+    end
   end
 
   describe "list_sub_teams/1" do
@@ -96,12 +115,12 @@ defmodule Loomkin.Teams.NestedTeamsTest do
       TableRegistry.delete_table(sub_id)
     end
 
-    test "returns :none for root team", %{parent_id: parent_id} do
-      assert :none = Manager.get_parent_team(parent_id)
+    test "returns :error for root team", %{parent_id: parent_id} do
+      assert :error = Manager.get_parent_team(parent_id)
     end
 
-    test "returns :none for nonexistent team" do
-      assert :none = Manager.get_parent_team("nonexistent")
+    test "returns :error for nonexistent team" do
+      assert :error = Manager.get_parent_team("nonexistent")
     end
   end
 
@@ -159,7 +178,7 @@ defmodule Loomkin.Teams.NestedTeamsTest do
       parent_team_id =
         case Manager.get_parent_team(child_id) do
           {:ok, pid} -> pid
-          :none -> nil
+          :error -> nil
         end
 
       assert parent_team_id == parent_id
@@ -172,7 +191,7 @@ defmodule Loomkin.Teams.NestedTeamsTest do
       parent_team_id =
         case Manager.get_parent_team(team_id) do
           {:ok, pid} -> pid
-          :none -> nil
+          :error -> nil
         end
 
       assert parent_team_id == nil

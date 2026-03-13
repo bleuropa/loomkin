@@ -177,8 +177,9 @@ defmodule Loomkin.Auth.Providers.Google do
       state: state_token,
       # Enable PKCE — Assent will generate its own code_verifier internally
       code_verifier: true,
-      # Enable nonce for OIDC ID token validation
-      nonce: true,
+      # Generate a real nonce string — passing `true` causes Assent 0.3.1 to store
+      # the boolean rather than a random value, breaking constant_time_compare/2
+      nonce: Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false),
       authorization_params: [
         access_type: "offline",
         prompt: "consent",

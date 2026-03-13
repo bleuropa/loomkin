@@ -349,7 +349,7 @@ defmodule Loomkin.Teams.AgentAsyncTest do
 
       state = :sys.get_state(pid)
       assert state.loop_task == nil
-      assert state.status == :idle
+      assert state.status == :error
     end
 
     test "queued messages are drained after loop completes" do

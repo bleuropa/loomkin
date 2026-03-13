@@ -53,7 +53,7 @@ defmodule Loomkin.Tools.ListTeams do
         agents = format_agents(parent_id)
         "## Parent Team\n- #{name} (#{parent_id})#{agents}"
 
-      :none ->
+      :error ->
         nil
     end
   end
@@ -73,7 +73,7 @@ defmodule Loomkin.Tools.ListTeams do
 
         "## Sibling Teams\n#{entries}"
 
-      :none ->
+      :error ->
         nil
     end
   end

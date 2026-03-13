@@ -24,14 +24,26 @@ defmodule Loomkin.Tools.Registry do
     Loomkin.Tools.PeerAnswerQuestion,
     Loomkin.Tools.PeerForwardQuestion,
     Loomkin.Tools.CollectiveDecision,
-    Loomkin.Tools.AskUser
+    Loomkin.Tools.AskUser,
+    Loomkin.Tools.RequestApproval,
+    Loomkin.Tools.PeerEmitMilestone,
+    Loomkin.Tools.PeerAddDependency,
+    Loomkin.Tools.PeerUpdateTaskStatus,
+    Loomkin.Tools.PeerSignalReady,
+    Loomkin.Tools.PeerResumeTask,
+    Loomkin.Tools.PeerStartSpeculative,
+    Loomkin.Tools.PeerConfirmTentative,
+    Loomkin.Tools.PeerDiscardTentative,
+    Loomkin.Tools.PeerNegotiateTask
   ]
 
   @lead_tools [
     Loomkin.Tools.TeamSpawn,
     Loomkin.Tools.TeamAssign,
     Loomkin.Tools.TeamProgress,
-    Loomkin.Tools.TeamDissolve
+    Loomkin.Tools.TeamDissolve,
+    Loomkin.Tools.CreateRendezvous,
+    Loomkin.Tools.PeerResolveNegotiation
   ]
 
   @team_tools @peer_tools ++ @lead_tools
@@ -107,6 +119,11 @@ defmodule Loomkin.Tools.Registry do
     query_id answer enrichment to new_role require_approval
     start_line end_line diff task scope severity task_id result name role count
     options
+    gate_id gate_context
+    depends_on_id dep_type milestone_name
+    new_status reason ready_for rendezvous_id required_agents on_complete_message timeout_minutes
+    response counter_proposal resolution
+    blocker_task_id assumed_output requeue
   )a
 
   @known_param_key_map Map.new(@known_param_keys, fn atom -> {Atom.to_string(atom), atom} end)
@@ -129,6 +146,4 @@ defmodule Loomkin.Tools.Registry do
       :error -> s
     end
   end
-
-  defp safe_to_atom(s), do: s
 end

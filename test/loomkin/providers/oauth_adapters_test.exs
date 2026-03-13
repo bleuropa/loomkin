@@ -17,6 +17,12 @@ defmodule Loomkin.Providers.OAuthAdaptersTest do
       TokenStore.revoke_tokens(provider)
     end
 
+    on_exit(fn ->
+      for provider <- [:anthropic, :openai, :google] do
+        TokenStore.revoke_tokens(provider)
+      end
+    end)
+
     :ok
   end
 

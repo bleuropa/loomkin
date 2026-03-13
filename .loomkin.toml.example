@@ -32,13 +32,21 @@ auto_log_commits = true
 # Requires creating OAuth credentials in Google Cloud Console:
 #   1. Go to https://console.cloud.google.com/apis/credentials
 #   2. Create an "OAuth 2.0 Client ID" (Desktop or Web app)
-#   3. Add http://127.0.0.1:4000/auth/google/callback as an authorized redirect URI
+#   3. Add http://localhost:4200/auth/google/callback as an authorized redirect URI
+#      (Google does not accept .test TLDs — use localhost even if your dev host differs)
 #   4. Enable the "Generative Language API" in APIs & Services
+#
+# callback_base_url overrides the host used when building OAuth redirect URIs.
+# Required when your dev server runs on a .test or custom TLD that Google rejects.
+#
+# [auth]
+# callback_base_url = "http://localhost:4200"
 #
 # [auth.google]
 # client_id = "your-client-id.apps.googleusercontent.com"
 # client_secret = "GOCSPX-..."
-# scopes = "https://www.googleapis.com/auth/cloud-platform"
+# scopes = "https://www.googleapis.com/auth/generative-language"
+# gcp_project_id = "my-project-123456"   # required with OAuth user credentials; find in Google Cloud Console > project selector
 
 # OpenAI (ChatGPT Plus/Pro) — standard OAuth2 redirect flow via Codex backend.
 # Uses the shared Codex CLI client ID by default; no client_secret needed.

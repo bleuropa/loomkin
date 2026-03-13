@@ -165,8 +165,8 @@ defmodule Loomkin.Teams.CrossTeamTest do
       refute child_a in siblings
     end
 
-    test "get_sibling_teams returns :none for root team", %{parent_id: parent_id} do
-      assert :none = Manager.get_sibling_teams(parent_id)
+    test "get_sibling_teams returns :error for root team", %{parent_id: parent_id} do
+      assert :error = Manager.get_sibling_teams(parent_id)
     end
 
     test "get_child_teams returns child IDs", %{

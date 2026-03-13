@@ -101,7 +101,7 @@ defmodule Loomkin.Channels.Discord.Consumer do
     end
   end
 
-  def handle_event(_event), do: :ok
+  def handle_event({_event_type, _data, _ws_state}), do: :ok
 
   # --- Private ---
 

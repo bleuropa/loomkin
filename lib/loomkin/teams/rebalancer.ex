@@ -8,6 +8,8 @@ defmodule Loomkin.Teams.Rebalancer do
 
   use GenServer
 
+  alias Loomkin.Signals
+  alias Loomkin.Signals.Extensions.Causality
   alias Loomkin.Teams.Comms
   alias Loomkin.Teams.Context
 
@@ -118,15 +120,15 @@ defmodule Loomkin.Teams.Rebalancer do
   end
 
   def handle_info(%Jido.Signal{type: "team.task.started", data: %{owner: owner}}, state) do
-    {:noreply, record_activity(state, to_string(owner))}
+    {:noreply, record_activity(state, to_string(owner), :task_change)}
   end
 
   def handle_info(%Jido.Signal{type: "team.task.completed", data: %{owner: owner}}, state) do
-    {:noreply, record_activity(state, to_string(owner))}
+    {:noreply, record_activity(state, to_string(owner), :task_change)}
   end
 
   def handle_info(%Jido.Signal{type: "collaboration.peer.message", data: %{from: from}}, state) do
-    {:noreply, record_activity(state, to_string(from))}
+    {:noreply, record_activity(state, to_string(from), :message)}
   end
 
   # Catch-all
@@ -140,13 +142,17 @@ defmodule Loomkin.Teams.Rebalancer do
     now = System.monotonic_time(:millisecond)
 
     Enum.reduce(state.working_since, state, fn {agent_name, working_since}, acc ->
-      last_activity = Map.get(acc.last_activity, agent_name, working_since)
-      idle_ms = now - last_activity
-
-      if idle_ms > @stuck_threshold_ms do
-        handle_stuck_agent(acc, agent_name, idle_ms)
-      else
+      if coordination_role?(state.team_id, agent_name) do
         acc
+      else
+        last_activity = Map.get(acc.last_activity, agent_name, working_since)
+        idle_ms = now - last_activity
+
+        if idle_ms > @stuck_threshold_ms do
+          handle_stuck_agent(acc, agent_name, idle_ms)
+        else
+          acc
+        end
       end
     end)
   end
@@ -156,38 +162,95 @@ defmodule Loomkin.Teams.Rebalancer do
     idle_min = div(idle_ms, 60_000)
 
     if nudge_count < @max_nudges do
+      new_count = nudge_count + 1
+
       nudge_msg =
         "You appear stuck (no activity for #{idle_min}m). " <>
           "Consider breaking down your current task, asking for help, or trying a different approach."
 
       Comms.send_to(state.team_id, agent_name, {:peer_message, "rebalancer", nudge_msg})
 
-      put_in(state.nudge_counts[agent_name], nudge_count + 1)
+      emit_rebalance_signal(state.team_id, %{
+        agent_name: agent_name,
+        event: :nudge,
+        idle_min: idle_min,
+        nudge_count: new_count,
+        max_nudges: @max_nudges
+      })
+
+      put_in(state.nudge_counts[agent_name], new_count)
     else
       current_task = find_agent_current_task(state.team_id, agent_name)
-      task_info = if current_task, do: current_task.id, else: "unknown"
+
+      task_info =
+        cond do
+          current_task -> current_task[:title] || current_task.id
+          true -> describe_agent_work(state.team_id, agent_name)
+        end
 
       Comms.broadcast(state.team_id, {:rebalance_needed, agent_name, task_info})
+
+      emit_rebalance_signal(state.team_id, %{
+        agent_name: agent_name,
+        event: :escalation,
+        idle_min: idle_min,
+        task_info: task_info
+      })
 
       put_in(state.nudge_counts[agent_name], 0)
     end
   end
 
-  defp find_agent_current_task(team_id, agent_name) do
-    Context.list_cached_tasks(team_id)
-    |> Enum.find(fn t -> t.owner == agent_name and t.status in [:assigned, :in_progress] end)
+  defp emit_rebalance_signal(team_id, metadata) do
+    signal =
+      Signals.Team.RebalanceNeeded.new!(%{
+        agent_name: to_string(metadata.agent_name),
+        task_info: to_string(metadata[:task_info] || ""),
+        team_id: team_id
+      })
+
+    %{signal | data: Map.merge(signal.data, metadata)}
+    |> Causality.attach(team_id: team_id)
+    |> Signals.publish()
   end
 
-  defp record_activity(state, agent_name) do
+  defp find_agent_current_task(team_id, agent_name) do
+    Context.list_cached_tasks(team_id)
+    |> Enum.find(fn t ->
+      to_string(t.owner) == to_string(agent_name) and t.status in [:assigned, :in_progress]
+    end)
+  end
+
+  defp describe_agent_work(team_id, agent_name) do
+    case Context.get_agent(team_id, agent_name) do
+      {:ok, %{role: role}} -> "#{agent_name} (#{role})"
+      _ -> agent_name
+    end
+  end
+
+  @substantive_signals [:tool_use, :task_change]
+
+  defp record_activity(state, agent_name, signal_type \\ :tool_use) do
     now = System.monotonic_time(:millisecond)
 
-    state
-    |> put_in([:last_activity, Access.key(agent_name)], now)
-    |> update_in([:nudge_counts], &Map.delete(&1, agent_name))
+    state = put_in(state, [:last_activity, Access.key(agent_name)], now)
+
+    if signal_type in @substantive_signals do
+      update_in(state, [:nudge_counts], &Map.delete(&1, agent_name))
+    else
+      state
+    end
   end
 
   defp schedule_check(interval) do
     Process.send_after(self(), :check_stuck, interval)
+  end
+
+  defp coordination_role?(team_id, agent_name) do
+    case Context.get_agent(team_id, agent_name) do
+      {:ok, %{role: role}} -> role in [:weaver, "weaver"]
+      _ -> false
+    end
   end
 
   defp signal_for_team?(sig, team_id) do

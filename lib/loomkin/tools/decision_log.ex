@@ -48,12 +48,21 @@ defmodule Loomkin.Tools.DecisionLog do
         if team_id = param(context, :team_id), do: Map.put(m, "team_id", team_id), else: m
       end)
 
+    raw_session_id = param(context, :session_id)
+
+    # session_id must be a valid UUID for the :binary_id column — reject non-UUID values
+    session_id =
+      case Ecto.UUID.cast(raw_session_id) do
+        {:ok, uuid} -> uuid
+        :error -> nil
+      end
+
     attrs = %{
       node_type: node_type,
       title: title,
       description: param(params, :description),
       confidence: param(params, :confidence),
-      session_id: param(context, :session_id),
+      session_id: session_id,
       agent_name: param(context, :agent_name),
       metadata: metadata
     }

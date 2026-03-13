@@ -53,6 +53,9 @@ defmodule Loomkin.Application do
         # Team agent orchestration
         Loomkin.Teams.Supervisor,
 
+        # Per-session TeamBroadcaster lifecycle
+        {DynamicSupervisor, name: Loomkin.Teams.BroadcasterSupervisor, strategy: :one_for_one},
+
         # File watcher (starts idle, reacts to :config_loaded)
         Loomkin.RepoIntel.Watcher,
 
@@ -108,6 +111,13 @@ defmodule Loomkin.Application do
             :ok
         end
       end
+    end
+
+    # Register local providers (Ollama)
+    try do
+      Loomkin.Providers.Ollama.register!()
+    rescue
+      _e -> :ok
     end
   end
 end

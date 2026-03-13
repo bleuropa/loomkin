@@ -114,6 +114,7 @@ defmodule LoomkinWeb.FileTreeComponent do
             <input
               type="text"
               name="filter"
+              aria-label="Filter files"
               placeholder="Filter files..."
               value={@filter}
               class="w-full pl-8 pr-8 py-1.5 text-xs bg-gray-800/60 border border-gray-700/50 rounded-lg text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500/50 transition-shadow"

@@ -444,7 +444,7 @@ defmodule Loomkin.Teams.ContextKeeper do
 
   defp extract_answer(response) do
     classified = ReqLLM.Response.classify(response)
-    classified.text || ""
+    classified.text
   end
 
   defp maybe_track_cost(state, response) do

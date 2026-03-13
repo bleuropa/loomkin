@@ -85,7 +85,9 @@ defmodule Loomkin.Signals.Agent do
       schema: [
         agent_name: [type: :string, required: true],
         team_id: [type: :string, required: true],
-        status: [type: :atom, required: true]
+        status: [type: :atom, required: true],
+        previous_status: [type: :atom, required: false],
+        pause_queued: [type: :boolean, required: false]
       ]
   end
 
@@ -106,6 +108,49 @@ defmodule Loomkin.Signals.Agent do
       schema: [
         agent_name: [type: :string, required: true],
         team_id: [type: :string, required: true]
+      ]
+  end
+
+  defmodule Crashed do
+    use Jido.Signal,
+      type: "agent.crashed",
+      schema: [
+        agent_name: [type: :string, required: true],
+        team_id: [type: :string, required: true],
+        reason: [type: :string, required: false],
+        crash_count: [type: :integer, required: false]
+      ]
+  end
+
+  defmodule Recovered do
+    use Jido.Signal,
+      type: "agent.recovered",
+      schema: [
+        agent_name: [type: :string, required: true],
+        team_id: [type: :string, required: true],
+        crash_count: [type: :integer, required: false]
+      ]
+  end
+
+  defmodule PermanentlyFailed do
+    use Jido.Signal,
+      type: "agent.permanently_failed",
+      schema: [
+        agent_name: [type: :string, required: true],
+        team_id: [type: :string, required: true],
+        crash_count: [type: :integer, required: false]
+      ]
+  end
+
+  defmodule Ready do
+    use Jido.Signal,
+      type: "agent.ready",
+      schema: [
+        agent_name: [type: :string, required: true],
+        team_id: [type: :string, required: true],
+        ready_for: [type: :string, required: false],
+        task_id: [type: :string, required: false],
+        rendezvous_id: [type: :string, required: false]
       ]
   end
 end

@@ -3,6 +3,8 @@ defmodule Loomkin.Session do
 
   use GenServer
 
+  require Logger
+
   alias Loomkin.Session.Architect
   alias Loomkin.Session.Persistence
 
@@ -184,23 +186,73 @@ defmodule Loomkin.Session do
         # Subscribe to task signals for child team completion tracking
         Loomkin.Signals.subscribe("team.task.**")
 
+        # For resumed sessions, always trust the DB-persisted project_path.
+        # The parameter may be stale (e.g. File.cwd!() fallback) and would
+        # cause agents to operate on the wrong project.
+        effective_project_path = db_session.project_path || project_path
+
         state = %__MODULE__{
           id: db_session.id,
           model: effective_model,
           fast_model: effective_fast_model,
-          project_path: project_path,
+          project_path: effective_project_path,
           db_session: db_session,
           messages: messages,
           status: :idle,
           tools: tools,
-          auto_approve: auto_approve
+          auto_approve: auto_approve,
+          team_id: db_session.team_id
         }
 
-        {:ok, state}
+        # If this session was previously bootstrapped and has a team,
+        # auto-rebuild agents so dev reloads don't lose multi-agent state.
+        if db_session.bootstrap_spawned && db_session.team_id do
+          {:ok, state, {:continue, :rebuild_team}}
+        else
+          {:ok, state}
+        end
 
       {:error, reason} ->
         {:stop, reason}
     end
+  end
+
+  @impl true
+  def handle_continue(:rebuild_team, state) do
+    Logger.info("[Kin:session] auto-rebuilding team session=#{state.id} team=#{state.team_id}")
+
+    # Re-spawn bootstrap agents so multi-agent state survives reloads.
+    # If the team process is dead (full restart), spawn_agent will fail gracefully —
+    # the backing team will be recreated when the LiveView calls Manager.start_session,
+    # which will send {:team_created, team_id} and trigger bootstrap on next message.
+    state =
+      try do
+        maybe_spawn_bootstrap_agents(%{state | bootstrap_spawned: false})
+      rescue
+        e ->
+          Logger.warning(
+            "[Kin:session] team rebuild failed session=#{state.id} error=#{inspect(e)}"
+          )
+
+          # Delay so the LiveView has time to subscribe after mount
+          session_id = state.id
+
+          Task.start(fn ->
+            Process.sleep(500)
+
+            signal =
+              Loomkin.Signals.Session.LlmError.new!(%{
+                session_id: session_id,
+                error: "Team agents couldn't auto-recover. Send a message to re-initialize."
+              })
+
+            Loomkin.Signals.publish(signal)
+          end)
+
+          state
+      end
+
+    {:noreply, state}
   end
 
   @impl true
@@ -213,7 +265,6 @@ defmodule Loomkin.Session do
 
     # Try routing to Concierge first (bootstrap agent pattern)
     result = maybe_route_to_concierge(state, text)
-    require Logger
     Logger.info("[Kin:session] new_message routing=#{inspect(result)}")
 
     case result do
@@ -331,7 +382,6 @@ defmodule Loomkin.Session do
 
   @impl true
   def handle_info({:team_created, team_id}, state) do
-    require Logger
     Logger.info("[Kin:session] team_created team=#{team_id} session=#{state.id}")
     broadcast(state.id, {:team_available, state.id, team_id})
     {:noreply, Map.put(state, :team_id, team_id)}
@@ -409,6 +459,7 @@ defmodule Loomkin.Session do
 
     case state.architect_task do
       {%Task{ref: ^ref}, from} ->
+        Logger.error("[Kin:session] llm error session=#{state.id} reason=#{inspect(reason)}")
         broadcast(state.id, {:llm_error, state.id, format_error(reason)})
         state = %{state | architect_task: nil}
         state = update_status(state, :idle)
@@ -427,6 +478,7 @@ defmodule Loomkin.Session do
 
     case state.architect_task do
       {%Task{ref: ^ref}, from} ->
+        Logger.error("[Kin:session] llm error session=#{state.id} reason=#{inspect(reason)}")
         broadcast(state.id, {:llm_error, state.id, format_error(reason)})
         state = %{state | messages: new_state.messages, architect_task: nil}
         state = update_status(state, :idle)
@@ -443,6 +495,10 @@ defmodule Loomkin.Session do
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) when is_reference(ref) do
     case state.architect_task do
       {%Task{ref: ^ref}, from} ->
+        Logger.error(
+          "[Kin:session] architect crashed session=#{state.id} reason=#{inspect(reason)}"
+        )
+
         broadcast(state.id, {:llm_error, state.id, "Architect crashed: #{inspect(reason)}"})
         state = %{state | architect_task: nil}
         state = update_status(state, :idle)
@@ -558,6 +614,10 @@ defmodule Loomkin.Session do
 
   defp validate_model(model, fallback) when is_binary(model) do
     case String.split(model, ":", parts: 2) do
+      ["ollama", _model_id] ->
+        # Local provider — always valid if Ollama is running
+        if Loomkin.Providers.Ollama.available?(), do: model, else: fallback
+
       [provider, _model_id] ->
         provider_atom = String.to_existing_atom(provider)
 
@@ -623,21 +683,24 @@ defmodule Loomkin.Session do
     signal = Loomkin.Signals.Session.NewMessage.new!(%{session_id: session_id})
     Loomkin.Signals.publish(%{signal | data: Map.put(signal.data, :message, msg)})
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[Kin:session] broadcast :new_message failed: #{inspect(e)}")
   end
 
   defp broadcast(session_id, {:session_status, _session_id, status}) do
     signal = Loomkin.Signals.Session.StatusChanged.new!(%{session_id: session_id, status: status})
     Loomkin.Signals.publish(signal)
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[Kin:session] broadcast :session_status failed: #{inspect(e)}")
   end
 
   defp broadcast(session_id, {:session_cancelled, _session_id}) do
     signal = Loomkin.Signals.Session.Cancelled.new!(%{session_id: session_id})
     Loomkin.Signals.publish(signal)
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[Kin:session] broadcast :session_cancelled failed: #{inspect(e)}")
   end
 
   defp broadcast(session_id, {:team_available, _session_id, team_id}) do
@@ -646,7 +709,8 @@ defmodule Loomkin.Session do
 
     Loomkin.Signals.publish(signal)
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[Kin:session] broadcast :team_available failed: #{inspect(e)}")
   end
 
   defp broadcast(session_id, {:child_team_available, _session_id, child_team_id}) do
@@ -658,7 +722,8 @@ defmodule Loomkin.Session do
 
     Loomkin.Signals.publish(signal)
   rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[Kin:session] broadcast :child_team_available failed: #{inspect(e)}")
   end
 
   defp broadcast(session_id, {:llm_error, _session_id, error}) do
@@ -667,17 +732,8 @@ defmodule Loomkin.Session do
 
     Loomkin.Signals.publish(signal)
   rescue
-    _ -> :ok
-  end
-
-  defp broadcast(session_id, event) do
-    # Fallback for any unmapped session events
-    signal =
-      Loomkin.Signals.Session.StatusChanged.new!(%{session_id: session_id, status: :unknown})
-
-    Loomkin.Signals.publish(%{signal | data: Map.put(signal.data, :raw_event, event)})
-  rescue
-    _ -> :ok
+    e ->
+      Logger.warning("[Kin:session] broadcast :llm_error failed: #{inspect(e)}")
   end
 
   defp maybe_spawn_bootstrap_agents(%{bootstrap_spawned: true} = state), do: state
@@ -688,7 +744,6 @@ defmodule Loomkin.Session do
     team_id = state.team_id
     project_path = state.project_path
 
-    require Logger
     Logger.info("[Kin:session] spawning bootstrap agents team=#{team_id}")
 
     # Load kin agents from DB for concierge prompt injection
@@ -703,22 +758,24 @@ defmodule Loomkin.Session do
     Loomkin.Teams.Manager.spawn_agent(team_id, "concierge", :concierge,
       model: state.model,
       project_path: project_path,
+      session_id: state.id,
       kin_agents: kin_agents
     )
 
-    # Spawn Orienter (fast model)
+    # Spawn Weaver (fast model) — continuous coordination
     fast_model = state.fast_model || state.model
 
-    Loomkin.Teams.Manager.spawn_agent(team_id, "orienter", :orienter,
+    Loomkin.Teams.Manager.spawn_agent(team_id, "weaver", :weaver,
       model: fast_model,
-      project_path: project_path
+      project_path: project_path,
+      session_id: state.id
     )
 
     # Spawn auto-spawn kin agents
     kin_agents
     |> Enum.filter(& &1.auto_spawn)
     |> Enum.each(fn kin ->
-      spawn_opts = [project_path: project_path]
+      spawn_opts = [project_path: project_path, session_id: state.id]
 
       spawn_opts =
         if kin.model_override,
@@ -727,6 +784,9 @@ defmodule Loomkin.Session do
 
       Loomkin.Teams.Manager.spawn_agent(team_id, kin.name, kin.role, spawn_opts)
     end)
+
+    # Persist bootstrap flag so agents auto-rebuild on session restart
+    Persistence.update_session(state.db_session, %{bootstrap_spawned: true})
 
     %{state | bootstrap_spawned: true}
   end

@@ -22,8 +22,22 @@ defmodule Loomkin.Signals do
     Bus.subscribe(@bus, path, dispatch: {:pid, target: pid, delivery_mode: :async})
   end
 
+  @doc "Unsubscribe from the bus using a subscription ID returned by subscribe/2."
+  def unsubscribe(subscription_id) do
+    Bus.unsubscribe(@bus, subscription_id)
+  end
+
   @doc "Replay recorded signals matching `path` from the bus log."
   def replay(path, start_timestamp \\ 0) do
     Bus.replay(@bus, path, start_timestamp)
+  end
+
+  @doc "Check whether a signal belongs to the given team (or has no team scope)."
+  def signal_for_team?(%Jido.Signal{} = sig, team_id) do
+    signal_team_id =
+      get_in(sig.data, [:team_id]) ||
+        get_in(sig, [Access.key(:extensions, %{}), "loomkin", "team_id"])
+
+    signal_team_id == nil or signal_team_id == team_id
   end
 end

@@ -142,7 +142,7 @@ defmodule Loomkin.Teams.ContextOffload do
              Loomkin.LLM.generate_text(model, llm_messages, [])
            end) do
         {:ok, response} ->
-          topic = ReqLLM.Response.classify(response).text || ""
+          topic = ReqLLM.Response.classify(response).text
           topic = String.trim(topic)
 
           if topic == "" do

@@ -6,8 +6,8 @@ permissions:
   contents: write
 
 env:
-  ELIXIR_VERSION: "1.18"
-  OTP_VERSION: "27"
+  ELIXIR_VERSION: "1.20.0-rc.3"
+  OTP_VERSION: "28"
 
 jobs:
   fix:

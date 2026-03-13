@@ -27,6 +27,12 @@ defmodule Loomkin.Decisions.AutoLogger do
     Loomkin.Signals.subscribe("team.task.*")
     Loomkin.Signals.subscribe("context.keeper.created")
     Loomkin.Signals.subscribe("context.offloaded")
+    Loomkin.Signals.subscribe("agent.tool.*")
+    Loomkin.Signals.subscribe("agent.error")
+    Loomkin.Signals.subscribe("agent.escalation")
+    Loomkin.Signals.subscribe("collaboration.peer.message")
+    Loomkin.Signals.subscribe("decision.logged")
+    Loomkin.Signals.subscribe("collaboration.debate.response")
 
     state = %{
       team_id: team_id,
@@ -76,6 +82,14 @@ defmodule Loomkin.Decisions.AutoLogger do
     task_id = data.task_id
     agent_name = data.agent_name
     title = task_title(task_id)
+
+    if is_nil(agent_name) or is_nil(task_id) do
+      require Logger
+
+      Logger.warning(
+        "[Kin:data] auto_logger task.assigned missing fields: agent_name=#{inspect(agent_name)} task_id=#{inspect(task_id)}"
+      )
+    end
 
     case log_node(state, %{
            node_type: :action,
@@ -155,6 +169,135 @@ defmodule Loomkin.Decisions.AutoLogger do
 
   # Skip context offloaded (redundant with keeper_created)
   def handle_info(%Jido.Signal{type: "context.offloaded"}, state) do
+    {:noreply, state}
+  end
+
+  # Tool executing
+  def handle_info(
+        %Jido.Signal{type: "agent.tool.executing", data: data},
+        state
+      ) do
+    agent_name = to_string(data.agent_name)
+    tool_name = get_in(data, [:payload, :tool_name]) || "unknown"
+
+    log_node(state, %{
+      node_type: :action,
+      title: "Tool: #{tool_name} (#{agent_name})",
+      agent_name: agent_name,
+      metadata: base_metadata(state, %{"tool_name" => tool_name})
+    })
+
+    {:noreply, state}
+  end
+
+  # Tool complete
+  def handle_info(
+        %Jido.Signal{type: "agent.tool.complete", data: data},
+        state
+      ) do
+    agent_name = to_string(data.agent_name)
+    tool_name = get_in(data, [:payload, :tool_name]) || "unknown"
+
+    log_node(state, %{
+      node_type: :outcome,
+      title: "Tool done: #{tool_name} (#{agent_name})",
+      agent_name: agent_name,
+      metadata: base_metadata(state, %{"tool_name" => tool_name})
+    })
+
+    {:noreply, state}
+  end
+
+  # Agent error
+  def handle_info(%Jido.Signal{type: "agent.error", data: data}, state) do
+    agent_name = to_string(data.agent_name)
+    reason = Map.get(data, :reason, "unknown")
+
+    log_node(state, %{
+      node_type: :outcome,
+      title: "Error (#{agent_name}): #{truncate(inspect(reason), 120)}",
+      agent_name: agent_name,
+      metadata: base_metadata(state, %{"error" => true})
+    })
+
+    {:noreply, state}
+  end
+
+  # Agent escalation
+  def handle_info(%Jido.Signal{type: "agent.escalation", data: data}, state) do
+    agent_name = to_string(data.agent_name)
+    from_model = Map.get(data, :from_model, "?")
+    to_model = Map.get(data, :to_model, "?")
+
+    log_node(state, %{
+      node_type: :revisit,
+      title: "Escalated #{agent_name}: #{from_model} -> #{to_model}",
+      agent_name: agent_name,
+      metadata: base_metadata(state, %{"from_model" => from_model, "to_model" => to_model})
+    })
+
+    {:noreply, state}
+  end
+
+  # Task started
+  def handle_info(%Jido.Signal{type: "team.task.started", data: data}, state) do
+    task_id = data.task_id
+    owner = to_string(data.owner)
+    title = task_title(task_id)
+
+    case log_node(state, %{
+           node_type: :action,
+           title: "Started: #{title} (#{owner})",
+           agent_name: owner,
+           metadata: base_metadata(state, %{"task_id" => task_id})
+         }) do
+      {:ok, node} ->
+        if parent_id = state.task_nodes[task_id] do
+          Graph.add_edge(parent_id, node.id, :leads_to)
+        end
+
+        {:noreply, state}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  # Peer message
+  def handle_info(%Jido.Signal{type: "collaboration.peer.message", data: data}, state) do
+    from = to_string(data.from)
+    message = Map.get(data, :message, "")
+
+    log_node(state, %{
+      node_type: :observation,
+      title: "Peer msg from #{from}: #{truncate(inspect(message), 100)}",
+      agent_name: from,
+      metadata: base_metadata(state)
+    })
+
+    {:noreply, state}
+  end
+
+  # Decision logged — re-emit as decision.node.added (already handled by Graph.add_node)
+  def handle_info(%Jido.Signal{type: "decision.logged"}, state) do
+    # decision.logged signals come from manual logging (Comms.broadcast_decision).
+    # The node already exists in the graph, so no new node needed here.
+    {:noreply, state}
+  end
+
+  # Debate response
+  def handle_info(%Jido.Signal{type: "collaboration.debate.response", data: data}, state) do
+    debate_id = data.debate_id
+    response = Map.get(data, :response, %{})
+    from = Map.get(response, :from, "unknown")
+
+    log_node(state, %{
+      node_type: :decision,
+      title: "Debate response from #{from}",
+      agent_name: to_string(from),
+      metadata: base_metadata(state, %{"debate_id" => debate_id})
+    })
+
     {:noreply, state}
   end
 

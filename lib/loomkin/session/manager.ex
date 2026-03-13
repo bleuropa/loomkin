@@ -72,7 +72,7 @@ defmodule Loomkin.Session.Manager do
   end
 
   # Create a backing team (without agents) for this session.
-  # Bootstrap agents (Concierge + Orienter) are spawned lazily on first user message
+  # Bootstrap agents (Concierge + Weaver) are spawned lazily on first user message
   # so the user has time to select the correct project path first.
   # This is best-effort — if it fails, the session still works without teams.
   defp maybe_create_backing_team(session_id, opts) do

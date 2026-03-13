@@ -473,7 +473,7 @@ defmodule Loomkin.Teams.Debate do
 
   def normalize_proposal(%{from: from} = proposal) do
     proposal
-    |> Map.put_new(:content, Map.get(proposal, :approach, "#{from}'s proposal"))
+    |> Map.put_new(:content, "#{from}'s proposal")
     |> Map.put_new(:confidence, 50)
   end
 

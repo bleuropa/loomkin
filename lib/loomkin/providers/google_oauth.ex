@@ -247,6 +247,7 @@ defmodule Loomkin.Providers.GoogleOAuth do
     |> Req.Request.register_options(extra_option_keys)
     |> Req.Request.put_header("authorization", "Bearer #{oauth_token}")
     |> Req.Request.put_header("content-type", "application/json")
+    |> maybe_put_user_project_header()
     |> Req.Request.merge_options([model: get_api_model_id(model)] ++ req_opts)
     |> Req.Request.put_private(:req_llm_model, model)
     |> ReqLLM.Step.Error.attach()
@@ -259,7 +260,19 @@ defmodule Loomkin.Providers.GoogleOAuth do
 
   @impl ReqLLM.Provider
   def encode_body(request) do
-    @google.encode_body(request)
+    request = @google.encode_body(request)
+
+    case request.body do
+      body when is_binary(body) ->
+        stripped = body |> Jason.decode!() |> strip_additional_properties() |> Jason.encode!()
+        %{request | body: stripped}
+
+      {:json, body} ->
+        %{request | body: {:json, strip_additional_properties(body)}}
+
+      _ ->
+        request
+    end
   end
 
   @impl ReqLLM.Provider
@@ -300,7 +313,9 @@ defmodule Loomkin.Providers.GoogleOAuth do
     {req_opts, user_opts} = Keyword.split(opts, req_only_keys)
 
     operation = Keyword.get(user_opts, :operation, :chat)
-    opts_to_process = Keyword.merge(user_opts, context: context, stream: true)
+
+    opts_to_process =
+      Keyword.merge(user_opts, context: context, stream: true, api_key: oauth_token)
 
     with {:ok, processed_opts0} <-
            ReqLLM.Provider.Options.process(@google, operation, model, opts_to_process),
@@ -310,11 +325,18 @@ defmodule Loomkin.Providers.GoogleOAuth do
       base_url = Keyword.get(req_opts, :base_url, processed_opts[:base_url])
       opts_with_base = Keyword.merge(processed_opts, base_url: base_url, model_struct: model)
 
-      headers = [
-        {"Accept", "text/event-stream"},
-        {"Content-Type", "application/json"},
-        {"Authorization", "Bearer #{oauth_token}"}
-      ]
+      headers =
+        [
+          {"Accept", "text/event-stream"},
+          {"Content-Type", "application/json"},
+          {"Authorization", "Bearer #{oauth_token}"}
+        ]
+        |> then(fn h ->
+          case gcp_project_id() do
+            nil -> h
+            id -> h ++ [{"x-goog-user-project", id}]
+          end
+        end)
 
       url = "#{base_url}/models/#{get_api_model_id(model)}:streamGenerateContent?alt=sse"
 
@@ -426,6 +448,32 @@ defmodule Loomkin.Providers.GoogleOAuth do
     end
   end
 
+  defp strip_additional_properties(map) when is_map(map) do
+    map
+    |> Map.delete("additionalProperties")
+    |> Map.new(fn {k, v} -> {k, strip_additional_properties(v)} end)
+  end
+
+  defp strip_additional_properties(list) when is_list(list) do
+    Enum.map(list, &strip_additional_properties/1)
+  end
+
+  defp strip_additional_properties(value), do: value
+
+  defp gcp_project_id do
+    case Loomkin.Config.get(:auth, :google) do
+      %{gcp_project_id: id} when is_binary(id) -> id
+      _ -> nil
+    end
+  end
+
+  defp maybe_put_user_project_header(request) do
+    case gcp_project_id() do
+      nil -> request
+      id -> Req.Request.put_header(request, "x-goog-user-project", id)
+    end
+  end
+
   defp build_stream_body(model, context, opts) do
     operation = Keyword.get(opts, :operation, :chat)
     compiled_schema = Keyword.get(opts, :compiled_schema)
@@ -449,6 +497,16 @@ defmodule Loomkin.Providers.GoogleOAuth do
       |> Map.put(:options, Map.new(all_options))
 
     encoded_request = @google.encode_body(temp_request)
-    encoded_request.body
+
+    case encoded_request.body do
+      body when is_binary(body) ->
+        body |> Jason.decode!() |> strip_additional_properties() |> Jason.encode!()
+
+      {:json, body} ->
+        {:json, strip_additional_properties(body)}
+
+      other ->
+        other
+    end
   end
 end

@@ -47,12 +47,18 @@ defmodule LoomkinWeb.FileExplorerDrawerComponent do
       <%!-- Backdrop --%>
       <div
         class="absolute inset-0 bg-black/40 animate-fade-in"
+        aria-hidden="true"
         phx-click="close"
         phx-target={@myself}
       />
 
       <%!-- Drawer panel --%>
-      <div class="relative w-full max-w-md h-full flex flex-col bg-surface-1 border-l border-subtle shadow-2xl drawer-slide-in">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="File explorer"
+        class="relative w-full max-w-md h-full flex flex-col bg-surface-1 border-l border-subtle shadow-2xl drawer-slide-in"
+      >
         <%!-- Header --%>
         <div class="flex items-center gap-2 px-3 py-2 flex-shrink-0 border-b border-subtle bg-surface-1">
           <.icon name="hero-folder-open-mini" class="w-4 h-4 text-brand" />
@@ -78,7 +84,8 @@ defmodule LoomkinWeb.FileExplorerDrawerComponent do
             phx-click="close"
             phx-target={@myself}
             class="interactive p-1 rounded-md text-muted hover:text-secondary"
-            title="Close (Esc)"
+            data-tooltip="Close (Esc)"
+            aria-label="Close (Esc)"
           >
             <.icon name="hero-x-mark-mini" class="w-4 h-4" />
           </button>

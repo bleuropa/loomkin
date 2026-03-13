@@ -1,0 +1,199 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: completed
+stopped_at: Completed 11-01-PLAN.md
+last_updated: "2026-03-09T04:03:56.824Z"
+last_activity: 2026-03-08 — Distinct agent card controls with force-pause, dual indicator, steer-only resume, and state transition comms events
+progress:
+  total_phases: 11
+  completed_phases: 11
+  total_plans: 44
+  completed_plans: 44
+  percent: 100
+---
+
+# Project State
+
+## Project Reference
+
+See: .planning/PROJECT.md (updated 2026-03-07)
+
+**Core value:** Humans can see exactly what agents are doing and saying to each other in real-time, and intervene naturally at any moment — without breaking the autonomous flow.
+**Current focus:** Phase 5 — Chat Injection & State Machines
+
+## Current Position
+
+Phase: 5 of 10 (Chat Injection & State Machines)
+Plan: 4 of 4 in current phase
+Status: Completed 05-03 agent card ui for state machine guards
+Last activity: 2026-03-08 — Distinct agent card controls with force-pause, dual indicator, steer-only resume, and state transition comms events
+
+Progress: [██████████] 100%
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0
+- Average duration: -
+- Total execution time: 0 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| - | - | - | - |
+
+**Recent Trend:**
+- Last 5 plans: none yet
+- Trend: -
+
+*Updated after each plan completion*
+| Phase 03-live-comms-feed P01 | 5 | 2 tasks | 5 files |
+| Phase 02-signal-infrastructure P04 | 2 | 2 tasks | 1 files |
+| Phase 02-signal-infrastructure P03 | 4 | 2 tasks | 2 files |
+| Phase 02-signal-infrastructure P02 | 3 | 2 tasks | 3 files |
+| Phase 02-signal-infrastructure P01 | 4 | 2 tasks | 6 files |
+| Phase 01-monolith-extraction P06 | 3 | 2 tasks | 4 files |
+| Phase 01-monolith-extraction P05 | 11 | 2 tasks | 3 files |
+| Phase 01-monolith-extraction P03 | 5 | 2 tasks | 2 files |
+| Phase 01-monolith-extraction P02 | 135 | 2 tasks | 2 files |
+| Phase 03-live-comms-feed P02 | 8 | 3 tasks | 6 files |
+| Phase 04-task-graph-crash-recovery P01 | 5 | 2 tasks | 5 files |
+| Phase 04 P02 | 5 | 2 tasks | 5 files |
+| Phase 04 P03 | 8 | 3 tasks | 3 files |
+| Phase 05 P00 | 2 | 1 tasks | 5 files |
+| Phase 05 P01 | 6 | 1 tasks | 4 files |
+| Phase 05 P02 | 7 | 2 tasks | 5 files |
+| Phase 05 P03 | 7 | 2 tasks | 6 files |
+| Phase 05 P04 | 3 | 2 tasks | 3 files |
+| Phase 06 P01 | 2 | 2 tasks | 4 files |
+| Phase 06 P02 | 7 | 2 tasks | 6 files |
+| Phase 06 P03 | 8 | 2 tasks | 2 files |
+| Phase 06-approval-gates P04 | 10 | 3 tasks | 5 files |
+| Phase 06-approval-gates P05 | 5 | 2 tasks | 3 files |
+| Phase 07-confidence-triggers P01 | 4 | 2 tasks | 2 files |
+| Phase 07-confidence-triggers P02 | 6 | 2 tasks | 2 files |
+| Phase 07-confidence-triggers P03 | 9 | 2 tasks | 3 files |
+| Phase 07-confidence-triggers P04 | 4 | 1 tasks | 0 files |
+| Phase 07-confidence-triggers P04 | 10 | 2 tasks | 0 files |
+| Phase 08-dynamic-tree-visibility P01 | 8 | 2 tasks | 5 files |
+| Phase 08-dynamic-tree-visibility P02 | 5 | 2 tasks | 7 files |
+| Phase 08-dynamic-tree-visibility P03 | 14 | 2 tasks | 2 files |
+| Phase 08-dynamic-tree-visibility P04 | 15 | 1 tasks | 2 files |
+| Phase 08-dynamic-tree-visibility P05 | 25 | 3 tasks | 3 files |
+| Phase 09-spawn-safety P01 | 99 | 2 tasks | 3 files |
+| Phase 09-spawn-safety P02 | 22 | 2 tasks | 4 files |
+| Phase 09-spawn-safety P03 | 8 | 2 tasks | 2 files |
+| Phase 09-spawn-safety P04 | 15 | 2 tasks | 1 files |
+| Phase 10-leader-research-protocol P00 | 1 | 2 tasks | 2 files |
+| Phase 10-leader-research-protocol P01 | 12 | 1 tasks | 2 files |
+| Phase 10-leader-research-protocol P02 | 5 | 2 tasks | 3 files |
+| Phase 10-leader-research-protocol P03 | 5 | 1 tasks | 1 files |
+| Phase 11-observability-completeness P01 | 3 | 2 tasks | 3 files |
+
+## Accumulated Context
+
+### Decisions
+
+Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- [Roadmap]: Monolith extraction in Phase 1 — must precede all new UI features; workspace_live.ex at 4,714 lines is a hard blocker
+- [Roadmap]: TeamBroadcaster intermediary in Phase 2 — prevents LiveView mailbox saturation at 10+ concurrent agents
+- [Roadmap]: Pause state and permission-pending state are separate typed state machines from Phase 5 onward — cannot be unified
+- [Phase 01]: Wrapped palette render in static outer div to satisfy LiveView stateful component single-static-root requirement
+- [Phase 01-monolith-extraction]: forwarded sidebar tab events to parent via send(self(), {:sidebar_event, ...}) to preserve workspace_live inspector_mode side effects
+- [Phase 01-02]: component-owned state initialized via assign_new/3 in update/2; parent-forwarded events use send(self(), {:composer_event, event, params})
+- [Phase 01]: comms_stream nil-guarded in MissionControlPanelComponent to allow render_component testing without a live process
+- [Phase 01-05]: kept budget_pct/1 and budget_bar_color/1 in workspace_live since refresh_roster/1 uses them to compute assigns
+- [Phase 01-05]: workspace_live at 3968 lines; remaining code is orchestration (signals, cards, activity) not UI rendering
+- [Phase 01-06]: assert component DOM markers (message-input, agent-comms) instead of wrapper ids for reliable liveview test assertions
+- [Phase 01-06]: kept existing module compilation smoke tests alongside new live mount test for fast regression catching
+- [Phase 02-01]: Topics module uses regular functions (no macros/compile-time constants); global_bus_paths excludes system.**
+- [Phase 02-01]: Comms.unsubscribe signature changed from (team_id, agent_name) to (subscription_ids) for explicit lifecycle management
+- [Phase 02-02]: Batchable signals grouped into 4 categories (streaming, tools, status, activity) for structured batch delivery
+- [Phase 02-02]: Critical signal types defined as MapSet constant for O(1) lookup; direct send/2 delivery matching Jido pattern
+- [Phase 02-03]: workspace_live uses send(self(), {:signal, sig}) dispatch from batch handler to reuse existing handle_info clauses; subscribe_global_signals and signal_for_workspace? fully removed
+- [Phase 02-04]: removed last two direct Loomkin.Signals.subscribe calls from workspace_live; all signal delivery now exclusively through TeamBroadcaster
+- [Phase 03-01]: peer messages classified as critical signals for sub-1-second delivery via TeamBroadcaster
+- [Phase 03-01]: stream limit: -500 caps comms events DOM to 500 most recent items
+- [Phase 03-01]: blue accent for peer_message type distinct from cyan channel_message
+- [Phase 03-live-comms-feed]: CommsFeedScroll uses MutationObserver + scrollTop threshold for reliable LiveView stream patch detection
+- [Phase 03-live-comms-feed]: Terminated cards use Process.send_after 3s delay before removal to allow fade animation
+- [Phase 04-01]: AgentWatcher uses Process.send_after polling (500ms x 5 attempts) for recovery detection rather than registry event hooks
+- [Phase 04-01]: Crash count tracked per {team_id, agent_name} key across watcher lifetime for monotonic increment
+- [Phase 04-01]: Agent :DOWN handler sets :error on abnormal exits, :idle on normal/shutdown
+- [Phase 04]: Used tasks_override/deps_override assigns for component testing without DB queries
+- [Phase 04-03]: Reuse card-error class for all crash states (crashed, recovering, permanently_failed)
+- [Phase 04-03]: 2-second Process.send_after delay for recovering->idle transition
+- [Phase 05]: test stubs already existed on branch from prior work; verified correctness rather than recreating
+- [Phase 05-01]: pause_queued field separate from pause_requested to avoid conflating two distinct mechanisms
+- [Phase 05-01]: broadcast_team for pause_queued reuses Agent.Status signal with :pause_queued atom status
+- [Phase 05-02]: inject_broadcast delegates to send_message for non-paused agents instead of checking status externally
+- [Phase 05-02]: broadcast_mode defaults to true in team sessions, false in solo -- reset only on explicit agent selection
+- [Phase 05]: resume button removed in favor of steer-only flow requiring mandatory guidance text
+- [Phase 05]: set_status_and_broadcast extended to 4-tuple signal with metadata map for backwards compatibility
+- [Phase 05-04]: broadcast_mode defaults to params["team_id"] != nil in mount; also set explicitly to true in start_and_subscribe team_id branch
+- [Phase 05-04]: source inspection tests used for force_pause and broadcast send paths that require live Agent processes
+- [Phase 05-04]: assert_received used to verify self-send {:steer_agent} dispatch from resume_agent handler in unit tests
+- [Phase 06]: approval_pending dot class target is bg-violet-500 animate-pulse (not amber); agent card wrapper class is agent-card-approval (not agent-card-blocked)
+- [Phase 06]: approval signal types agent.approval.requested and agent.approval.resolved classified as critical in TeamBroadcaster
+- [Phase 06]: approval gate tool blocks only the tool task process, not the agent GenServer, mirroring AskUser pattern
+- [Phase 06]: Resolved signal published on all three outcomes (approved/denied/timeout) so LiveView always receives gate close notification
+- [Phase 06]: approve handler clears leader_approval_pending only via deny — resolved signal clears it on the signal path
+- [Phase 06]: pending_approval cleared in both handle_event AND handle_info resolved to cover timeout path
+- [Phase 06]: approval panel appended below main card content area, not an absolute overlay — consistent with permission hook pattern
+- [Phase 06]: deadline_at computed in template as started_at + timeout_ms so JS hook reads a single data attribute
+- [Phase 06]: JS.toggle used for Approve w/ Context and Deny textarea expansion — no round-trip to server required
+- [Phase 06-approval-gates]: leader_approval_pending passed as named assign to MissionControlPanelComponent; banner before concierge section; countdown timer id scoped to gate_id to avoid hook id collisions
+- [Phase 07-confidence-triggers]: Commented out unused aliases in stubs rather than omitting — documents Wave 1 intent without compiler warnings
+- [Phase 07-confidence-triggers]: Wave 0 stub pattern: @moduletag :skip + assert false placeholder; @tag :skip on each test for per-test readability
+- [Phase 07-02]: Used cond instead of multi-clause guards because System.monotonic_time/1 cannot be used in Elixir guard expressions
+- [Phase 07-02]: self() in build_loop_opts/1 correctly captures Agent GenServer pid since function is called from GenServer process context
+- [Phase 07-confidence-triggers]: pending_questions list replaces pending_question singular map in agent card assigns to support batching AskUser questions
+- [Phase 07-confidence-triggers]: Absolute overlay removed; cyan panel appended below card content area — consistent with Phase 06 approval gate appended panel pattern
+- [Phase 07-confidence-triggers]: Google auth test failures are pre-existing env issues (real credentials in dev env) — out-of-scope for Phase 7
+- [Phase 07-04]: Human visually confirmed all confidence trigger ui behaviors: cyan pulsing dot, batched ask_user panel, let_team_decide resolution, and rate-limit drop — Phase 7 complete
+- [Phase 08-01]: Wave 0 pattern reused exactly as established in Phase 5 and Phase 7 — @moduletag :skip at module level skips all tests in the file
+- [Phase 08-02]: ChildTeamCreated published from Manager.create_sub_team/3 after start_nervous_system, not from TeamSpawn tool — Manager is single canonical source
+- [Phase 08-02]: team.child.created added to @critical_types MapSet for O(1) lookup and instant delivery bypassing 50ms batch window
+- [Phase 08-03]: agent_pid = self() moved to top of on_tool_execute closure so both AskUser and TeamSpawn paths share it without redundant self() calls
+- [Phase 08-03]: terminate/2 uses try/catch :exit for Manager.dissolve_team; spawned_child_teams not restored on OTP restart — agent boots with [] and re-accumulates
+- [Phase 08-04]: handle_info :child_team_created arity changed to 4-tuple; signal handler extracts parent_team_id and team_name from sig.data
+- [Phase 08-04]: team_names starts empty on reconnect path — repopulates on next ChildTeamCreated signal; Plan 05 falls back to short_id/1 when name absent
+- [Phase 08-dynamic-tree-visibility]: TeamTreeComponent hidden via :if={@team_tree != %{}} — zero DOM output when no sub-teams; compute_agent_counts/1 derives counts from roster at render time without extra assign; human-approved visual verification 2026-03-08
+- [Phase 09-spawn-safety]: wave 0 stub pattern reused from phases 7/8 — @moduletag :skip at module level, @tag :skip per test, flunk placeholder
+- [Phase 09-spawn-safety]: spawn gate signal types agent.spawn.gate.requested and agent.spawn.gate.resolved classified as critical in TeamBroadcaster (Plan 02 implements)
+- [Phase 09-spawn-safety]: spawn gate intercept runs in tool task (on_tool_execute closure), not in GenServer — same pattern as RequestApproval.run/2
+- [Phase 09-spawn-safety]: open_spawn_gate is a cast (not call) to avoid deadlock: tool task sends cast then blocks on receive
+- [Phase 09-spawn-safety]: execute_spawn_and_notify passes gate_id=nil for auto-approve path to skip GateResolved publish (no gate opened)
+- [Phase 09-spawn-safety]: approve_spawn uses gate_id param key (not gate-id with dash) matching plan spec
+- [Phase 09-spawn-safety]: toggle_auto_approve_spawns uses find_agent_pid with nil team_id falling back to cached_agents lookup
+- [Phase 09-spawn-safety]: spawn gate panel uses identical violet accent and structural layout as checkpoint panel — same card pattern, different content block; format_roles/1 handles atom and string keyed role maps; human visually confirmed end-to-end flow 2026-03-08
+- [Phase 10-leader-research-protocol]: wave 0 stub pattern reused from phases 7/8/9 — @moduletag :skip + @tag :skip per test + flunk placeholder; role_test extended without module-level skip to keep 30 existing tests runnable
+- [Phase 10-leader-research-protocol]: Research Protocol and Findings Delivery sections appended to base system_prompts in role.ex — protocol encoded as LLM config, not GenServer logic
+- [Phase 10-leader-research-protocol]: run_spawn_gate_intercept extracted to run_human_or_auto_spawn_gate/6; research pre-check at top short-circuits to run_research_spawn/6 when spawn_type in [:research, 'research']
+- [Phase 10-leader-research-protocol]: collect_research_findings/3 returns partial findings on timeout — leader proceeds with what arrived rather than erroring
+- [Phase 10-leader-research-protocol]: Registry key {:awaiting_synthesis, team_id, agent_name} mirrors {:spawn_gate, gate_id} pattern from Phase 9
+- [Phase 10-leader-research-protocol]: indigo-500 pulsing dot for :awaiting_synthesis is visually distinct from all other status indicators: violet (approval_pending), cyan (ask_user_pending), blue (paused), amber (permission/blocked)
+- [Phase 11-observability-completeness]: used is_map(roles) guard in spawn gate requested handler to handle both map and list role formats safely
+- [Phase 11-observability-completeness]: maybe_insert_synthesis_comms_event/4 as three-clause private helper keeps agent_status handler clean; fires on :awaiting_synthesis entry and :working return with previous_status guard
+
+### Pending Todos
+
+None yet.
+
+### Blockers/Concerns
+
+- workspace_live.ex at 3,968 lines after Phase 1 extraction (down from 4,714) — further reduction requires extracting signal dispatch (Phase 2 TeamBroadcaster)
+- Permission state machine bug FIXED in 05-01 (pending_permission can no longer be overwritten by pause requests)
+- LLM confidence extraction format for Phase 7 is a design decision not yet made — needs product decision during Phase 7 planning
+- Approval gate timeout UX for Phase 6 needs explicit decision: auto-deny vs. escalate — needs product decision during Phase 6 planning
+
+## Session Continuity
+
+Last session: 2026-03-09T04:01:40.639Z
+Stopped at: Completed 11-01-PLAN.md
+Resume file: None

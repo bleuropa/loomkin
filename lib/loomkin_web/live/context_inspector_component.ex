@@ -72,6 +72,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
             </div>
           </div>
         <% else %>
+          <.tab_bar tabs={@tabs} active_tab={@active_tab} agent_color={nil} myself={@myself} />
           <.empty_state myself={@myself} />
         <% end %>
       <% end %>
@@ -268,15 +269,28 @@ defmodule LoomkinWeb.ContextInspectorComponent do
             </div>
           </div>
         <% _ -> %>
-          <div class="rounded-lg border border-dashed border-subtle py-6 text-center">
-            <p class="text-xs text-muted italic">
-              <%= if @focused_card.status == :complete do %>
-                Agent has completed its work
-              <% else %>
-                Waiting for activity...
-              <% end %>
-            </p>
-          </div>
+          <%= if @focused_card[:last_response] do %>
+            <div class="rounded-lg bg-surface-1 border border-subtle p-3 opacity-60">
+              <div class="flex items-center gap-1.5 mb-2">
+                <span class="text-[10px] font-medium text-muted uppercase tracking-wider">
+                  Last response
+                </span>
+              </div>
+              <div class="text-xs leading-relaxed text-secondary agent-card-content">
+                {render_markdown(@focused_card.last_response)}
+              </div>
+            </div>
+          <% else %>
+            <div class="rounded-lg border border-dashed border-subtle py-6 text-center">
+              <p class="text-xs text-muted italic">
+                <%= if @focused_card.status == :complete do %>
+                  Agent has completed its work
+                <% else %>
+                  Waiting for activity...
+                <% end %>
+              </p>
+            </div>
+          <% end %>
       <% end %>
     </div>
     """

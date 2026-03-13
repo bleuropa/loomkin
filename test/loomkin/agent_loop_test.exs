@@ -180,9 +180,13 @@ defmodule Loomkin.AgentLoopTest do
 
   describe "resume/3" do
     test "resume with invalid pending_info raises on missing keys" do
-      # Resume expects a specific pending_info structure
+      # Resume expects a specific pending_info structure.
+      # Use a variable to prevent the compiler from statically analysing the
+      # empty-map literal against resume/3's expected types.
+      pending = Map.new([])
+
       assert_raise KeyError, fn ->
-        AgentLoop.resume("result", %{}, [])
+        AgentLoop.resume("result", pending, [])
       end
     end
   end

@@ -8,17 +8,20 @@ defmodule Loomkin.Schemas.TeamTaskDep do
   schema "team_task_deps" do
     belongs_to :task, Loomkin.Schemas.TeamTask
     belongs_to :depends_on, Loomkin.Schemas.TeamTask
-    field :dep_type, Ecto.Enum, values: [:blocks, :informs]
+    field :dep_type, Ecto.Enum, values: [:blocks, :informs, :requires_output]
+    field :milestone_name, :string
     timestamps(type: :utc_datetime)
   end
 
   @required_fields ~w(task_id depends_on_id dep_type)a
+  @optional_fields ~w(milestone_name)a
 
   def changeset(dep, attrs) do
     dep
-    |> cast(attrs, @required_fields)
+    |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> foreign_key_constraint(:task_id)
     |> foreign_key_constraint(:depends_on_id)
+    |> unique_constraint(:task_id, name: :team_task_deps_task_id_depends_on_id_dep_type_index)
   end
 end

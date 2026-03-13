@@ -9,6 +9,8 @@ defmodule Loomkin.Teams.Agent do
 
   use GenServer
 
+  require Logger
+
   alias Loomkin.AgentLoop
 
   alias Loomkin.Teams.Comms
@@ -44,7 +46,13 @@ defmodule Loomkin.Teams.Agent do
     pending_updates: [],
     priority_queue: [],
     pause_requested: false,
-    paused_state: nil
+    pause_queued: false,
+    paused_state: nil,
+    subscription_ids: [],
+    last_asked_at: nil,
+    pending_ask_user: nil,
+    spawned_child_teams: [],
+    auto_approve_spawns: false
   ]
 
   # --- Public API ---
@@ -64,6 +72,14 @@ defmodule Loomkin.Teams.Agent do
   @doc "Send a user message to this agent and get the response."
   def send_message(pid, text) when is_pid(pid) do
     GenServer.call(pid, {:send_message, text}, :infinity)
+  end
+
+  @doc """
+  Injects a broadcast message into a paused agent's message history.
+  If the agent is not paused (no paused_state), falls back to send_message/2.
+  """
+  def inject_broadcast(pid, text) when is_pid(pid) do
+    GenServer.call(pid, {:inject_broadcast, text})
   end
 
   @doc "Assign a task to this agent."
@@ -92,6 +108,11 @@ defmodule Loomkin.Teams.Agent do
   @doc "Request the agent to pause at the next checkpoint."
   def request_pause(pid) do
     GenServer.cast(pid, :request_pause)
+  end
+
+  @doc "Force-pause an agent that is waiting for permission, cancelling the pending permission."
+  def force_pause(pid) do
+    GenServer.call(pid, :force_pause)
   end
 
   @doc "Resume a paused agent, optionally injecting guidance text."
@@ -151,6 +172,11 @@ defmodule Loomkin.Teams.Agent do
     GenServer.cast(pid, {:update_project_path, new_path})
   end
 
+  @doc "Update the model on a running agent."
+  def update_model(pid, new_model) do
+    GenServer.cast(pid, {:update_model, new_model})
+  end
+
   @doc "Get the full GenServer state (for serialization/migration)."
   def get_state(pid, timeout \\ 5_000) do
     GenServer.call(pid, :get_state, timeout)
@@ -160,33 +186,44 @@ defmodule Loomkin.Teams.Agent do
   Change the role of this agent.
 
   ## Options
+    * `:role_config` - a pre-built `%Role{}` config (skips Role.get lookup)
     * `:require_approval` - if true, sends approval request to team lead before changing (default: false)
   """
   def change_role(pid, new_role, opts \\ []) when is_pid(pid) do
-    GenServer.call(pid, {:change_role, new_role, opts}, :infinity)
+    if opts == [] do
+      GenServer.call(pid, {:change_role, new_role}, :infinity)
+    else
+      GenServer.call(pid, {:change_role, new_role, opts}, :infinity)
+    end
   end
 
   # --- Callbacks ---
 
   @impl true
   def init(opts) do
-    require Logger
     team_id = Keyword.fetch!(opts, :team_id)
     name = Keyword.fetch!(opts, :name)
     role = Keyword.fetch!(opts, :role)
     project_path = Keyword.get(opts, :project_path)
 
     permission_mode = Keyword.get(opts, :permission_mode, :auto)
-    session_id = Keyword.get(opts, :session_id, team_id)
+    session_id = Keyword.get(opts, :session_id)
     kin_agents = Keyword.get(opts, :kin_agents, [])
 
     Logger.info("[Kin:agent] init name=#{name} role=#{role} team=#{team_id}")
+    Logger.metadata(agent: name, role: role, team: team_id)
 
-    case Role.get(role, kin_agents: kin_agents) do
+    role_result =
+      case Keyword.get(opts, :role_config) do
+        %Role{} = config -> {:ok, config}
+        _ -> Role.get(role, kin_agents: kin_agents)
+      end
+
+    case role_result do
       {:ok, role_config} ->
         model = Keyword.get(opts, :model) || ModelRouter.default_model()
 
-        Comms.subscribe(team_id, name)
+        {:ok, sub_ids} = Comms.subscribe(team_id, name)
 
         state = %__MODULE__{
           team_id: team_id,
@@ -198,18 +235,24 @@ defmodule Loomkin.Teams.Agent do
           model: model,
           project_path: project_path,
           tools: role_config.tools,
-          permission_mode: permission_mode
+          permission_mode: permission_mode,
+          subscription_ids: sub_ids
         }
+
+        # Monitor via AgentWatcher BEFORE init completes — guarantees no gap
+        # where a crash could be missed (previously called after start_child returned)
+        Loomkin.Teams.AgentWatcher.watch(Loomkin.Teams.AgentWatcher, self(), team_id, name)
 
         Context.register_agent(team_id, name, %{role: role, status: :idle, model: model})
         broadcast_team(state, {:agent_status, state.name, :idle})
         Logger.info("[Kin:agent] registered name=#{name} role=#{role} — broadcasting :idle")
 
-        if role == :orienter do
-          {:ok, state, {:continue, :auto_orient}}
-        else
-          {:ok, state}
+        if role == :weaver do
+          # Stagger weaver start to avoid rate-limiting other bootstrap agents
+          Process.send_after(self(), :weaver_cycle, 3_000)
         end
+
+        {:ok, state}
 
       {:error, :unknown_role} ->
         Logger.error("[Kin:agent] UNKNOWN ROLE #{inspect(role)} for #{name}")
@@ -218,22 +261,61 @@ defmodule Loomkin.Teams.Agent do
   end
 
   @impl true
-  def handle_continue(:auto_orient, state) do
-    require Logger
-    Logger.info("[Kin:agent] orienter auto-orient starting team=#{state.team_id}")
+  def terminate(reason, state) do
+    Logger.info(
+      "[Kin:agent] terminating name=#{state.name} team=#{state.team_id} reason=#{inspect(reason)}"
+    )
+
+    # Dissolve all child teams spawned by this leader to prevent zombie teams after OTP restart
+    for child_team_id <- state.spawned_child_teams do
+      Logger.info("[Kin:agent] dissolving child team=#{child_team_id} on terminate")
+
+      try do
+        Manager.dissolve_team(child_team_id)
+      catch
+        :exit, reason ->
+          Logger.warning(
+            "[Kin:agent] failed to dissolve child team on terminate name=#{state.name} team=#{state.team_id} child_team=#{child_team_id} reason=#{inspect(reason)}"
+          )
+      end
+    end
+
+    Comms.unsubscribe(state.subscription_ids)
+  end
+
+  @impl true
+  def handle_continue(:auto_weave, state) do
+    Logger.info("[Kin:agent] weaver auto-weave starting team=#{state.team_id}")
     state = set_status_and_broadcast(state, :working)
 
-    orientation_prompt = """
-    Begin your orientation scan now. Follow your scanning protocol:
-    1. Use decision_query with type "pulse" to check active goals, coverage gaps, and stale nodes
-    2. Use decision_query with type "active_goals" for detailed goal info
-    3. Use search_keepers to find prior session context
-    4. Use git with action "log" to check the last 20 commits
-    5. Synthesize findings into a structured session brief
-    6. Send the brief to "concierge" via peer_message
+    task_id = "weave_cycle_#{state.team_id}_#{System.monotonic_time()}"
+
+    Context.cache_task(state.team_id, task_id, %{
+      title: "coordination cycle",
+      status: :in_progress,
+      owner: state.name
+    })
+
+    state = %{state | task: %{id: task_id, title: "coordination cycle"}}
+
+    prompt = """
+    Begin your coordination cycle. Follow this protocol:
+
+    1. Use team_progress to see what all agents are working on
+    2. Use decision_query with type "pulse" to check decision graph health
+    3. Use search_keepers to build your picture of available knowledge
+    4. Identify any communication gaps, duplicate work risks, or knowledge routing needs
+    5. Take action: route knowledge, nudge silent agents, flag duplicates, bridge gaps
+    6. When you've addressed immediate needs, summarize what you did via peer_discovery
+
+    After each cycle, if agents are still active, continue monitoring.
+    You are the team's nervous system — stay aware and keep information flowing.
     """
 
-    messages = [%{role: :user, content: orientation_prompt}]
+    # Reset messages each cycle to prevent unbounded context growth
+    messages = [%{role: :user, content: prompt}]
+    state = %{state | messages: messages}
+
     loop_opts = build_loop_opts(state)
     snapshot = build_snapshot(state)
 
@@ -241,6 +323,8 @@ defmodule Loomkin.Teams.Agent do
       Task.Supervisor.async_nolink(Loomkin.Teams.TaskSupervisor, fn ->
         run_loop_with_escalation(messages, loop_opts, snapshot)
       end)
+
+    Logger.debug("[Kin:loop] spawned agent=#{state.name} ref=#{inspect(task.ref)}")
 
     {:noreply, %{state | loop_task: {task, nil}, messages: messages}}
   end
@@ -254,13 +338,28 @@ defmodule Loomkin.Teams.Agent do
 
   @impl true
   def handle_call({:send_message, text}, from, state) do
-    require Logger
-
     Logger.info(
       "[Kin:agent] #{state.name} received message, loop_active=#{state.loop_task != nil}"
     )
 
     state = set_status_and_broadcast(state, :working)
+
+    # Register a tracked task if the agent doesn't already have one
+    state =
+      if is_nil(state.task) do
+        task_id = "msg_#{state.team_id}_#{state.name}_#{System.unique_integer([:positive])}"
+        title = String.slice(text, 0, 80)
+
+        Context.cache_task(state.team_id, task_id, %{
+          title: title,
+          status: :in_progress,
+          owner: state.name
+        })
+
+        %{state | task: %{id: task_id, title: title}}
+      else
+        state
+      end
 
     user_message = %{role: :user, content: text}
     messages = state.messages ++ [user_message]
@@ -273,7 +372,31 @@ defmodule Loomkin.Teams.Agent do
         run_loop_with_escalation(messages, loop_opts, snapshot)
       end)
 
+    Logger.debug("[Kin:loop] spawned agent=#{state.name} ref=#{inspect(task.ref)}")
+
     {:noreply, %{state | loop_task: {task, from}}}
+  end
+
+  # Inject broadcast into paused agent's message history without starting a loop
+  @impl true
+  def handle_call({:inject_broadcast, text}, _from, %{status: :paused, paused_state: ps} = state)
+      when ps != nil do
+    user_message = %{role: :user, content: text}
+    updated_ps = %{ps | messages: ps.messages ++ [user_message]}
+    {:reply, :ok, %{state | paused_state: updated_ps}}
+  end
+
+  # Completed or errored agents ignore broadcasts
+  @impl true
+  def handle_call({:inject_broadcast, _text}, _from, %{status: status} = state)
+      when status in [:complete, :error] do
+    {:reply, :ok, state}
+  end
+
+  # For non-paused agents, delegate to send_message
+  @impl true
+  def handle_call({:inject_broadcast, text}, from, state) do
+    handle_call({:send_message, text}, from, state)
   end
 
   @impl true
@@ -292,7 +415,14 @@ defmodule Loomkin.Teams.Agent do
   end
 
   @impl true
+  def handle_call({:change_role, new_role}, _from, state) do
+    do_change_role(state, new_role, nil)
+  end
+
+  @impl true
   def handle_call({:change_role, new_role, opts}, _from, state) do
+    role_config = opts[:role_config]
+
     if opts[:require_approval] do
       # Send approval request to lead and wait synchronously
       request_id = Ecto.UUID.generate()
@@ -304,9 +434,9 @@ defmodule Loomkin.Teams.Agent do
 
       # For now, pending approval proceeds immediately — the lead can reject via PubSub
       # A full interactive approval flow would require async state, which we avoid here.
-      do_change_role(state, new_role)
+      do_change_role(state, new_role, role_config)
     else
-      do_change_role(state, new_role)
+      do_change_role(state, new_role, role_config)
     end
   end
 
@@ -324,7 +454,9 @@ defmodule Loomkin.Teams.Agent do
           | loop_task: nil,
             pending_permission: nil,
             pending_updates: [],
-            priority_queue: []
+            priority_queue: [],
+            pause_queued: false,
+            pause_requested: false
         }
 
         state = set_status_and_broadcast(state, :idle)
@@ -332,7 +464,15 @@ defmodule Loomkin.Teams.Agent do
 
       nil when state.pending_permission != nil ->
         # Agent is waiting on permission — clear it and go idle
-        state = %{state | pending_permission: nil, pending_updates: [], priority_queue: []}
+        state = %{
+          state
+          | pending_permission: nil,
+            pending_updates: [],
+            priority_queue: [],
+            pause_queued: false,
+            pause_requested: false
+        }
+
         state = set_status_and_broadcast(state, :idle)
         {:reply, :ok, state}
 
@@ -342,6 +482,7 @@ defmodule Loomkin.Teams.Agent do
           state
           | paused_state: nil,
             pause_requested: false,
+            pause_queued: false,
             pending_updates: [],
             priority_queue: []
         }
@@ -544,6 +685,54 @@ defmodule Loomkin.Teams.Agent do
   end
 
   @impl true
+  def handle_call(:force_pause, _from, %{status: :waiting_permission} = state) do
+    cancelled =
+      case state.pending_permission do
+        nil ->
+          nil
+
+        p ->
+          %{tool: p.tool_name, path: p.tool_path}
+      end
+
+    # Shut down the orphaned task before clearing it to prevent stale messages
+    case state.loop_task do
+      {%Task{} = task, _from} ->
+        try do
+          Task.shutdown(task, :brutal_kill)
+        rescue
+          _ -> :ok
+        end
+
+      _ ->
+        :ok
+    end
+
+    paused_state = %{
+      messages: state.messages,
+      iteration: nil,
+      reason: :force_paused,
+      cancelled_permission: cancelled
+    }
+
+    state = %{
+      state
+      | pending_permission: nil,
+        pause_queued: false,
+        pause_requested: false,
+        paused_state: paused_state,
+        loop_task: nil
+    }
+
+    state = set_status_and_broadcast(state, :paused)
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:force_pause, _from, state) do
+    {:reply, {:error, :not_waiting_permission}, state}
+  end
+
+  @impl true
   def handle_call({:resume, _opts}, _from, %{status: status} = state)
       when status != :paused do
     {:reply, {:error, :not_paused}, state}
@@ -551,43 +740,226 @@ defmodule Loomkin.Teams.Agent do
 
   def handle_call({:resume, opts}, _from, %{status: :paused} = state) do
     paused = state.paused_state
-    messages = paused.messages
 
-    # If user provided steering guidance, inject it as a user message
-    messages =
-      case Keyword.get(opts, :guidance) do
+    if is_nil(paused) do
+      Logger.warning("[Kin:data] paused_state is nil on resume for agent=#{state.name}")
+      {:reply, {:error, :invalid_paused_state}, %{state | status: :idle}}
+    else
+      messages = paused.messages
+
+      # If user provided steering guidance, inject it as a user message
+      messages =
+        case Keyword.get(opts, :guidance) do
+          nil ->
+            messages
+
+          guidance when is_binary(guidance) ->
+            messages ++ [%{role: :user, content: "[User Guidance]: #{guidance}"}]
+        end
+
+      state = %{
+        state
+        | pause_requested: false,
+          paused_state: nil,
+          messages: messages
+      }
+
+      state = set_status_and_broadcast(state, :working)
+
+      loop_opts = build_loop_opts(state)
+      snapshot = build_snapshot(state)
+
+      task =
+        Task.Supervisor.async_nolink(Loomkin.Teams.TaskSupervisor, fn ->
+          run_loop_with_escalation(messages, loop_opts, snapshot)
+        end)
+
+      Logger.debug("[Kin:loop] spawned agent=#{state.name} ref=#{inspect(task.ref)}")
+
+      {:reply, :ok, %{state | loop_task: {task, nil}}}
+    end
+  end
+
+  # --- AskUser rate-limit handle_call ---
+
+  @impl true
+  def handle_call({:check_ask_user_rate_limit, _tool_args}, _from, state) do
+    cond do
+      state.pending_ask_user != nil ->
+        {:reply, {:batch, state.pending_ask_user.card_id}, state}
+
+      state.last_asked_at != nil and
+          System.monotonic_time(:millisecond) - state.last_asked_at < 300_000 ->
+        {:reply, :drop, state}
+
+      true ->
+        card_id = Ecto.UUID.generate()
+        new_pending = %{card_id: card_id, questions: []}
+        state = %{state | pending_ask_user: new_pending}
+        state = set_status_and_broadcast(state, :ask_user_pending)
+        {:reply, :allow, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:ask_user_answered, question_id}, _from, state) do
+    new_pending =
+      case state.pending_ask_user do
         nil ->
-          messages
+          nil
 
-        guidance when is_binary(guidance) ->
-          messages ++ [%{role: :user, content: "[User Guidance]: #{guidance}"}]
+        %{questions: questions} = card ->
+          remaining = Enum.reject(questions, &(&1.question_id == question_id))
+          %{card | questions: remaining}
       end
 
-    state = %{
-      state
-      | pause_requested: false,
-        paused_state: nil,
-        messages: messages
-    }
+    state =
+      if new_pending == nil or new_pending.questions == [] do
+        state =
+          %{state | pending_ask_user: nil, last_asked_at: System.monotonic_time(:millisecond)}
 
-    state = set_status_and_broadcast(state, :working)
+        set_status_and_broadcast(state, :idle)
+      else
+        %{state | pending_ask_user: new_pending}
+      end
 
-    loop_opts = build_loop_opts(state)
-    snapshot = build_snapshot(state)
+    {:reply, :ok, state}
+  end
 
-    task =
-      Task.Supervisor.async_nolink(Loomkin.Teams.TaskSupervisor, fn ->
-        run_loop_with_escalation(messages, loop_opts, snapshot)
-      end)
+  # --- Spawn gate handle_calls ---
 
-    {:reply, :ok, %{state | loop_task: {task, nil}}}
+  @impl true
+  def handle_call(:get_spawn_settings, _from, state) do
+    {:reply, %{auto_approve_spawns: state.auto_approve_spawns}, state}
+  end
+
+  def handle_call({:set_auto_approve_spawns, enabled}, _from, state) do
+    {:reply, :ok, %{state | auto_approve_spawns: enabled}}
+  end
+
+  def handle_call(:is_gate_open?, _from, state) do
+    {:reply, state.status == :approval_pending, state}
+  end
+
+  def handle_call({:check_spawn_budget, estimated_cost}, _from, state) do
+    budget_limit =
+      case state.role_config do
+        %{budget_limit: limit} when is_number(limit) -> limit / 1
+        _ -> 5.0
+      end
+
+    summary = CostTracker.team_cost_summary(state.team_id)
+
+    spent =
+      case summary[:total_cost_usd] do
+        %Decimal{} = d -> Decimal.to_float(d)
+        n when is_number(n) -> n / 1
+        _ -> 0.0
+      end
+
+    remaining = budget_limit - spent
+
+    if remaining < estimated_cost do
+      {:reply, {:budget_exceeded, %{remaining: remaining, estimated: estimated_cost}}, state}
+    else
+      {:reply, :ok, state}
+    end
   end
 
   # --- handle_cast ---
 
   @impl true
+  def handle_cast(:request_pause, %{status: :idle} = state) do
+    # No-op: agent is not running, nothing to pause
+    {:noreply, state}
+  end
+
+  def handle_cast(:request_pause, %{status: :waiting_permission} = state) do
+    # Queue the pause instead of setting pause_requested -- permission must resolve first
+    broadcast_team(state, {:agent_pause_queued, state.name})
+    {:noreply, %{state | pause_queued: true}}
+  end
+
+  def handle_cast(:request_pause, %{status: :approval_pending} = state) do
+    # Pre-wire for Phase 6: queue pause during approval gate
+    broadcast_team(state, {:agent_pause_queued, state.name})
+    {:noreply, %{state | pause_queued: true}}
+  end
+
+  def handle_cast(:request_pause, %{status: :ask_user_pending} = state) do
+    # Queue pause during ask_user gate — same pattern as approval_pending
+    broadcast_team(state, {:agent_pause_queued, state.name})
+    {:noreply, %{state | pause_queued: true}}
+  end
+
+  def handle_cast(:request_pause, %{status: :awaiting_synthesis} = state) do
+    # Queue pause during research synthesis — same pattern as approval_pending and ask_user_pending
+    broadcast_team(state, {:agent_pause_queued, state.name})
+    {:noreply, %{state | pause_queued: true}}
+  end
+
   def handle_cast(:request_pause, state) do
     {:noreply, %{state | pause_requested: true}}
+  end
+
+  @impl true
+  def handle_cast({:open_spawn_gate, _gate_id, _pending_info}, state) do
+    # Mark agent approval_pending so the UI can show the gate.
+    # The tool task process holds the receive block; this cast just updates status.
+    state = set_status_and_broadcast(state, :approval_pending)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:enter_awaiting_synthesis, _researcher_count}, state) do
+    state = set_status_and_broadcast(state, :awaiting_synthesis)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast(:exit_awaiting_synthesis, state) do
+    state = set_status_and_broadcast(state, :working)
+    # Drain any pause that was queued while awaiting synthesis
+    state = maybe_apply_queued_pause(state, [])
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast(
+        {:append_ask_user_question, tool_args, card_id, question_id, tool_task_pid},
+        state
+      ) do
+    question_text = Map.get(tool_args, "question") || Map.get(tool_args, :question)
+    options = Map.get(tool_args, "options") || Map.get(tool_args, :options) || []
+
+    question_entry = %{question_id: question_id, question: question_text, options: options}
+
+    new_pending =
+      case state.pending_ask_user do
+        %{card_id: ^card_id} = card ->
+          %{card | questions: card.questions ++ [question_entry]}
+
+        _ ->
+          # Card was closed between check and append — create a fresh entry
+          %{card_id: card_id, questions: [question_entry]}
+      end
+
+    # Register the tool task pid in Registry so the answer can be routed back to the
+    # tool task process that is blocking on receive {:ask_user_answer, question_id, _}
+    Registry.register(Loomkin.Teams.AgentRegistry, {:ask_user, question_id}, tool_task_pid)
+
+    # Publish a question signal so WorkspaceLive can render it in the ask-user card
+    signal =
+      Loomkin.Signals.Team.AskUserQuestion.new!(%{
+        question_id: question_id,
+        agent_name: state.name,
+        team_id: state.team_id,
+        question: question_text || ""
+      })
+
+    Loomkin.Signals.publish(%{signal | data: Map.put(signal.data, :options, options)})
+
+    {:noreply, %{state | pending_ask_user: new_pending}}
   end
 
   @impl true
@@ -597,6 +969,15 @@ defmodule Loomkin.Teams.Agent do
     model = if task[:model_hint], do: ModelRouter.select(state.role, task), else: state.model
     state = %{state | task: task, model: model}
 
+    # Cache the task so the rebalancer can track what this agent is working on
+    if task[:id] do
+      Context.cache_task(state.team_id, task[:id], %{
+        title: task[:title] || task[:description] || "assigned task",
+        status: :assigned,
+        owner: state.name
+      })
+    end
+
     messages = maybe_prefetch_context(state, task)
 
     {:noreply, %{state | messages: messages}}
@@ -605,6 +986,30 @@ defmodule Loomkin.Teams.Agent do
   @impl true
   def handle_cast({:update_project_path, new_path}, state) do
     {:noreply, %{state | project_path: new_path}}
+  end
+
+  @impl true
+  def handle_cast({:update_model, new_model}, state) do
+    {:noreply, %{state | model: new_model}}
+  end
+
+  @impl true
+  def handle_cast(
+        {:peer_message, from, content},
+        %{status: :awaiting_synthesis, name: name, team_id: team_id} = state
+      ) do
+    # Route peer_message to the registered tool task (blocking in collect_research_findings)
+    # instead of appending to the agent's message history.
+    case Registry.lookup(Loomkin.Teams.AgentRegistry, {:awaiting_synthesis, team_id, name}) do
+      [{tool_task_pid, _}] ->
+        send(tool_task_pid, {:research_findings, from, content})
+
+      [] ->
+        # Fallback: no tool task registered yet; discard (will not deadlock)
+        :ok
+    end
+
+    {:noreply, state}
   end
 
   @impl true
@@ -625,174 +1030,257 @@ defmodule Loomkin.Teams.Agent do
           Loomkin.Permissions.Manager.grant(to_string(tool_name), tool_path, state.session_id)
         end
 
-        # Resume in a task to avoid blocking the GenServer
-        agent_pid = self()
-        messages = state.messages
-        team_id = state.team_id
-
-        Task.Supervisor.start_child(Loomkin.Teams.TaskSupervisor, fn ->
-          tool_result =
-            if action in ["allow_once", "allow_always"] do
-              pd = pending_info.pending_data
-              # Refresh project_path in the tool context before re-executing
-              fresh_path = resolve_project_path(team_id, pd.context[:project_path])
-              context = Map.put(pd.context, :project_path, fresh_path)
-              AgentLoop.default_run_tool(pd.tool_module, pd.tool_args, context)
+        if state.pause_queued do
+          # Pause was queued while waiting for permission -- transition to paused
+          denial_context =
+            if action not in ["allow_once", "allow_always"] do
+              %{denied_tool: tool_name, denied_path: tool_path}
             else
-              "Error: Permission denied for #{tool_name}"
+              nil
             end
 
-          result = AgentLoop.resume(tool_result, pending_info, messages)
-          send(agent_pid, {:loop_resumed, result})
-        end)
+          paused_state = %{
+            messages: state.messages,
+            iteration: nil,
+            reason: :user_requested,
+            cancelled_permission: denial_context
+          }
 
-        {:noreply, %{state | pending_permission: nil}}
+          state = %{
+            state
+            | pending_permission: nil,
+              pause_queued: false,
+              paused_state: paused_state
+          }
+
+          state = set_status_and_broadcast(state, :paused)
+          {:noreply, state}
+        else
+          # Resume in a task to avoid blocking the GenServer
+          agent_pid = self()
+          messages = state.messages
+          team_id = state.team_id
+
+          Task.Supervisor.start_child(Loomkin.Teams.TaskSupervisor, fn ->
+            tool_result =
+              if action in ["allow_once", "allow_always"] do
+                pd = pending_info.pending_data
+                # Refresh project_path in the tool context before re-executing
+                fresh_path = resolve_project_path(team_id, pd.context[:project_path])
+                context = Map.put(pd.context, :project_path, fresh_path)
+                AgentLoop.default_run_tool(pd.tool_module, pd.tool_args, context)
+              else
+                "Error: Permission denied for #{tool_name}"
+              end
+
+            result = AgentLoop.resume(tool_result, pending_info, messages)
+            send(agent_pid, {:loop_resumed, result})
+          end)
+
+          {:noreply, %{state | pending_permission: nil}}
+        end
     end
   end
 
   # --- Async loop result handlers ---
 
   @impl true
-  def handle_info({ref, {:loop_ok, text, msgs, meta}}, state) when is_reference(ref) do
+  def handle_info(
+        {ref, {:loop_ok, text, msgs, meta}},
+        %{loop_task: {%Task{ref: task_ref}, _from}} = state
+      )
+      when ref == task_ref do
     Process.demonitor(ref, [:flush])
+    {%Task{}, from} = state.loop_task
+    task_id = state.task && state.task[:id]
 
-    case state.loop_task do
-      {%Task{ref: ^ref}, from} ->
-        task_id = state.task && state.task[:id]
+    if task_id,
+      do: ModelRouter.record_success(state.team_id, state.name, task_id, state.model)
 
-        if task_id,
-          do: ModelRouter.record_success(state.team_id, state.name, task_id, state.model)
+    # Mark cached task as completed and clear agent task
+    if task_id do
+      Context.cache_task(state.team_id, task_id, %{
+        title: (state.task && state.task[:title]) || "completed",
+        status: :completed,
+        owner: state.name
+      })
+    end
 
-        state = %{state | messages: msgs, failure_count: 0, loop_task: nil}
-        state = track_usage(state, meta)
+    state = %{state | messages: msgs, failure_count: 0, loop_task: nil, task: nil}
+    state = track_usage(state, meta)
 
-        # Orienter is one-shot: mark complete instead of idle after auto-orient
-        state =
-          if state.role == :orienter and is_nil(from) do
-            set_status_and_broadcast(state, :complete)
-          else
-            set_status_and_broadcast(state, :idle)
-          end
+    # Weaver stays idle and schedules next cycle
+    state =
+      if state.role == :weaver and is_nil(from) do
+        maybe_schedule_weaver_cycle(state)
+        set_status_and_broadcast(state, :idle)
+      else
+        set_status_and_broadcast(state, :idle)
+      end
 
-        if from do
-          GenServer.reply(from, {:ok, text})
-        else
-          if task_id, do: Loomkin.Teams.Tasks.complete_task(task_id, text)
+    if from do
+      GenServer.reply(from, {:ok, text})
+    else
+      if task_id, do: Loomkin.Teams.Tasks.complete_task(task_id, text)
+    end
+
+    {:noreply, drain_queues(maybe_apply_queued_pause(state, msgs))}
+  end
+
+  @impl true
+  def handle_info(
+        {ref, {:loop_ok_escalated, text, msgs, meta, new_model}},
+        %{loop_task: {%Task{ref: task_ref}, _from}} = state
+      )
+      when ref == task_ref do
+    Process.demonitor(ref, [:flush])
+    {%Task{}, from} = state.loop_task
+    task_id = state.task && state.task[:id]
+    if task_id, do: ModelRouter.record_success(state.team_id, state.name, task_id, new_model)
+
+    if task_id do
+      Context.cache_task(state.team_id, task_id, %{
+        title: (state.task && state.task[:title]) || "completed",
+        status: :completed,
+        owner: state.name
+      })
+    end
+
+    state =
+      %{state | messages: msgs, failure_count: 0, model: new_model, loop_task: nil, task: nil}
+
+    state = track_usage(state, meta)
+
+    # Weaver stays idle and schedules next cycle
+    state =
+      if state.role == :weaver and is_nil(from) do
+        maybe_schedule_weaver_cycle(state)
+        set_status_and_broadcast(state, :idle)
+      else
+        set_status_and_broadcast(state, :idle)
+      end
+
+    if from do
+      GenServer.reply(from, {:ok, text})
+    else
+      if task_id, do: Loomkin.Teams.Tasks.complete_task(task_id, text)
+    end
+
+    {:noreply, drain_queues(maybe_apply_queued_pause(state, msgs))}
+  end
+
+  @impl true
+  def handle_info(
+        {ref, {:loop_error, reason, msgs}},
+        %{loop_task: {%Task{ref: task_ref}, _from}} = state
+      )
+      when ref == task_ref do
+    Process.demonitor(ref, [:flush])
+    {%Task{}, from} = state.loop_task
+    task_id = state.task && state.task[:id]
+
+    require Logger
+
+    Logger.error(
+      "[Kin:agent] loop error name=#{state.name} team=#{state.team_id} reason=#{inspect(reason)}"
+    )
+
+    if task_id do
+      Context.cache_task(state.team_id, task_id, %{
+        title: (state.task && state.task[:title]) || "failed",
+        status: :failed,
+        owner: state.name
+      })
+    end
+
+    state = %{state | messages: msgs, loop_task: nil}
+
+    state =
+      if state.role == :weaver do
+        failure_count = state.failure_count + 1
+        state = %{state | failure_count: failure_count}
+
+        if failure_count <= 3 and team_still_active?(state) do
+          delay = min(30_000 * failure_count, 120_000)
+          Process.send_after(self(), :weaver_cycle, delay)
         end
 
-        {:noreply, drain_queues(state)}
+        set_status_and_broadcast(state, :idle)
+      else
+        set_status_and_broadcast(state, :idle)
+      end
 
-      _ ->
-        {:noreply, state}
+    if from do
+      GenServer.reply(from, {:error, reason})
+    else
+      if task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, inspect(reason))
     end
+
+    {:noreply, drain_queues(maybe_apply_queued_pause(state, msgs))}
   end
 
   @impl true
-  def handle_info({ref, {:loop_ok_escalated, text, msgs, meta, new_model}}, state)
-      when is_reference(ref) do
+  def handle_info(
+        {ref, {:loop_pending, pending_info, msgs}},
+        %{loop_task: {%Task{ref: task_ref}, _from}} = state
+      )
+      when ref == task_ref do
     Process.demonitor(ref, [:flush])
+    {%Task{}, from} = state.loop_task
+    state = %{state | messages: msgs, pending_permission: pending_info, loop_task: nil}
+    state = set_status(state, :waiting_permission)
 
-    case state.loop_task do
-      {%Task{ref: ^ref}, from} ->
-        task_id = state.task && state.task[:id]
-        if task_id, do: ModelRouter.record_success(state.team_id, state.name, task_id, new_model)
+    if from, do: GenServer.reply(from, {:ok, :pending_permission})
 
-        state = %{state | messages: msgs, failure_count: 0, model: new_model, loop_task: nil}
-        state = track_usage(state, meta)
-
-        # Orienter is one-shot: mark complete instead of idle after auto-orient
-        state =
-          if state.role == :orienter and is_nil(from) do
-            set_status_and_broadcast(state, :complete)
-          else
-            set_status_and_broadcast(state, :idle)
-          end
-
-        if from do
-          GenServer.reply(from, {:ok, text})
-        else
-          if task_id, do: Loomkin.Teams.Tasks.complete_task(task_id, text)
-        end
-
-        {:noreply, drain_queues(state)}
-
-      _ ->
-        {:noreply, state}
-    end
+    {:noreply, drain_queues(state)}
   end
 
   @impl true
-  def handle_info({ref, {:loop_error, reason, msgs}}, state) when is_reference(ref) do
+  def handle_info(
+        {ref, {:loop_paused, reason, msgs, iteration}},
+        %{loop_task: {%Task{ref: task_ref}, _from}} = state
+      )
+      when ref == task_ref do
     Process.demonitor(ref, [:flush])
+    {%Task{}, from} = state.loop_task
 
-    case state.loop_task do
-      {%Task{ref: ^ref}, from} ->
-        task_id = state.task && state.task[:id]
+    paused_state = %{
+      messages: msgs,
+      iteration: iteration,
+      reason: reason
+    }
 
-        state = %{state | messages: msgs, loop_task: nil}
-        state = set_status_and_broadcast(state, :idle)
+    state = %{
+      state
+      | messages: msgs,
+        loop_task: nil,
+        pause_requested: false,
+        paused_state: paused_state
+    }
 
-        if from do
-          GenServer.reply(from, {:error, reason})
-        else
-          if task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, inspect(reason))
-        end
+    state = set_status_and_broadcast(state, :paused)
 
-        {:noreply, drain_queues(state)}
+    if from, do: GenServer.reply(from, {:ok, :paused})
 
-      _ ->
-        {:noreply, state}
-    end
+    {:noreply, drain_queues(state)}
+  end
+
+  # Fallthrough for unrecognized Task refs (e.g. from stale or external tasks)
+  @impl true
+  def handle_info({ref, _msg}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, state}
   end
 
   @impl true
-  def handle_info({ref, {:loop_pending, pending_info, msgs}}, state) when is_reference(ref) do
-    Process.demonitor(ref, [:flush])
-
-    case state.loop_task do
-      {%Task{ref: ^ref}, from} ->
-        state = %{state | messages: msgs, pending_permission: pending_info, loop_task: nil}
-        state = set_status(state, :waiting_permission)
-
-        if from, do: GenServer.reply(from, {:ok, :pending_permission})
-
-        {:noreply, drain_queues(state)}
-
-      _ ->
-        {:noreply, state}
-    end
+  def handle_info(:weaver_cycle, %{role: :weaver, loop_task: nil} = state) do
+    {:noreply, state, {:continue, :auto_weave}}
   end
 
   @impl true
-  def handle_info({ref, {:loop_paused, reason, msgs, iteration}}, state)
-      when is_reference(ref) do
-    Process.demonitor(ref, [:flush])
-
-    case state.loop_task do
-      {%Task{ref: ^ref}, from} ->
-        paused_state = %{
-          messages: msgs,
-          iteration: iteration,
-          reason: reason
-        }
-
-        state = %{
-          state
-          | messages: msgs,
-            loop_task: nil,
-            pause_requested: false,
-            paused_state: paused_state
-        }
-
-        state = set_status_and_broadcast(state, :paused)
-
-        if from, do: GenServer.reply(from, {:ok, :paused})
-
-        {:noreply, drain_queues(state)}
-
-      _ ->
-        {:noreply, state}
-    end
+  def handle_info(:weaver_cycle, state) do
+    # Already running or not a weaver, skip
+    {:noreply, state}
   end
 
   @impl true
@@ -801,8 +1289,30 @@ defmodule Loomkin.Teams.Agent do
       {%Task{ref: ^ref}, from} ->
         task_id = state.task && state.task[:id]
 
+        require Logger
+
+        Logger.error(
+          "[Kin:agent] loop crashed name=#{state.name} team=#{state.team_id} reason=#{inspect(reason)}"
+        )
+
+        if task_id do
+          Context.cache_task(state.team_id, task_id, %{
+            title: (state.task && state.task[:title]) || "crashed",
+            status: :failed,
+            owner: state.name
+          })
+        end
+
         state = %{state | loop_task: nil}
-        state = set_status_and_broadcast(state, :idle)
+
+        status =
+          if reason in [:normal, :shutdown] do
+            :idle
+          else
+            :error
+          end
+
+        state = set_status_and_broadcast(state, status)
 
         if from do
           GenServer.reply(from, {:error, :crashed})
@@ -810,7 +1320,20 @@ defmodule Loomkin.Teams.Agent do
           if task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, "crashed: #{inspect(reason)}")
         end
 
-        {:noreply, drain_queues(state)}
+        # Re-trigger weaver cycling after task crash (same backoff as loop_error)
+        if state.role == :weaver and is_nil(from) do
+          failure_count = state.failure_count + 1
+          state = %{state | failure_count: failure_count}
+
+          if failure_count <= 3 and team_still_active?(state) do
+            delay = min(30_000 * failure_count, 120_000)
+            Process.send_after(self(), :weaver_cycle, delay)
+          end
+
+          {:noreply, drain_queues(state)}
+        else
+          {:noreply, drain_queues(state)}
+        end
 
       _ ->
         {:noreply, state}
@@ -866,15 +1389,43 @@ defmodule Loomkin.Teams.Agent do
   def handle_info(%Jido.Signal{type: "context.update"} = sig, state) do
     from = sig.data[:from] || sig.data["from"]
     payload = sig.data[:payload] || sig.data
+
+    if is_nil(from) do
+      Logger.warning(
+        "[Kin:data] context.update signal missing :from, keys=#{inspect(Map.keys(sig.data))}"
+      )
+    end
+
     handle_info({:context_update, from, payload}, state)
   end
 
   def handle_info(%Jido.Signal{type: "agent.status"} = sig, state) do
-    handle_info({:agent_status, sig.data.agent_name, sig.data.status}, state)
+    case sig.data do
+      %{agent_name: name, status: status} when not is_nil(name) and not is_nil(status) ->
+        handle_info({:agent_status, name, status}, state)
+
+      _ ->
+        Logger.warning(
+          "[Kin:data] agent.status signal missing fields: #{inspect(sig.data, limit: 100)}"
+        )
+
+        {:noreply, state}
+    end
   end
 
   def handle_info(%Jido.Signal{type: "agent.role.changed"} = sig, state) do
-    handle_info({:role_changed, sig.data.agent_name, sig.data.old_role, sig.data.new_role}, state)
+    case sig.data do
+      %{agent_name: name, old_role: old_role, new_role: new_role}
+      when not is_nil(name) and not is_nil(new_role) ->
+        handle_info({:role_changed, name, old_role, new_role}, state)
+
+      _ ->
+        Logger.warning(
+          "[Kin:data] role.changed signal missing fields: #{inspect(sig.data, limit: 100)}"
+        )
+
+        {:noreply, state}
+    end
   end
 
   def handle_info(%Jido.Signal{type: "context.keeper.created"} = sig, state) do
@@ -893,7 +1444,43 @@ defmodule Loomkin.Teams.Agent do
   end
 
   def handle_info(%Jido.Signal{type: "team.task.assigned"} = sig, state) do
-    handle_info({:task_assigned, sig.data.task_id, sig.data.agent_name}, state)
+    case sig.data do
+      %{task_id: task_id, agent_name: name} when not is_nil(task_id) and not is_nil(name) ->
+        handle_info({:task_assigned, task_id, name}, state)
+
+      _ ->
+        Logger.warning(
+          "[Kin:data] task.assigned signal missing fields: #{inspect(sig.data, limit: 100)}"
+        )
+
+        {:noreply, state}
+    end
+  end
+
+  def handle_info(%Jido.Signal{type: "team.task.ready_for_review"} = sig, state) do
+    handle_info(
+      {:task_ready_for_review, sig.data.task_id, sig.data.owner, sig.data[:summary]},
+      state
+    )
+  end
+
+  def handle_info(%Jido.Signal{type: "team.task.blocked"} = sig, state) do
+    handle_info({:task_blocked, sig.data.task_id, sig.data.owner, sig.data[:reason]}, state)
+  end
+
+  def handle_info(%Jido.Signal{type: "team.task.partially_complete"} = sig, state) do
+    handle_info(
+      {:task_partially_complete, sig.data.task_id, sig.data.owner, sig.data[:partial_result]},
+      state
+    )
+  end
+
+  def handle_info(%Jido.Signal{type: "team.rendezvous." <> _}, state) do
+    {:noreply, state}
+  end
+
+  def handle_info(%Jido.Signal{type: "agent.ready"}, state) do
+    {:noreply, state}
   end
 
   def handle_info(%Jido.Signal{type: "team.task.completed"} = sig, state) do
@@ -902,6 +1489,20 @@ defmodule Loomkin.Teams.Agent do
 
   def handle_info(%Jido.Signal{type: "team.task.started"} = sig, state) do
     handle_info({:tasks_unblocked, [sig.data.task_id]}, state)
+  end
+
+  def handle_info(%Jido.Signal{type: "team.task.milestone"} = sig, state) do
+    handle_info(
+      {:task_milestone, sig.data.task_id, sig.data.owner, sig.data.milestone_name},
+      state
+    )
+  end
+
+  def handle_info(%Jido.Signal{type: "team.task.priority_changed"} = sig, state) do
+    handle_info(
+      {:task_priority_changed, sig.data.task_id, sig.data.owner, sig.data.new_priority},
+      state
+    )
   end
 
   def handle_info(%Jido.Signal{type: "collaboration.vote.response"} = sig, state) do
@@ -953,27 +1554,50 @@ defmodule Loomkin.Teams.Agent do
     {:noreply, state}
   end
 
+  # UI streaming signals — agents don't need these
   def handle_info(%Jido.Signal{type: "agent.stream." <> _}, state) do
     {:noreply, state}
   end
 
-  def handle_info(%Jido.Signal{type: "agent.tool." <> _}, state) do
+  # Tool lifecycle signals — log starts and errors for visibility
+  def handle_info(%Jido.Signal{type: "agent.tool." <> action} = sig, state) do
+    if action in ["start", "error"] do
+      agent = sig.data[:agent_name] || "unknown"
+      tool = sig.data[:tool_name] || "unknown"
+      Logger.debug("[Kin:signal] tool.#{action} agent=#{agent} tool=#{tool}")
+    end
+
     {:noreply, state}
   end
 
+  # Usage signals — already tracked via telemetry
   def handle_info(%Jido.Signal{type: "agent.usage"}, state) do
     {:noreply, state}
   end
 
+  # Queue bookkeeping — internal only
   def handle_info(%Jido.Signal{type: "agent.queue.updated"}, state) do
     {:noreply, state}
   end
 
-  def handle_info(%Jido.Signal{type: "agent.error"}, state) do
+  # Agent errors — log at warning level for visibility
+  def handle_info(%Jido.Signal{type: "agent.error"} = sig, state) do
+    agent = sig.data[:agent_name] || "unknown"
+    reason = sig.data[:reason] || sig.data[:error] || "unknown"
+
+    Logger.warning(
+      "[Kin:signal] agent.error agent=#{agent} reason=#{inspect(reason, limit: 200)}"
+    )
+
     {:noreply, state}
   end
 
-  def handle_info(%Jido.Signal{type: "agent.escalation"}, state) do
+  # Escalation signals — log model transitions
+  def handle_info(%Jido.Signal{type: "agent.escalation"} = sig, state) do
+    agent = sig.data[:agent_name] || "unknown"
+    from_model = sig.data[:from_model] || "unknown"
+    to_model = sig.data[:to_model] || "unknown"
+    Logger.info("[Kin:signal] escalation agent=#{agent} #{from_model} -> #{to_model}")
     {:noreply, state}
   end
 
@@ -1056,7 +1680,15 @@ defmodule Loomkin.Teams.Agent do
       {:noreply, state}
     else
       task = state.task
-      description = task[:description] || task[:title] || "Complete task #{task_id}"
+
+      if is_nil(task) do
+        Logger.warning(
+          "[Kin:data] auto_execute_task with nil task for agent=#{state.name} task_id=#{task_id}"
+        )
+      end
+
+      description =
+        (is_map(task) && (task[:description] || task[:title])) || "Complete task #{task_id}"
 
       state = set_status_and_broadcast(state, :working)
 
@@ -1069,6 +1701,8 @@ defmodule Loomkin.Teams.Agent do
         Task.Supervisor.async_nolink(Loomkin.Teams.TaskSupervisor, fn ->
           run_loop_with_escalation(messages, loop_opts, snapshot)
         end)
+
+      Logger.debug("[Kin:loop] spawned agent=#{state.name} ref=#{inspect(async_task.ref)}")
 
       {:noreply, %{state | loop_task: {async_task, nil}}}
     end
@@ -1291,8 +1925,17 @@ defmodule Loomkin.Teams.Agent do
     task_id = state.task && state.task[:id]
     if task_id, do: ModelRouter.record_success(state.team_id, state.name, task_id, state.model)
 
-    state = %{state | messages: messages, failure_count: 0}
+    state = %{
+      state
+      | messages: messages,
+        failure_count: 0,
+        loop_task: nil,
+        task: nil,
+        pending_permission: nil
+    }
+
     state = track_usage(state, metadata)
+    maybe_schedule_weaver_cycle(state)
     state = set_status_and_broadcast(state, :idle)
 
     # If there's an active task, complete it with the response
@@ -1305,7 +1948,8 @@ defmodule Loomkin.Teams.Agent do
 
   @impl true
   def handle_info({:loop_resumed, {:error, _reason, messages}}, state) do
-    state = %{state | messages: messages}
+    state = %{state | messages: messages, loop_task: nil, task: nil, pending_permission: nil}
+    maybe_schedule_weaver_cycle(state)
     state = set_status_and_broadcast(state, :idle)
     {:noreply, drain_queues(state)}
   end
@@ -1325,7 +1969,8 @@ defmodule Loomkin.Teams.Agent do
       state
       | messages: messages,
         pause_requested: false,
-        paused_state: paused_state
+        paused_state: paused_state,
+        pending_permission: nil
     }
 
     state = set_status_and_broadcast(state, :paused)
@@ -1356,11 +2001,91 @@ defmodule Loomkin.Teams.Agent do
   end
 
   @impl true
-  def handle_info({:tasks_unblocked, task_ids}, state) do
+  def handle_info({:task_ready_for_review, task_id, owner, summary}, state) do
     msg = %{
       role: :system,
       content:
-        "[System] Tasks now available: #{Enum.join(task_ids, ", ")}. Use team_progress to see details."
+        "[System] Task #{task_id} by #{owner} is ready for review. Summary: #{summary || "none"}"
+    }
+
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
+  def handle_info({:task_blocked, task_id, owner, reason}, state) do
+    msg = %{
+      role: :system,
+      content: "[System] Task #{task_id} by #{owner} is blocked. Reason: #{reason || "unknown"}"
+    }
+
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
+  def handle_info({:task_partially_complete, task_id, owner, partial_result}, state) do
+    msg = %{
+      role: :system,
+      content:
+        "[System] Task #{task_id} by #{owner} is partially complete. " <>
+          "Partial result: #{String.slice(partial_result || "", 0, 200)}"
+    }
+
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
+  def handle_info({:tasks_unblocked, task_ids}, state) do
+    handle_info({:tasks_unblocked, task_ids, %{}}, state)
+  end
+
+  @impl true
+  def handle_info({:tasks_unblocked, task_ids, predecessor_outputs}, state) do
+    output_context =
+      predecessor_outputs
+      |> Enum.map(fn {task_id, outputs} ->
+        output_lines =
+          outputs
+          |> Enum.map(fn %{title: title, result: result} ->
+            "  - #{title}: #{result}"
+          end)
+          |> Enum.join("\n")
+
+        "Task #{task_id} has predecessor outputs:\n#{output_lines}"
+      end)
+      |> Enum.join("\n")
+
+    base_content =
+      "[System] Tasks now available: #{Enum.join(task_ids, ", ")}. Use team_progress to see details."
+
+    content =
+      if output_context == "" do
+        base_content
+      else
+        base_content <> "\n\nPredecessor outputs:\n" <> output_context
+      end
+
+    msg = %{role: :system, content: content}
+
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
+  def handle_info({:task_milestone, _task_id, owner, milestone_name}, state) do
+    msg = %{
+      role: :system,
+      content:
+        "[System] Agent #{owner} reached milestone '#{milestone_name}'. " <>
+          "Dependent tasks may now be unblocked."
+    }
+
+    {:noreply, %{state | messages: state.messages ++ [msg]}}
+  end
+
+  @impl true
+  def handle_info({:task_priority_changed, task_id, _owner, new_priority}, state) do
+    msg = %{
+      role: :system,
+      content: "[System] Task #{task_id} priority changed to #{new_priority}."
     }
 
     {:noreply, %{state | messages: state.messages ++ [msg]}}
@@ -1432,6 +2157,17 @@ defmodule Loomkin.Teams.Agent do
     {:noreply, %{state | messages: state.messages ++ [msg]}}
   end
 
+  def handle_info({:child_team_spawned, child_team_id}, state) do
+    updated =
+      if child_team_id in state.spawned_child_teams do
+        state.spawned_child_teams
+      else
+        [child_team_id | state.spawned_child_teams]
+      end
+
+    {:noreply, %{state | spawned_child_teams: updated}}
+  end
+
   @impl true
   def handle_info(_msg, state) do
     {:noreply, state}
@@ -1439,30 +2175,61 @@ defmodule Loomkin.Teams.Agent do
 
   # --- Private ---
 
-  defp do_change_role(state, new_role) do
-    case Role.get(new_role) do
+  # If a pause was queued during an approval gate, apply it now that the gate has resolved.
+  defp maybe_apply_queued_pause(%{pause_queued: true} = state, msgs) do
+    paused_state = %{
+      messages: msgs,
+      iteration: nil,
+      reason: :user_requested,
+      cancelled_permission: nil
+    }
+
+    state = %{state | pause_queued: false, pause_requested: false, paused_state: paused_state}
+    set_status_and_broadcast(state, :paused)
+  end
+
+  defp maybe_apply_queued_pause(state, _msgs), do: state
+
+  defp do_change_role(state, new_role, role_config_override) do
+    role_result =
+      case role_config_override do
+        %Role{} = config -> {:ok, config}
+        _ -> Role.get(new_role)
+      end
+
+    case role_result do
       {:ok, role_config} ->
         old_role = state.role
+        effective_role_name = role_config.name || new_role
 
-        state = %{state | role: new_role, role_config: role_config, tools: role_config.tools}
+        state = %{
+          state
+          | role: effective_role_name,
+            role_config: role_config,
+            tools: role_config.tools
+        }
 
         # Update Registry metadata
         Registry.update_value(Loomkin.Teams.AgentRegistry, {state.team_id, state.name}, fn _old ->
-          %{role: new_role, status: state.status, model: state.model}
+          %{role: effective_role_name, status: state.status, model: state.model}
         end)
 
         # Update Context agent info
         Context.register_agent(state.team_id, state.name, %{
-          role: new_role,
+          role: effective_role_name,
           status: state.status,
           model: state.model
         })
 
         # Log role transition to decision graph
-        log_role_change_to_graph(state.team_id, state.name, old_role, new_role)
+        log_role_change_to_graph(state.team_id, state.name, old_role, effective_role_name)
 
         # Broadcast role change to team
-        broadcast_team(state, {:role_changed, state.name, old_role, new_role})
+        broadcast_team(state, {:role_changed, state.name, old_role, effective_role_name})
+
+        Logger.info(
+          "[Agent:#{state.name}] Role changed from #{old_role} to #{effective_role_name}"
+        )
 
         {:reply, :ok, state}
 
@@ -1666,6 +2433,12 @@ defmodule Loomkin.Teams.Agent do
   defp drain_queues(state) do
     had_messages? = state.priority_queue != [] or state.pending_updates != []
 
+    if had_messages? do
+      Logger.debug(
+        "[Kin:queue] draining agent=#{state.name} priority=#{length(state.priority_queue)} normal=#{length(state.pending_updates)}"
+      )
+    end
+
     Enum.each(state.priority_queue, fn qm -> send(self(), QueuedMessage.to_dispatchable(qm)) end)
 
     Enum.each(state.pending_updates, fn qm ->
@@ -1791,12 +2564,25 @@ defmodule Loomkin.Teams.Agent do
 
   @doc false
   def resolve_project_path(team_id, fallback) do
-    Manager.get_team_project_path(team_id) || fallback
+    case Manager.get_team_project_path(team_id) do
+      nil ->
+        Logger.warning(
+          "[Kin:agent] project_path ETS lookup failed for team=#{team_id}, using fallback=#{fallback}"
+        )
+
+        fallback
+
+      path ->
+        path
+    end
   end
 
   defp build_loop_opts(state) do
     team_id = state.team_id
     name = state.name
+    # Capture Agent GenServer PID here — closures below run inside async Task
+    # where self() would return the Task PID, not the Agent PID.
+    agent_pid = self()
     system_prompt = inject_keeper_index(state.role_config.system_prompt, team_id)
     permission_callback = build_permission_callback(state)
     checkpoint_callback = build_checkpoint_callback()
@@ -1834,22 +2620,469 @@ defmodule Loomkin.Teams.Agent do
 
         # AskUser blocks waiting for human input (up to 5 min), so bypass the
         # default 60s Jido.Exec timeout and call run/2 directly.
+        # Rate-limit check happens first via GenServer.call to read live state.
         if tool_module == Loomkin.Tools.AskUser do
-          atomized = Loomkin.Tools.Registry.atomize_keys(tool_args)
+          case GenServer.call(agent_pid, {:check_ask_user_rate_limit, tool_args}) do
+            :allow ->
+              atomized = Loomkin.Tools.Registry.atomize_keys(tool_args)
 
-          result =
-            try do
-              tool_module.run(atomized, context)
-            rescue
-              e -> {:error, Exception.message(e)}
-            end
+              result =
+                try do
+                  tool_module.run(atomized, context)
+                rescue
+                  e -> {:error, Exception.message(e)}
+                end
 
-          AgentLoop.format_tool_result(result)
+              # After run/2 returns (question was answered), notify GenServer
+              # to update last_asked_at and clear the pending card.
+              # Use a sentinel ID — the :allow path has questions: [], so any ID
+              # triggers the "all answered" cleanup in ask_user_answered.
+              GenServer.call(agent_pid, {:ask_user_answered, :allow_cleanup})
+
+              AgentLoop.format_tool_result(result)
+
+            {:batch, card_id} ->
+              # Append question to open card and block tool task waiting for answer
+              question_id = Ecto.UUID.generate()
+              tool_task_pid = self()
+
+              # Register in the tool task process so answers route here (self() = task pid)
+              Registry.register(Loomkin.Teams.AgentRegistry, {:ask_user, question_id}, self())
+
+              GenServer.cast(
+                agent_pid,
+                {:append_ask_user_question, tool_args, card_id, question_id, tool_task_pid}
+              )
+
+              receive do
+                {:ask_user_answer, ^question_id, answer} ->
+                  Registry.unregister(Loomkin.Teams.AgentRegistry, {:ask_user, question_id})
+                  GenServer.call(agent_pid, {:ask_user_answered, question_id})
+
+                  AgentLoop.format_tool_result(
+                    {:ok, %{result: "User answered: #{answer}", answer: answer}}
+                  )
+              after
+                300_000 ->
+                  # Timeout: clear the question and proceed autonomously
+                  Registry.unregister(Loomkin.Teams.AgentRegistry, {:ask_user, question_id})
+                  GenServer.call(agent_pid, {:ask_user_answered, question_id})
+
+                  AgentLoop.format_tool_result(
+                    {:ok, %{result: "Collective: timeout — proceeding autonomously", answer: nil}}
+                  )
+              end
+
+            :drop ->
+              AgentLoop.format_tool_result(
+                {:ok,
+                 %{
+                   result:
+                     "Rate limit reached — proceeding autonomously. Your question was not shown to the human.",
+                   answer: nil
+                 }}
+              )
+          end
         else
-          AgentLoop.default_run_tool(tool_module, tool_args, context)
+          if tool_module == Loomkin.Tools.TeamSpawn do
+            run_spawn_gate_intercept(agent_pid, tool_module, tool_args, context, team_id, name)
+          else
+            AgentLoop.default_run_tool(tool_module, tool_args, context)
+          end
         end
       end
     ]
+  end
+
+  # -- Spawn gate intercept helpers --
+
+  @role_cost_estimates %{
+    "researcher" => 0.20,
+    "coder" => 0.50,
+    "reviewer" => 0.30,
+    "tester" => 0.30,
+    "lead" => 0.50,
+    "concierge" => 0.10
+  }
+
+  @default_max_agents_per_team 10
+
+  defp run_spawn_gate_intercept(agent_pid, tool_module, tool_args, context, team_id, agent_name) do
+    spawn_type = Map.get(tool_args, "spawn_type", Map.get(tool_args, :spawn_type))
+
+    if spawn_type in [:research, "research"] do
+      run_research_spawn(agent_pid, tool_module, tool_args, context, team_id, agent_name)
+    else
+      run_human_or_auto_spawn_gate(
+        agent_pid,
+        tool_module,
+        tool_args,
+        context,
+        team_id,
+        agent_name
+      )
+    end
+  end
+
+  defp run_research_spawn(agent_pid, tool_module, tool_args, context, team_id, agent_name) do
+    roles = tool_args |> Map.get("roles", Map.get(tool_args, :roles, [])) |> atomize_role_keys()
+    estimated_cost = estimate_spawn_cost(roles)
+    researcher_count = length(roles)
+
+    # Budget check still runs for research spawns
+    case GenServer.call(agent_pid, {:check_spawn_budget, estimated_cost}) do
+      {:budget_exceeded, details} ->
+        AgentLoop.format_tool_result({:error, :budget_exceeded, details})
+
+      :ok ->
+        # Register tool task in Registry before entering awaiting_synthesis
+        Registry.register(
+          Loomkin.Teams.AgentRegistry,
+          {:awaiting_synthesis, team_id, agent_name},
+          self()
+        )
+
+        # Transition agent to :awaiting_synthesis
+        GenServer.cast(agent_pid, {:enter_awaiting_synthesis, researcher_count})
+
+        # Execute spawn (nil gate_id = no GateResolved published; no human gate opened)
+        spawn_result =
+          execute_spawn_and_notify(
+            agent_pid,
+            tool_module,
+            tool_args,
+            context,
+            nil,
+            team_id,
+            agent_name
+          )
+
+        # If spawn failed, exit awaiting_synthesis immediately instead of blocking 120s
+        findings =
+          case spawn_result do
+            {:error, _reason} ->
+              GenServer.cast(agent_pid, :exit_awaiting_synthesis)
+
+              Registry.unregister(
+                Loomkin.Teams.AgentRegistry,
+                {:awaiting_synthesis, team_id, agent_name}
+              )
+
+              []
+
+            _ ->
+              # Block in receive loop collecting findings from researchers
+              collect_research_findings(researcher_count, 120_000, [])
+          end
+
+        # Exit awaiting_synthesis; agent returns to :working
+        GenServer.cast(agent_pid, :exit_awaiting_synthesis)
+
+        summary =
+          findings
+          |> Enum.map(fn {from, content} -> "--- #{from} ---\n#{content}" end)
+          |> Enum.join("\n\n")
+
+        {:ok, %{result: "Research synthesis complete.\n\n#{summary}"}}
+    end
+  end
+
+  defp collect_research_findings(0, _timeout_ms, acc), do: Enum.reverse(acc)
+
+  defp collect_research_findings(count, timeout_ms, acc) when count > 0 do
+    receive do
+      {:research_findings, from, content} ->
+        collect_research_findings(count - 1, timeout_ms, [{from, content} | acc])
+    after
+      timeout_ms ->
+        # partial findings on timeout — proceed with what arrived
+        Enum.reverse(acc)
+    end
+  end
+
+  defp run_human_or_auto_spawn_gate(
+         agent_pid,
+         tool_module,
+         tool_args,
+         context,
+         team_id,
+         agent_name
+       ) do
+    roles = tool_args |> Map.get("roles", Map.get(tool_args, :roles, [])) |> atomize_role_keys()
+    estimated_cost = estimate_spawn_cost(roles)
+
+    # Step 2: guard against double-gate
+    if GenServer.call(agent_pid, :is_gate_open?) do
+      AgentLoop.format_tool_result(
+        {:error, :approval_pending, %{message: "Agent already has an open approval gate"}}
+      )
+    else
+      # Step 3: budget check
+      case GenServer.call(agent_pid, {:check_spawn_budget, estimated_cost}) do
+        {:budget_exceeded, details} ->
+          AgentLoop.format_tool_result({:error, :budget_exceeded, details})
+
+        :ok ->
+          # Step 4: check auto-approve setting (read via GenServer for freshness)
+          %{auto_approve_spawns: auto_approve} = GenServer.call(agent_pid, :get_spawn_settings)
+
+          if auto_approve do
+            # Step 6 directly: execute spawn
+            execute_spawn_and_notify(
+              agent_pid,
+              tool_module,
+              tool_args,
+              context,
+              nil,
+              team_id,
+              agent_name
+            )
+          else
+            run_human_spawn_gate(
+              agent_pid,
+              tool_module,
+              tool_args,
+              context,
+              team_id,
+              agent_name,
+              estimated_cost,
+              roles,
+              auto_approve
+            )
+          end
+      end
+    end
+  end
+
+  defp run_human_spawn_gate(
+         agent_pid,
+         tool_module,
+         tool_args,
+         context,
+         team_id,
+         agent_name,
+         estimated_cost,
+         roles,
+         auto_approve
+       ) do
+    gate_id = Ecto.UUID.generate()
+
+    team_name =
+      Map.get(tool_args, "team_name", Map.get(tool_args, :team_name, nil)) ||
+        Map.get(tool_args, "name", Map.get(tool_args, :name, "unnamed-team"))
+
+    purpose =
+      Map.get(tool_args, "purpose", Map.get(tool_args, :purpose, nil))
+
+    timeout_ms =
+      Map.get(tool_args, "timeout_ms", Map.get(tool_args, :timeout_ms, nil)) ||
+        Application.get_env(:loomkin, :spawn_gate_timeout_ms, 300_000)
+
+    limit_warning = compute_limit_warning(team_id, length(roles))
+
+    pending_info = %{
+      type: :spawn_gate,
+      gate_id: gate_id,
+      team_name: team_name,
+      purpose: purpose,
+      roles: roles,
+      estimated_cost: estimated_cost,
+      limit_warning: limit_warning
+    }
+
+    # Register this tool task process for response routing before casting (prevents race condition
+    # where LiveView receives the signal and user approves before the gate_id is registered)
+    case Registry.register(Loomkin.Teams.AgentRegistry, {:spawn_gate, gate_id}, self()) do
+      {:error, {:already_registered, _}} ->
+        AgentLoop.format_tool_result(
+          {:error, :already_registered,
+           %{message: "Spawn gate already registered. Cannot open a second gate."}}
+        )
+
+      _ ->
+        # Open gate: mark agent approval_pending via cast (after registration to avoid race condition)
+        GenServer.cast(agent_pid, {:open_spawn_gate, gate_id, pending_info})
+
+        # Publish GateRequested signal for LiveView to render the gate ui
+        signal =
+          Loomkin.Signals.Spawn.GateRequested.new!(%{
+            gate_id: gate_id,
+            agent_name: to_string(agent_name),
+            team_id: team_id,
+            team_name: team_name,
+            purpose: purpose,
+            roles: roles,
+            estimated_cost: estimated_cost,
+            limit_warning: limit_warning,
+            timeout_ms: timeout_ms,
+            auto_approve_spawns: auto_approve
+          })
+
+        Loomkin.Signals.publish(signal)
+
+        receive do
+          {:spawn_gate_response, ^gate_id, %{outcome: :approved}} ->
+            Registry.unregister(Loomkin.Teams.AgentRegistry, {:spawn_gate, gate_id})
+
+            execute_spawn_and_notify(
+              agent_pid,
+              tool_module,
+              tool_args,
+              context,
+              gate_id,
+              team_id,
+              agent_name
+            )
+
+          {:spawn_gate_response, ^gate_id, %{outcome: :denied, reason: reason}} ->
+            Registry.unregister(Loomkin.Teams.AgentRegistry, {:spawn_gate, gate_id})
+
+            resolved =
+              Loomkin.Signals.Spawn.GateResolved.new!(%{
+                gate_id: gate_id,
+                agent_name: to_string(agent_name),
+                team_id: team_id,
+                outcome: :denied
+              })
+
+            Loomkin.Signals.publish(resolved)
+
+            AgentLoop.format_tool_result(
+              {:ok,
+               %{
+                 status: :denied,
+                 reason: :human_denied,
+                 message: reason || "Denied by human."
+               }}
+            )
+        after
+          timeout_ms ->
+            Registry.unregister(Loomkin.Teams.AgentRegistry, {:spawn_gate, gate_id})
+
+            resolved =
+              Loomkin.Signals.Spawn.GateResolved.new!(%{
+                gate_id: gate_id,
+                agent_name: to_string(agent_name),
+                team_id: team_id,
+                outcome: :timeout
+              })
+
+            Loomkin.Signals.publish(resolved)
+
+            AgentLoop.format_tool_result(
+              {:ok,
+               %{
+                 status: :denied,
+                 reason: :timeout,
+                 message: "Spawn gate timed out."
+               }}
+            )
+        end
+    end
+  end
+
+  defp execute_spawn_and_notify(
+         agent_pid,
+         tool_module,
+         tool_args,
+         context,
+         gate_id,
+         team_id,
+         agent_name
+       ) do
+    result = AgentLoop.default_run_tool(tool_module, tool_args, context)
+
+    if gate_id do
+      # Publish GateResolved for approved path (human gate)
+      resolved =
+        Loomkin.Signals.Spawn.GateResolved.new!(%{
+          gate_id: gate_id,
+          agent_name: to_string(agent_name),
+          team_id: team_id,
+          outcome: :approved
+        })
+
+      Loomkin.Signals.publish(resolved)
+    end
+
+    # Preserve existing child_team_spawned notify
+    case result do
+      {:ok, %{team_id: child_team_id}} ->
+        send(agent_pid, {:child_team_spawned, child_team_id})
+
+      _ ->
+        :ok
+    end
+
+    result
+  end
+
+  @string_to_atom_keys %{
+    "name" => :name,
+    "role" => :role,
+    "model" => :model,
+    "system_prompt" => :system_prompt,
+    "count" => :count
+  }
+
+  defp atomize_role_keys(roles) when is_list(roles) do
+    Enum.map(roles, fn
+      role when is_map(role) ->
+        Map.new(role, fn
+          {k, v} when is_binary(k) -> {Map.get(@string_to_atom_keys, k, k), v}
+          {k, v} -> {k, v}
+        end)
+
+      other ->
+        other
+    end)
+  end
+
+  defp atomize_role_keys(other), do: other
+
+  defp estimate_spawn_cost(roles) when is_list(roles) do
+    Enum.reduce(roles, 0.0, fn role, acc ->
+      role_str =
+        cond do
+          is_map(role) -> to_string(Map.get(role, "role", Map.get(role, :role, "researcher")))
+          is_binary(role) -> role
+          is_atom(role) -> to_string(role)
+          true -> "researcher"
+        end
+
+      cost = Map.get(@role_cost_estimates, role_str, 0.20)
+      acc + cost
+    end)
+  end
+
+  defp estimate_spawn_cost(_), do: 0.20
+
+  # Mirroring Manager's @default_max_nesting_depth = 2
+  @spawn_max_nesting_depth 2
+
+  defp compute_limit_warning(team_id, planned_agent_count) do
+    # Check depth warning: if team depth + 1 >= 80% of max depth (2), warn
+    # 80% of 2 = 1.6 → floor = 1, so any depth >= 1 approaching limit of 2
+    depth_threshold = floor(@spawn_max_nesting_depth * 0.8)
+
+    current_depth =
+      case Manager.get_team_meta(team_id) do
+        {:ok, %{depth: d}} -> d
+        _ -> 0
+      end
+
+    if current_depth >= depth_threshold do
+      :depth
+    else
+      # Check agent count warning: planned spawn total >= 80% of max agents
+      agent_threshold = floor(@default_max_agents_per_team * 0.8)
+
+      if planned_agent_count >= agent_threshold do
+        :agents
+      else
+        nil
+      end
+    end
   end
 
   defp build_permission_callback(%{permission_mode: :auto}), do: nil
@@ -2227,14 +3460,64 @@ defmodule Loomkin.Teams.Agent do
   # Sets status and broadcasts only when the status actually changed.
   # This prevents duplicate `:agent_status` signals when multiple code paths
   # set the same status (e.g., :working broadcast from both send_message and execute_task).
+  defp maybe_schedule_weaver_cycle(state) do
+    if state.role == :weaver and team_still_active?(state) do
+      # Adaptive interval: immediate if queued messages exist, 30s otherwise
+      delay =
+        if state.priority_queue != [] or state.pending_updates != [] do
+          0
+        else
+          30_000
+        end
+
+      Process.send_after(self(), :weaver_cycle, delay)
+    end
+  end
+
+  defp team_still_active?(state) do
+    agents = Context.list_agents(state.team_id)
+
+    Enum.any?(agents, fn %{role: role, status: status} ->
+      role != :weaver and status in [:idle, :working]
+    end)
+  end
+
   defp set_status_and_broadcast(state, new_status) do
     if state.status == new_status do
       state
     else
+      old_status = state.status
       state = set_status(state, new_status)
-      broadcast_team(state, {:agent_status, state.name, new_status})
+
+      broadcast_team(
+        state,
+        {:agent_status, state.name, new_status,
+         %{previous_status: old_status, pause_queued: state.pause_queued}}
+      )
+
+      # Emit agent ready signal when transitioning from working to idle
+      if new_status == :idle and old_status in [:working, :waiting_permission] do
+        maybe_broadcast_agent_ready(state)
+      end
+
       state
     end
+  end
+
+  defp maybe_broadcast_agent_ready(state) do
+    task_id = state.task && state.task[:id]
+
+    signal =
+      Loomkin.Signals.Agent.Ready.new!(%{
+        agent_name: to_string(state.name),
+        team_id: state.team_id,
+        ready_for: "new_task",
+        task_id: if(task_id, do: to_string(task_id), else: nil)
+      })
+
+    Loomkin.Signals.publish(signal)
+  rescue
+    _ -> :ok
   end
 
   defp handle_peer_message_signal(sig, state) do
@@ -2313,11 +3596,13 @@ defmodule Loomkin.Teams.Agent do
     signal_team_id == nil or signal_team_id == state.team_id
   end
 
-  defp broadcast_team(state, {:agent_status, agent_name, status}) do
+  defp broadcast_team(state, {:agent_status, agent_name, status, metadata}) do
     Loomkin.Signals.Agent.Status.new!(%{
       agent_name: to_string(agent_name),
       team_id: state.team_id,
-      status: status
+      status: status,
+      previous_status: metadata[:previous_status],
+      pause_queued: metadata[:pause_queued] || false
     })
     |> Loomkin.Signals.Extensions.Causality.attach(
       team_id: state.team_id,
@@ -2325,7 +3610,30 @@ defmodule Loomkin.Teams.Agent do
     )
     |> Loomkin.Signals.publish()
   rescue
-    _ ->
+    e ->
+      Logger.warning("[Kin:agent] broadcast_team failed: #{inspect(e)}")
+      :ok
+  end
+
+  defp broadcast_team(state, {:agent_status, agent_name, status}) do
+    broadcast_team(state, {:agent_status, agent_name, status, %{}})
+  end
+
+  defp broadcast_team(state, {:agent_pause_queued, agent_name}) do
+    # Reuse agent_status signal to notify that pause has been queued
+    Loomkin.Signals.Agent.Status.new!(%{
+      agent_name: to_string(agent_name),
+      team_id: state.team_id,
+      status: :pause_queued
+    })
+    |> Loomkin.Signals.Extensions.Causality.attach(
+      team_id: state.team_id,
+      agent_name: to_string(agent_name)
+    )
+    |> Loomkin.Signals.publish()
+  rescue
+    e ->
+      Logger.warning("[Kin:agent] broadcast_team failed: #{inspect(e)}")
       :ok
   end
 
@@ -2342,7 +3650,8 @@ defmodule Loomkin.Teams.Agent do
     )
     |> Loomkin.Signals.publish()
   rescue
-    _ ->
+    e ->
+      Logger.warning("[Kin:agent] broadcast_team failed: #{inspect(e)}")
       :ok
   end
 end

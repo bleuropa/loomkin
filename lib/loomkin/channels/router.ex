@@ -64,7 +64,6 @@ defmodule Loomkin.Channels.Router do
     case Bridge.handle_callback(channel, channel_id, callback_id, data) do
       :ok -> {:ok, :callback_routed}
       {:error, :no_bridge} -> {:error, :no_binding}
-      error -> error
     end
   end
 

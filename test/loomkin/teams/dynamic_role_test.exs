@@ -68,17 +68,14 @@ defmodule Loomkin.Teams.DynamicRoleTest do
       assert agent.role == :coder
     end
 
-    test "supports require_approval option", %{team_id: team_id} do
+    test "broadcasts role changed signal", %{team_id: team_id} do
       {:ok, pid} = Manager.spawn_agent(team_id, "approval-agent", :coder)
       # Allow init signals to settle before subscribing
       Process.sleep(50)
       Loomkin.Signals.subscribe("agent.**")
 
-      # With require_approval, it broadcasts a request then proceeds
-      assert :ok = Agent.change_role(pid, :reviewer, require_approval: true)
+      assert :ok = Agent.change_role(pid, :reviewer)
 
-      # role_change_request is still broadcast via PubSub (not yet migrated)
-      # but role_changed now comes as a signal
       assert_receive {:signal,
                       %Jido.Signal{
                         type: "agent.role.changed",

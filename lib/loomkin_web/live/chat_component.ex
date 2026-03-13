@@ -4,12 +4,13 @@ defmodule LoomkinWeb.ChatComponent do
   def mount(socket) do
     {:ok,
      socket
-     |> assign(msg_count: 0, has_messages: false)
+     |> assign(msg_count: 0, has_messages: false, failed_message_idx: nil)
      |> stream(:messages, [])}
   end
 
   def update(assigns, socket) do
     old_count = socket.assigns.msg_count
+    old_failed_idx = socket.assigns[:failed_message_idx]
     messages = assigns[:messages] || []
     new_count = length(messages)
 
@@ -36,7 +37,38 @@ defmodule LoomkinWeb.ChatComponent do
           socket
       end
 
-    {:ok, assign(socket, msg_count: new_count, has_messages: new_count > 0)}
+    new_failed_idx = assigns[:failed_message_idx]
+
+    socket =
+      cond do
+        new_failed_idx != nil && new_failed_idx != old_failed_idx ->
+          failed_msg =
+            messages
+            |> Enum.at(new_failed_idx)
+            |> Map.put(:id, "msg-#{new_failed_idx}")
+
+          stream_insert(socket, :messages, failed_msg)
+
+        old_failed_idx != nil && new_failed_idx != old_failed_idx ->
+          restored_msg =
+            messages
+            |> Enum.at(old_failed_idx)
+            |> then(fn msg ->
+              if msg, do: Map.put(msg, :id, "msg-#{old_failed_idx}"), else: nil
+            end)
+
+          if restored_msg, do: stream_insert(socket, :messages, restored_msg), else: socket
+
+        true ->
+          socket
+      end
+
+    {:ok,
+     assign(socket,
+       msg_count: new_count,
+       has_messages: new_count > 0,
+       failed_message_idx: new_failed_idx
+     )}
   end
 
   defp wrap_messages(messages, start_idx) do
@@ -52,189 +84,246 @@ defmodule LoomkinWeb.ChatComponent do
     {:noreply, socket}
   end
 
+  def handle_event("resend_message", %{"content" => content}, socket) do
+    send(self(), {:resend_message, content})
+    {:noreply, socket}
+  end
+
   def render(assigns) do
     ~H"""
-    <div class="flex-1 overflow-auto" id="chat-messages" phx-hook="ScrollToBottom">
-      <div class="flex flex-col gap-4 p-4">
-        <%!-- Empty State --%>
-        <div :if={!@has_messages} class="flex items-center justify-center h-64">
-          <div class="text-center space-y-4">
-            <div class="w-12 h-12 mx-auto rounded-2xl bg-violet-600/20 flex items-center justify-center shadow-lg shadow-violet-500/10">
-              <span class="text-xl font-bold text-violet-400">L</span>
-            </div>
-            <div>
-              <p class="text-lg font-medium text-gray-300">What shall we build today?</p>
-              <p class="text-sm text-gray-500 mt-1">Send a message to start your coding session.</p>
-            </div>
-            <div class="flex flex-wrap gap-2 justify-center pt-2">
-              <button
-                phx-click="select_prompt"
-                phx-value-prompt="Explore this codebase"
-                phx-target={@myself}
-                class="px-3 py-1.5 text-xs bg-gray-800/80 text-gray-400 rounded-full border border-gray-700/50 hover:border-violet-500/30 hover:text-gray-300 transition-all duration-200 cursor-pointer"
-              >
-                Explore this codebase
-              </button>
-              <button
-                phx-click="select_prompt"
-                phx-value-prompt="Fix a bug"
-                phx-target={@myself}
-                class="px-3 py-1.5 text-xs bg-gray-800/80 text-gray-400 rounded-full border border-gray-700/50 hover:border-violet-500/30 hover:text-gray-300 transition-all duration-200 cursor-pointer"
-              >
-                Fix a bug
-              </button>
-              <button
-                phx-click="select_prompt"
-                phx-value-prompt="Add a feature"
-                phx-target={@myself}
-                class="px-3 py-1.5 text-xs bg-gray-800/80 text-gray-400 rounded-full border border-gray-700/50 hover:border-violet-500/30 hover:text-gray-300 transition-all duration-200 cursor-pointer"
-              >
-                Add a feature
-              </button>
+    <div class="flex-1 relative overflow-hidden">
+      <div
+        class="absolute inset-0 overflow-auto"
+        id="chat-messages"
+        role="log"
+        aria-label="Conversation"
+        aria-live="polite"
+        phx-hook="ScrollToBottom"
+      >
+        <div class="flex flex-col gap-4 p-4">
+          <%!-- Empty State --%>
+          <div :if={!@has_messages} class="flex items-center justify-center h-64">
+            <div class="text-center space-y-4">
+              <div class="w-12 h-12 mx-auto rounded-2xl bg-violet-600/20 flex items-center justify-center shadow-lg shadow-violet-500/10">
+                <span class="text-xl font-bold text-violet-400">L</span>
+              </div>
+              <div>
+                <p class="text-lg font-medium text-gray-300">What shall we build today?</p>
+                <p class="text-sm text-gray-500 mt-1">Send a message to start your coding session.</p>
+              </div>
+              <div class="flex flex-wrap gap-2 justify-center pt-2">
+                <button
+                  phx-click="select_prompt"
+                  phx-value-prompt="Explore this codebase"
+                  phx-target={@myself}
+                  class="px-3 py-1.5 text-xs bg-gray-800/80 text-gray-400 rounded-full border border-gray-700/50 hover:border-violet-500/30 hover:text-gray-300 transition-all duration-200 cursor-pointer"
+                >
+                  Explore this codebase
+                </button>
+                <button
+                  phx-click="select_prompt"
+                  phx-value-prompt="Fix a bug"
+                  phx-target={@myself}
+                  class="px-3 py-1.5 text-xs bg-gray-800/80 text-gray-400 rounded-full border border-gray-700/50 hover:border-violet-500/30 hover:text-gray-300 transition-all duration-200 cursor-pointer"
+                >
+                  Fix a bug
+                </button>
+                <button
+                  phx-click="select_prompt"
+                  phx-value-prompt="Add a feature"
+                  phx-target={@myself}
+                  class="px-3 py-1.5 text-xs bg-gray-800/80 text-gray-400 rounded-full border border-gray-700/50 hover:border-violet-500/30 hover:text-gray-300 transition-all duration-200 cursor-pointer"
+                >
+                  Add a feature
+                </button>
+              </div>
             </div>
           </div>
-        </div>
 
-        <%!-- Messages (streamed) --%>
-        <div id={"#{@id}-message-stream"} phx-update="stream">
-          <div :for={{dom_id, msg} <- @streams.messages} id={dom_id} class="animate-fade-in-up">
-            <%= case msg.role do %>
-              <% :user -> %>
-                <div class="flex items-start gap-3 justify-end max-w-[80%] ml-auto">
-                  <div class="bg-gray-700/80 rounded-2xl px-4 py-2.5 text-sm shadow-sm">
-                    <p class="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
-                  </div>
-                  <div class="w-7 h-7 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0 shadow-sm">
-                    <span class="text-xs font-bold text-white">U</span>
-                  </div>
-                </div>
-              <% :assistant -> %>
-                <div class="flex items-start gap-3 max-w-[85%]">
-                  <div class="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-violet-500/30">
-                    <span class="text-xs font-bold text-white">L</span>
-                  </div>
-                  <div class="border-l-2 border-violet-500/40 pl-3 py-0.5">
-                    <div class="max-w-none chat-markdown">
-                      {render_markdown(msg.content)}
+          <%!-- Messages (streamed) --%>
+          <div id={"#{@id}-message-stream"} phx-update="stream">
+            <div :for={{dom_id, msg} <- @streams.messages} id={dom_id} class="animate-fade-in-up">
+              <%= case msg.role do %>
+                <% :user -> %>
+                  <div class="flex items-start gap-3 justify-end max-w-[80%] ml-auto">
+                    <div class={"bg-gray-700/80 rounded-2xl px-4 py-2.5 text-sm shadow-sm #{if msg[:failed], do: "border border-red-500/40", else: ""}"}>
+                      <p class="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                      <%= if msg[:failed] do %>
+                        <div class="flex items-center justify-between mt-2 pt-2 border-t border-red-500/20">
+                          <span class="text-xs text-red-400">Failed to send</span>
+                          <button
+                            phx-click="resend_message"
+                            phx-value-content={msg.content}
+                            phx-target={@myself}
+                            class="text-xs text-red-400 hover:text-red-300 underline ml-3 cursor-pointer"
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      <% end %>
+                    </div>
+                    <div class="w-7 h-7 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+                      <span class="text-xs font-bold text-white">U</span>
                     </div>
                   </div>
-                </div>
-              <% :tool -> %>
-                <div class="max-w-[85%] ml-10 animate-fade-in-up">
-                  <%= if String.starts_with?(msg.content || "", "Error:") do %>
-                    <div class="rounded-xl overflow-hidden border border-red-500/30 bg-red-950/20 px-3 py-2">
-                      <div class="flex items-center gap-2 text-xs font-medium text-red-400">
-                        <span class="text-red-400">&#9888;</span>
-                        <span>{tool_display_name(msg)}</span>
-                      </div>
-                      <pre class="text-xs text-red-300/80 whitespace-pre-wrap mt-1">{msg.content}</pre>
+                <% :assistant -> %>
+                  <div class="flex items-start gap-3 max-w-[85%]">
+                    <div class="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-violet-500/30">
+                      <span class="text-xs font-bold text-white">{agent_initial(msg[:from])}</span>
                     </div>
-                  <% else %>
-                    <div class={"tool-card rounded-xl overflow-hidden border transition-all duration-200 #{tool_card_border(msg)}"}>
-                      <div
-                        class={"flex items-center gap-2 px-3 py-2 cursor-pointer select-none text-xs font-medium #{tool_card_header(msg)}"}
-                        onclick="this.parentElement.classList.toggle('tool-expanded')"
-                      >
-                        <span class="tool-card-icon">{tool_icon(msg)}</span>
-                        <span>{tool_display_name(msg)}</span>
-                        <span class="ml-auto text-gray-500 tool-card-chevron transition-transform duration-200">
-                          &#9656;
-                        </span>
-                      </div>
-                      <div class="tool-card-body px-3 py-2 border-t border-gray-800/50 bg-gray-900/30">
-                        <pre class="text-xs text-gray-400 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed tool-file-paths">{truncate_result(msg.content)}</pre>
+                    <div class="border-l-2 border-violet-500/40 pl-3 py-0.5">
+                      <span class="text-[10px] text-gray-500 block mb-0.5 leading-none">
+                        {agent_label(msg[:from])}
+                      </span>
+                      <div class="max-w-none chat-markdown">
+                        {render_markdown(msg.content)}
                       </div>
                     </div>
-                  <% end %>
+                  </div>
+                <% :tool -> %>
+                  <div class="max-w-[85%] ml-10 animate-fade-in-up">
+                    <%= if String.starts_with?(msg.content || "", "Error:") do %>
+                      <div class="rounded-xl overflow-hidden border border-red-500/30 bg-red-950/20 px-3 py-2">
+                        <div class="flex items-center gap-2 text-xs font-medium text-red-400">
+                          <span class="text-red-400">&#9888;</span>
+                          <span>{tool_display_name(msg)}</span>
+                        </div>
+                        <pre class="text-xs text-red-300/80 whitespace-pre-wrap mt-1">{msg.content}</pre>
+                      </div>
+                    <% else %>
+                      <div class={"tool-card rounded-xl overflow-hidden border transition-all duration-200 #{tool_card_border(msg)}"}>
+                        <div
+                          class={"flex items-center gap-2 px-3 py-2 cursor-pointer select-none text-xs font-medium #{tool_card_header(msg)}"}
+                          onclick="this.parentElement.classList.toggle('tool-expanded')"
+                        >
+                          <span class="tool-card-icon">{tool_icon(msg)}</span>
+                          <span>{tool_display_name(msg)}</span>
+                          <span class="ml-auto text-gray-500 tool-card-chevron transition-transform duration-200">
+                            &#9656;
+                          </span>
+                        </div>
+                        <div class="tool-card-body px-3 py-2 border-t border-gray-800/50 bg-gray-900/30">
+                          <pre class="text-xs text-gray-400 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed tool-file-paths">{truncate_result(msg.content)}</pre>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                <% _ -> %>
+                  <div class="text-xs text-gray-500 px-3">
+                    {inspect(msg)}
+                  </div>
+              <% end %>
+            </div>
+          </div>
+
+          <%!-- Streaming / Thinking State --%>
+          <div
+            :if={@streaming || @status == :thinking}
+            class="flex items-start gap-3 max-w-[85%] animate-fade-in-up"
+          >
+            <div class="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-violet-500/30">
+              <span class="text-xs font-bold text-white">{agent_initial(@streaming_agent)}</span>
+            </div>
+            <%= if @streaming && @streaming_content != "" do %>
+              <div class="border-l-2 border-violet-500/40 pl-3 py-0.5">
+                <p :if={@streaming_agent} class="text-[10px] text-gray-500 mb-0.5 leading-none">
+                  {agent_label(@streaming_agent)}
+                </p>
+                <div class="max-w-none chat-markdown">
+                  {render_markdown(@streaming_content, streaming: true)}
                 </div>
-              <% _ -> %>
-                <div class="text-xs text-gray-500 px-3">
-                  {inspect(msg)}
+                <span class="inline-block w-2 h-4 bg-violet-400 animate-pulse ml-0.5"></span>
+              </div>
+            <% else %>
+              <div class="bg-gray-800/60 rounded-xl px-4 py-3 shadow-sm shadow-violet-500/5 border border-violet-500/10">
+                <div class="flex items-center gap-1.5">
+                  <span class="thinking-dot w-2 h-2 bg-violet-400 rounded-full"></span>
+                  <span class="thinking-dot w-2 h-2 bg-violet-400 rounded-full"></span>
+                  <span class="thinking-dot w-2 h-2 bg-violet-400 rounded-full"></span>
                 </div>
+              </div>
             <% end %>
           </div>
-        </div>
 
-        <%!-- Streaming / Thinking State --%>
-        <div
-          :if={@streaming || @status == :thinking}
-          class="flex items-start gap-3 max-w-[85%] animate-fade-in-up"
-        >
-          <div class="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center flex-shrink-0 shadow-lg shadow-violet-500/30">
-            <span class="text-xs font-bold text-white">L</span>
-          </div>
-          <%= if @streaming && @streaming_content != "" do %>
-            <div class="border-l-2 border-violet-500/40 pl-3 py-0.5">
-              <div class="max-w-none chat-markdown">
-                {render_markdown(@streaming_content, streaming: true)}
-              </div>
-              <span class="inline-block w-2 h-4 bg-violet-400 animate-pulse ml-0.5"></span>
-            </div>
-          <% else %>
-            <div class="bg-gray-800/60 rounded-xl px-4 py-3 shadow-sm shadow-violet-500/5 border border-violet-500/10">
-              <div class="flex items-center gap-1.5">
-                <span class="thinking-dot w-2 h-2 bg-violet-400 rounded-full"></span>
-                <span class="thinking-dot w-2 h-2 bg-violet-400 rounded-full"></span>
-                <span class="thinking-dot w-2 h-2 bg-violet-400 rounded-full"></span>
-              </div>
-            </div>
-          <% end %>
-        </div>
-
-        <%!-- Architect Plan Progress --%>
-        <div :if={@plan_steps != []} class="ml-10 animate-fade-in-up">
-          <div class="border border-violet-500/20 rounded-xl overflow-hidden bg-gray-900/50">
-            <div class="flex items-center gap-2 px-3 py-2 bg-violet-500/10 border-b border-violet-500/20">
-              <span class="text-violet-400 text-sm">&#9881;</span>
-              <span class="text-xs font-medium text-violet-300">
-                {if @architect_phase == :executing, do: "Executing Plan", else: "Planning..."}
-              </span>
-            </div>
-            <div class="p-3 space-y-1.5">
-              <div
-                :for={{step, idx} <- Enum.with_index(@plan_steps)}
-                class="flex items-center gap-2 text-xs"
-              >
-                <%= cond do %>
-                  <% @current_step != nil && idx < @current_step -> %>
-                    <span class="text-green-400">&#10003;</span>
-                  <% @current_step == idx -> %>
-                    <span class="text-violet-400 animate-spin">&#9881;</span>
-                  <% true -> %>
-                    <span class="text-gray-600">&#9675;</span>
-                <% end %>
-                <span class={"font-mono #{if @current_step == idx, do: "text-violet-300", else: "text-gray-400"}"}>
-                  {step["action"]} {step["file"]}
+          <%!-- Architect Plan Progress --%>
+          <div :if={@plan_steps != []} class="ml-10 animate-fade-in-up">
+            <div class="border border-violet-500/20 rounded-xl overflow-hidden bg-gray-900/50">
+              <div class="flex items-center gap-2 px-3 py-2 bg-violet-500/10 border-b border-violet-500/20">
+                <span class="text-violet-400 text-sm">&#9881;</span>
+                <span class="text-xs font-medium text-violet-300">
+                  {if @architect_phase == :executing, do: "Executing Plan", else: "Planning..."}
                 </span>
               </div>
+              <div class="p-3 space-y-1.5">
+                <div
+                  :for={{step, idx} <- Enum.with_index(@plan_steps)}
+                  class="flex items-center gap-2 text-xs"
+                >
+                  <%= cond do %>
+                    <% @current_step != nil && idx < @current_step -> %>
+                      <span class="text-green-400">&#10003;</span>
+                    <% @current_step == idx -> %>
+                      <span class="text-violet-400 animate-spin">&#9881;</span>
+                    <% true -> %>
+                      <span class="text-gray-600">&#9675;</span>
+                  <% end %>
+                  <span class={"font-mono #{if @current_step == idx, do: "text-violet-300", else: "text-gray-400"}"}>
+                    {step["action"]} {step["file"]}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
 
-        <%!-- Tool Executing State --%>
-        <div :if={@current_tool} class="flex items-center gap-2 ml-10 animate-fade-in-up">
-          <div class="flex items-center gap-2 px-3 py-1.5 bg-gray-800/40 rounded-lg border border-violet-500/10 shadow-sm shadow-violet-500/5">
-            <svg
-              class="animate-spin h-3.5 w-3.5 text-violet-400"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4">
-              </circle>
-              <path
-                class="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+          <%!-- Tool Executing State --%>
+          <div :if={@current_tool} class="flex items-center gap-2 ml-10 animate-fade-in-up">
+            <div class="flex items-center gap-2 px-3 py-1.5 bg-gray-800/40 rounded-lg border border-violet-500/10 shadow-sm shadow-violet-500/5">
+              <svg
+                class="animate-spin h-3.5 w-3.5 text-violet-400"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
               >
-              </path>
-            </svg>
-            <span class="text-xs text-gray-400">
-              Running <span class="text-violet-400 font-medium">{@current_tool}</span>
-            </span>
+                <circle
+                  class="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  stroke-width="4"
+                >
+                </circle>
+                <path
+                  class="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                >
+                </path>
+              </svg>
+              <span class="text-xs text-gray-400">
+                Running <span class="text-violet-400 font-medium">{@current_tool}</span>
+              </span>
+            </div>
           </div>
         </div>
       </div>
+
+      <%!-- New messages scroll indicator --%>
+      <button
+        data-scroll-indicator
+        class="absolute bottom-4 left-1/2 -translate-x-1/2 opacity-0 pointer-events-none transition-opacity duration-300 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)] flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-violet-600/90 hover:bg-violet-500/90 rounded-full shadow-lg shadow-violet-900/30 backdrop-blur-sm select-none"
+      >
+        New messages
+        <svg
+          class="w-3.5 h-3.5"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2.5"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
     </div>
     """
   end
@@ -333,4 +422,10 @@ defmodule LoomkinWeb.ChatComponent do
     id = tool_call_id(msg)
     if id == "", do: "Tool result", else: id
   end
+
+  defp agent_initial(nil), do: "L"
+  defp agent_initial(name), do: name |> String.first() |> String.upcase()
+
+  defp agent_label(nil), do: "loom"
+  defp agent_label(name), do: String.downcase(name)
 end

@@ -137,10 +137,6 @@ defmodule Loomkin.Tools.SubAgent do
     {:ok, classified.text || "No findings."}
   end
 
-  defp handle_classified(_classified, _messages, _tool_defs, _model, _context, _iteration) do
-    {:error, "Unexpected response from sub-agent model"}
-  end
-
   defp execute_read_tool(name, args, context) do
     case Jido.AI.ToolAdapter.lookup_action(name, @read_only_tools) do
       {:ok, tool_module} ->

@@ -28,6 +28,33 @@ hljs.registerLanguage("markdown", markdown)
 hljs.registerLanguage("yaml", yaml)
 hljs.registerLanguage("diff", diff)
 
+// --- Tooltip anchor fix ---
+// CSS anchor-name is tied to :hover, so when hover ends the anchor disappears
+// immediately — causing the fixed tooltip to jump before it fades out.
+// This keeps the anchor valid for the duration of the exit transition.
+document.addEventListener("mouseleave", (e) => {
+  const el = e.target.closest?.("[data-tooltip]")
+  if (!el) return
+  el.classList.add("tooltip-exiting")
+  setTimeout(() => el.classList.remove("tooltip-exiting"), 200)
+}, { capture: true })
+
+// --- Utilities ---
+
+function trapFocus(containerEl) {
+  const focusable = containerEl.querySelectorAll(
+    'a[href], button:not([disabled]), input, textarea, select, [tabindex]:not([tabindex="-1"])'
+  )
+  const first = focusable[0], last = focusable[focusable.length - 1]
+  return (e) => {
+    if (e.key !== 'Tab') return
+    if (e.shiftKey ? document.activeElement === first : document.activeElement === last) {
+      e.preventDefault()
+      ;(e.shiftKey ? last : first).focus()
+    }
+  }
+}
+
 // --- Hooks ---
 
 let Hooks = {}
@@ -69,47 +96,86 @@ Hooks.ShiftEnterSubmit = {
 }
 
 // ScrollToBottom: auto-scrolls container to bottom when content updates (only if near bottom)
+// Shows a "New messages" indicator button when content arrives while scrolled up.
 Hooks.ScrollToBottom = {
   mounted() {
-    this.scrollToBottom()
-    this.observer = new MutationObserver(() => this.maybeScrollToBottom())
+    this.isAtBottom = true
+
+    this.el.addEventListener("scroll", () => {
+      this.isAtBottom = this.nearBottom()
+      if (this.isAtBottom) this.hideIndicator()
+    })
+
+    this.observer = new MutationObserver(() => {
+      if (this.isAtBottom) {
+        this.scrollToBottom()
+      } else {
+        this.showIndicator()
+      }
+    })
     this.observer.observe(this.el, { childList: true, subtree: true })
+
+    const indicator = this.getIndicator()
+    if (indicator) {
+      indicator.addEventListener("click", () => {
+        this.scrollToBottom()
+        this.hideIndicator()
+      })
+    }
+
+    this.scrollToBottom()
   },
   updated() {
-    this.maybeScrollToBottom()
+    if (this.isAtBottom) this.scrollToBottom()
   },
   destroyed() {
     if (this.observer) this.observer.disconnect()
   },
-  isNearBottom() {
+  nearBottom() {
     const threshold = 100
     return this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < threshold
   },
-  maybeScrollToBottom() {
-    if (this.isNearBottom()) {
-      this.scrollToBottom()
-    }
-  },
   scrollToBottom() {
     this.el.scrollTop = this.el.scrollHeight
+  },
+  getIndicator() {
+    return this.el.parentElement.querySelector("[data-scroll-indicator]")
+  },
+  showIndicator() {
+    const el = this.getIndicator()
+    if (!el) return
+    el.classList.remove("opacity-0", "pointer-events-none")
+    el.classList.add("opacity-100")
+  },
+  hideIndicator() {
+    const el = this.getIndicator()
+    if (!el) return
+    el.classList.remove("opacity-100")
+    el.classList.add("opacity-0", "pointer-events-none")
   }
 }
 
-// TabTransition: adds fade-in animation class when tab content appears
+// TabTransition: adds fade-in animation class when tab content appears.
+// Uses View Transitions API when available for smooth cross-fades.
 Hooks.TabTransition = {
   mounted() {
     this.currentTab = this.el.dataset.tab || this.el.id
-    this.el.classList.add("tab-content-enter")
+    this.el.classList.add("tab-content-enter", "tab-content-panel")
   },
   updated() {
     const newTab = this.el.dataset.tab || this.el.id
     if (this.currentTab !== newTab) {
       this.currentTab = newTab
-      // Re-trigger animation only on actual tab change
-      this.el.classList.remove("tab-content-enter")
-      // Force reflow to restart animation
-      void this.el.offsetWidth
-      this.el.classList.add("tab-content-enter")
+      const triggerAnimation = () => {
+        this.el.classList.remove("tab-content-enter")
+        void this.el.offsetWidth // force reflow
+        this.el.classList.add("tab-content-enter")
+      }
+      if (document.startViewTransition) {
+        document.startViewTransition(triggerAnimation)
+      } else {
+        triggerAnimation()
+      }
     }
   }
 }
@@ -269,11 +335,16 @@ Hooks.KeyboardShortcuts = {
   }
 }
 
-// CommandPalette: handles search input focus and result navigation
+// CommandPalette: handles search input focus, result navigation, and focus trapping
 Hooks.CommandPalette = {
   mounted() {
+    this._prevFocus = document.activeElement
+
     const input = this.el.querySelector('#command-palette-input')
     if (input) requestAnimationFrame(() => input.focus())
+
+    this._trapHandler = trapFocus(this.el)
+    this.el.addEventListener('keydown', this._trapHandler)
 
     this._onKeydown = (e) => {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -311,6 +382,8 @@ Hooks.CommandPalette = {
   },
   destroyed() {
     this.el.removeEventListener('keydown', this._onKeydown)
+    this.el.removeEventListener('keydown', this._trapHandler)
+    this._prevFocus?.focus()
   }
 }
 
@@ -476,12 +549,104 @@ Hooks.LocalTime = {
   }
 }
 
+// CommsFeedScroll: auto-scrolls comms feed when at bottom, shows "N new messages" indicator when scrolled up
+Hooks.CommsFeedScroll = {
+  mounted() {
+    this.isAtBottom = true
+    this.newCount = 0
+
+    this.el.addEventListener("scroll", () => {
+      const threshold = 50
+      const atBottom =
+        this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < threshold
+      this.isAtBottom = atBottom
+      if (atBottom) {
+        this.newCount = 0
+        this.hideIndicator()
+      }
+    })
+
+    this.el.addEventListener("scroll-to-bottom", () => {
+      this.el.scrollTop = this.el.scrollHeight
+      this.newCount = 0
+      this.hideIndicator()
+    })
+
+    this.observer = new MutationObserver((mutations) => {
+      if (this.isAtBottom) {
+        requestAnimationFrame(() => {
+          this.el.scrollTop = this.el.scrollHeight
+        })
+      } else {
+        const added = mutations.reduce(
+          (count, m) => count + m.addedNodes.length, 0
+        )
+        if (added > 0) {
+          this.newCount += added
+          this.showIndicator(this.newCount)
+        }
+      }
+    })
+
+    this.observer.observe(this.el, { childList: true })
+  },
+
+  showIndicator(count) {
+    const indicator = this.el.parentElement.querySelector("[data-new-messages]")
+    if (indicator) {
+      indicator.textContent = `${count} new message${count === 1 ? "" : "s"}`
+      indicator.classList.remove("hidden")
+    }
+  },
+
+  hideIndicator() {
+    const indicator = this.el.parentElement.querySelector("[data-new-messages]")
+    if (indicator) indicator.classList.add("hidden")
+  },
+
+  destroyed() {
+    if (this.observer) this.observer.disconnect()
+  }
+}
+
+// CountdownTimer: ticks down from data-deadline-at (wall-clock ms) to zero, clears interval on destroy
+Hooks.CountdownTimer = {
+  mounted() {
+    this.tick()
+    this.intervalId = setInterval(() => this.tick(), 1000)
+  },
+  tick() {
+    const deadline = parseInt(this.el.dataset.deadlineAt, 10)
+    const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+    const minutes = Math.floor(remaining / 60)
+    const seconds = remaining % 60
+    this.el.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`
+    if (remaining === 0) {
+      clearInterval(this.intervalId)
+    }
+  },
+  destroyed() {
+    clearInterval(this.intervalId)
+  }
+}
+
 Hooks.SortableQueue = {
   mounted() {
+    this._cleanups = []
     this.initSortable()
   },
   updated() {
+    this.cleanup()
     this.initSortable()
+  },
+  destroyed() {
+    this.cleanup()
+  },
+  cleanup() {
+    for (const { el, event, handler } of this._cleanups) {
+      el.removeEventListener(event, handler)
+    }
+    this._cleanups = []
   },
   initSortable() {
     const items = this.el.querySelectorAll("[data-id]")
@@ -493,38 +658,95 @@ Hooks.SortableQueue = {
 
       handle.setAttribute("draggable", "true")
 
-      handle.addEventListener("dragstart", (e) => {
+      const onDragstart = (e) => {
         item.classList.add("opacity-50")
         e.dataTransfer.effectAllowed = "move"
         e.dataTransfer.setData("text/plain", item.dataset.id)
-      })
-
-      handle.addEventListener("dragend", () => {
+      }
+      const onDragend = () => {
         item.classList.remove("opacity-50")
-      })
+      }
+
+      handle.addEventListener("dragstart", onDragstart)
+      handle.addEventListener("dragend", onDragend)
+      this._cleanups.push({ el: handle, event: "dragstart", handler: onDragstart })
+      this._cleanups.push({ el: handle, event: "dragend", handler: onDragend })
     })
 
-    this.el.addEventListener("dragover", (e) => {
+    const onDragover = (e) => {
       e.preventDefault()
       e.dataTransfer.dropEffect = "move"
-    })
-
-    this.el.addEventListener("drop", (e) => {
+    }
+    const onDrop = (e) => {
       e.preventDefault()
-      const draggedId = e.dataTransfer.getData("text/plain")
       const allItems = [...this.el.querySelectorAll("[data-id]")]
       const ordered = allItems.map(el => el.dataset.id)
       const agent = this.el.dataset.agent
-
       this.pushEvent("reorder_queue", {agent: agent, ids: ordered})
-    })
+    }
+
+    this.el.addEventListener("dragover", onDragover)
+    this.el.addEventListener("drop", onDrop)
+    this._cleanups.push({ el: this.el, event: "dragover", handler: onDragover })
+    this._cleanups.push({ el: this.el, event: "drop", handler: onDrop })
+  }
+}
+
+// WorkspaceState: saves UI layout state to localStorage via data attributes.
+// On updated(), reads current state from data-* attrs and persists.
+// On mounted(), restores saved state by pushing to server.
+Hooks.WorkspaceState = {
+  mounted() {
+    const sessionId = this.el.dataset.sessionId
+    if (!sessionId) return
+
+    const saved = JSON.parse(localStorage.getItem(`loomkin_ui:${sessionId}`) || "null")
+    if (saved) {
+      this.pushEvent("restore_ui_state", saved)
+    }
+  },
+  updated() {
+    const d = this.el.dataset
+    if (!d.sessionId) return
+
+    const state = {
+      mode: d.mode,
+      active_tab: d.activeTab,
+      focused_agent: d.focusedAgent || null,
+      inspector_mode: d.inspectorMode,
+      collapsed_inspector: d.collapsedInspector === "true"
+    }
+    localStorage.setItem(`loomkin_ui:${d.sessionId}`, JSON.stringify(state))
+  }
+}
+
+// SessionMemory: persists the active session per project to localStorage
+// so code reloads snap back to the right session instead of the first one.
+Hooks.SessionMemory = {
+  mounted() {
+    this.save()
+  },
+  updated() {
+    this.save()
+  },
+  save() {
+    const sessionId = this.el.dataset.sessionId
+    const projectPath = this.el.dataset.projectPath
+    if (sessionId && projectPath) {
+      const sessions = JSON.parse(localStorage.getItem("loomkin_sessions") || "{}")
+      sessions[projectPath] = sessionId
+      localStorage.setItem("loomkin_sessions", JSON.stringify(sessions))
+    }
   }
 }
 
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
-  params: {_csrf_token: csrfToken},
+  params: () => ({
+    _csrf_token: csrfToken,
+    stored_sessions: JSON.parse(localStorage.getItem("loomkin_sessions") || "{}")
+  }),
   hooks: Hooks
 })
 

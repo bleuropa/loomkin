@@ -72,12 +72,18 @@ defmodule LoomkinWeb.KinPanelComponent do
       <%!-- Backdrop --%>
       <div
         class="absolute inset-0 bg-black/40"
+        aria-hidden="true"
         phx-click="close_kin_panel"
         phx-target={@myself}
       />
 
       <%!-- Panel --%>
-      <div class="relative w-full max-w-md bg-surface-0 border-l border-subtle flex flex-col animate-slide-in-right">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="kin-panel-title"
+        class="relative w-full max-w-md bg-surface-0 border-l border-subtle flex flex-col animate-slide-in-right"
+      >
         <%!-- Header --%>
         <div class="flex items-center gap-3 p-4 border-b border-subtle">
           <button
@@ -85,6 +91,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="kin_back_to_list"
             phx-target={@myself}
             class="text-muted hover:text-primary p-1 rounded-md hover:bg-surface-2 transition-colors"
+            data-tooltip="Back to list"
+            aria-label="Back to list"
           >
             <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
               <path
@@ -95,7 +103,7 @@ defmodule LoomkinWeb.KinPanelComponent do
             </svg>
           </button>
           <div class="flex-1">
-            <h2 class="text-sm font-semibold text-primary">
+            <h2 id="kin-panel-title" class="text-sm font-semibold text-primary">
               {if @panel_mode == :list,
                 do: "Kin Management",
                 else: if(@editing_id, do: "Edit Template", else: "New Template")}
@@ -124,6 +132,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="close_kin_panel"
             phx-target={@myself}
             class="text-muted hover:text-primary p-1 rounded-md hover:bg-surface-2 transition-colors"
+            data-tooltip="Close panel"
+            aria-label="Close panel"
           >
             <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
               <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
@@ -176,27 +186,6 @@ defmodule LoomkinWeb.KinPanelComponent do
             </div>
             <span
               :if={agent_active?("concierge", @active_agents)}
-              class="w-2 h-2 rounded-full bg-green-400 flex-shrink-0"
-              title="Active"
-            />
-          </div>
-          <div class="flex items-center gap-3 p-3 rounded-lg border border-subtle bg-surface-1">
-            <div class="flex items-center justify-center w-7 h-7 rounded-full bg-sky-500/15 text-sky-400 text-xs font-bold flex-shrink-0">
-              O
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-medium text-primary">Orienter</span>
-                <span class="text-[10px] px-1.5 py-0.5 rounded font-medium bg-sky-500/15 text-sky-400">
-                  core
-                </span>
-              </div>
-              <p class="text-[10px] mt-0.5 text-muted">
-                Silently scans the project on session start and briefs the Concierge.
-              </p>
-            </div>
-            <span
-              :if={agent_active?("orienter", @active_agents)}
               class="w-2 h-2 rounded-full bg-green-400 flex-shrink-0"
               title="Active"
             />
@@ -299,7 +288,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="kin_spawn"
             phx-value-id={kin.id}
             phx-target={@myself}
-            title="Spawn now"
+            data-tooltip="Spawn now"
+            aria-label="Spawn now"
             class="text-emerald-400 hover:text-emerald-300 p-1 rounded-md hover:bg-surface-3 transition-colors"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
@@ -321,7 +311,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="kin_edit"
             phx-value-id={kin.id}
             phx-target={@myself}
-            title="Edit"
+            data-tooltip="Edit template"
+            aria-label="Edit template"
             class="text-muted hover:text-primary p-1 rounded-md hover:bg-surface-3 transition-colors"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
@@ -333,7 +324,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="kin_toggle"
             phx-value-id={kin.id}
             phx-target={@myself}
-            title={if kin.enabled, do: "Disable", else: "Enable"}
+            data-tooltip={if kin.enabled, do: "Disable template", else: "Enable template"}
+            aria-label={if kin.enabled, do: "Disable template", else: "Enable template"}
             class={[
               "p-1 rounded-md hover:bg-surface-3 transition-colors",
               if(kin.enabled,
@@ -365,7 +357,8 @@ defmodule LoomkinWeb.KinPanelComponent do
             phx-click="kin_delete_confirm"
             phx-value-id={kin.id}
             phx-target={@myself}
-            title="Delete"
+            data-tooltip="Delete template"
+            aria-label="Delete template"
             class="text-muted hover:text-red-400 p-1 rounded-md hover:bg-surface-3 transition-colors"
           >
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">

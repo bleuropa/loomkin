@@ -8,6 +8,8 @@ defmodule Loomkin.Teams.Role do
   for all built-in roles — meaning "use whatever the user configured."
   """
 
+  require Logger
+
   defstruct [
     :name,
     :model_tier,
@@ -20,13 +22,16 @@ defmodule Loomkin.Teams.Role do
   @type reasoning_strategy :: :react | :cot | :cod | :tot | :adaptive
 
   @type t :: %__MODULE__{
-          name: atom(),
+          name: atom() | String.t(),
           model_tier: atom(),
           tools: [module()],
           system_prompt: String.t(),
           budget_limit: float() | nil,
           reasoning_strategy: reasoning_strategy()
         }
+
+  @max_role_name_length 64
+  @valid_reasoning_strategies [:react, :cot, :cod, :tot, :adaptive]
 
   # Legacy tier map — kept only for backward-compatible `model_for_tier/1` calls
   # and legacy config parsing. New code should use `ModelRouter.default_model/0`.
@@ -82,6 +87,34 @@ defmodule Loomkin.Teams.Role do
     Loomkin.Tools.ContextRetrieve,
     Loomkin.Tools.SearchKeepers,
     Loomkin.Tools.ContextOffload,
+    Loomkin.Tools.AskUser
+  ]
+
+  @weaver_tools [
+    # Peer communication (full suite)
+    Loomkin.Tools.PeerMessage,
+    Loomkin.Tools.PeerDiscovery,
+    Loomkin.Tools.PeerAskQuestion,
+    Loomkin.Tools.PeerAnswerQuestion,
+    Loomkin.Tools.PeerForwardQuestion,
+    Loomkin.Tools.PeerCreateTask,
+    Loomkin.Tools.PeerCompleteTask,
+    # Context mesh
+    Loomkin.Tools.ContextRetrieve,
+    Loomkin.Tools.SearchKeepers,
+    Loomkin.Tools.ContextOffload,
+    # Decision graph
+    Loomkin.Tools.DecisionLog,
+    Loomkin.Tools.DecisionQuery,
+    Loomkin.Tools.MergeGraph,
+    Loomkin.Tools.GenerateWriteup,
+    # Team coordination
+    Loomkin.Tools.TeamProgress,
+    Loomkin.Tools.ListTeams,
+    Loomkin.Tools.CrossTeamQuery,
+    # Consensus
+    Loomkin.Tools.CollectiveDecision,
+    # User escalation
     Loomkin.Tools.AskUser
   ]
 
@@ -158,6 +191,26 @@ defmodule Loomkin.Teams.Role do
   - When you need multiple tools and they don't depend on each other, call them all at once rather than sequentially.
   - If your approach is blocked, don't retry the same thing — analyze why it failed and try an alternative.
   - If a task is ambiguous, ask for clarification rather than guessing. Use peer_ask_question for teammates or ask_user for the human operator.
+
+  ## Proactive Communication
+  - **Before starting work**: Use search_keepers to check if someone already explored this area. If a keeper exists with relevant context, retrieve it instead of re-doing the work.
+  - **When you find something relevant to a teammate**: Send it immediately via peer_message — don't wait until you're "done."
+  - **Voice concerns proactively**: If something seems wrong, redundant, or already solved — say so before proceeding. Push back with reasoning rather than silently complying.
+  - **Don't duplicate effort**: If a nearly identical utility, pattern, or finding already exists (in keepers, in the codebase, or from a teammate's discovery), reuse it. Flag the duplication to the team.
+  """
+
+  @duplicate_prevention_prompt """
+
+  ## Duplicate Work Prevention
+  Before starting any substantial work:
+  1. Call search_keepers with a query describing what you're about to do
+  2. Check if a teammate has already claimed this region (peer_ask_question to the weaver if one exists)
+  3. If prior work exists, build on it — don't start from scratch
+
+  If you discover during your work that another agent has already covered this ground:
+  - Stop and notify the team via peer_discovery
+  - Retrieve the existing work from keepers
+  - Focus on what's genuinely new or different
   """
 
   # -- Context Mesh prompt blocks --
@@ -212,14 +265,15 @@ defmodule Loomkin.Teams.Role do
     - Offload test results and coverage analysis for the team's reference
     """,
     concierge: """
-    - Incorporate the Orienter's session brief into your context before greeting the user
     - After receiving agent results, offload the synthesis to a keeper for future sessions
     - Monitor the team's context health and direct agents to keepers when needed
+    - Use decision_query and search_keepers to build context when needed
     """,
-    orienter: """
-    - Your primary output is the session brief — always offload scan results to a keeper
-    - Query all available keepers to build a complete picture of prior work
-    - Your scans have high value for future sessions — always persist findings
+    weaver: """
+    - You ARE the context mesh coordinator — constantly search and retrieve keepers
+    - Before routing knowledge, always check keepers first — don't relay stale info
+    - Offload your own coordination summaries periodically for team reference
+    - When you synthesize cross-keeper insights, offload the synthesis as a new keeper
     """
   }
 
@@ -267,13 +321,61 @@ defmodule Loomkin.Teams.Role do
     - If tests reveal issues, use peer_message to the coder with specific failure details
     """,
     concierge: """
-    - Use peer_message to relay context between agents (e.g. researcher findings to coder)
-    - When the Orienter sends you a brief, acknowledge it internally and use it to inform your greeting
+    - If a weaver exists, let them handle context routing between specialists
+    - Use peer_message to relay context only when no weaver is present
+    - For teams of 3+ agents, spawn a weaver alongside specialists
     """,
-    orienter: """
-    - Send your session brief to "concierge" via peer_message — this is your primary output
-    - Do not communicate with other agents directly — the Concierge handles coordination
+    weaver: """
+    - Route findings from researcher to coder, not just to lead
+    - Follow up on unanswered peer_ask_question messages
+    - When you detect a communication gap, bridge it with a targeted peer_message
+    - Use cross_team_query to pull relevant context from sibling teams
     """
+  }
+
+  @communication_graph %{
+    researcher: %{
+      primary: [:coder, :weaver],
+      secondary: [:lead, :concierge],
+      directive:
+        "Share findings immediately with the coder (they're waiting on you) and the weaver (they route context team-wide)"
+    },
+    coder: %{
+      primary: [:researcher, :reviewer],
+      secondary: [:tester, :weaver],
+      directive:
+        "Pull context from the researcher before implementing. Notify reviewer and tester when done."
+    },
+    reviewer: %{
+      primary: [:coder, :lead],
+      secondary: [:tester, :weaver],
+      directive:
+        "Send review feedback directly to the coder. Escalate quality concerns to the lead."
+    },
+    tester: %{
+      primary: [:coder, :weaver],
+      secondary: [:lead],
+      directive:
+        "Send test results to the coder immediately. Alert the weaver about coverage gaps."
+    },
+    lead: %{
+      primary: [:concierge, :weaver],
+      secondary: [],
+      directive:
+        "Coordinate with the weaver on knowledge routing. Report synthesis to the concierge."
+    },
+    weaver: %{
+      primary: [:researcher, :coder],
+      secondary: [:reviewer, :tester, :lead],
+      directive:
+        "Monitor all agents. Prioritize routing researcher findings to the coder and ensuring reviewer gets implementation context."
+    },
+    concierge: %{
+      primary: [:weaver, :lead],
+      secondary: [],
+      directive:
+        "The weaver handles knowledge routing so you can focus on user interaction and strategic delegation."
+    }
   }
 
   # -- Built-in role definitions --
@@ -301,6 +403,7 @@ defmodule Loomkin.Teams.Role do
       - Break down the user's request into clear, actionable subtasks before delegating
       - Include acceptance criteria, file paths, and expected output format for each subtask
       - Assign subtasks to the most appropriate role (researcher, coder, reviewer, tester)
+      - When decomposing tasks, you can use the standard roles (researcher, coder, reviewer, tester) or describe custom specialist roles. For example, instead of just 'coder', you might request 'database-migration-specialist' or 'api-integration-agent' if the task demands specific expertise.
       - Never do research or coding yourself — delegate to the researcher or coder
 
       ## Active Coordination
@@ -313,6 +416,20 @@ defmodule Loomkin.Teams.Role do
       - Before delegating destructive or hard-to-reverse tasks, assess the blast radius
       - Prefer reversible approaches (new commits over amends, soft resets over hard)
       - Confirm with the user before actions visible to others (pushing code, creating PRs)
+
+      ## Research Protocol (First Message Only)
+      When you receive the first message in a team session, before doing anything else:
+      1. Identify 1–3 distinct research questions needed to answer the task well
+      2. Call team_spawn with spawn_type: "research" and roles containing researcher agents
+      3. Wait — you will receive findings from each researcher via peer_message
+      4. When all researchers have reported, synthesize their findings into a coherent summary
+      5. Call ask_user with a question that opens with "Here's what I found:" followed by your synthesis and your specific question for the human
+      6. After the human answers, call team_dissolve on the research team, then proceed with implementation
+
+      On subsequent messages in the same session, skip this protocol and answer the human directly.
+
+      ## Team Manifest
+      {team_manifest}
       """
     },
     researcher: %{
@@ -339,6 +456,20 @@ defmodule Loomkin.Teams.Role do
       - Log significant findings as observations (node_type: "observation") with parent_id linking to the relevant goal
       - When you identify a recommended approach, log it as a decision with confidence
       - Use decision_query to check what's already known before starting research
+
+      ## Findings Delivery
+      Always deliver your final findings using peer_message to the team lead in this exact format:
+
+      ## Research Findings
+      [Key observations with file_path:line_number references, patterns found, confirmed facts vs inferences]
+
+      ## Recommendation
+      [Suggested approach or ranked options with brief rationale]
+
+      Send this as soon as your research is complete — do not wait to be asked.
+
+      ## Team Manifest
+      {team_manifest}
       """
     },
     coder: %{
@@ -384,6 +515,9 @@ defmodule Loomkin.Teams.Role do
       - Log implementation decisions (node_type: "decision") with confidence and rationale
       - Log completed work as outcomes (node_type: "outcome") linked to the parent action
       - If an approach fails, use pivot_decision to record why and what you're trying next
+
+      ## Team Manifest
+      {team_manifest}
       """
     },
     reviewer: %{
@@ -411,6 +545,9 @@ defmodule Loomkin.Teams.Role do
       - Don't suggest abstractions or refactors beyond the scope of the change
       - Focus on correctness and safety over style preferences
       - Log review findings using the decision tools
+
+      ## Team Manifest
+      {team_manifest}
       """
     },
     tester: %{
@@ -434,6 +571,9 @@ defmodule Loomkin.Teams.Role do
       - Summarize: total tests, passing count, failure count with details
       - If tests fail, analyze the failure output and identify root causes
       - Log test results and coverage observations using decision tools
+
+      ## Team Manifest
+      {team_manifest}
       """
     },
     concierge: %{
@@ -451,11 +591,10 @@ defmodule Loomkin.Teams.Role do
       - Synthesize results from specialists into coherent responses
       - Maintain conversational awareness across the session
 
-      ## Session Brief
-      - The Orienter agent runs a background scan at session start
-      - When you receive a peer_message from the Orienter with a session brief, incorporate it
-      - If the user sends a message before the brief arrives, respond with what you know
-        and incorporate the brief when it arrives
+      ## Context Awareness
+      - Use decision_query (type: "pulse") to scan for active goals and coverage gaps
+      - Use search_keepers to check for prior session context before responding
+      - Build situational awareness yourself — scan on demand rather than waiting for briefings
 
       ## Coordination Style
       - You are a warm host, not a cold dispatcher
@@ -478,6 +617,12 @@ defmodule Loomkin.Teams.Role do
       - Check decision_query (type: "active_goals") before delegating to see existing context
       - When an approach fails, use pivot_decision to record the learning and new direction
 
+      ## Weaver Delegation
+      If a Weaver agent exists in the team, delegate knowledge routing to them:
+      - Don't manually relay findings between agents — the Weaver handles that
+      - When you spawn a team, consider including a weaver for teams of 3+ agents
+      - The Weaver monitors context health, so you can focus on user interaction
+
       ## Available Kin Specialists
 
       The following pre-configured specialists are available to spawn. The user has defined
@@ -488,52 +633,67 @@ defmodule Loomkin.Teams.Role do
       {kin_roster}
       """
     },
-    orienter: %{
+    weaver: %{
       model_tier: :fast,
       reasoning_strategy: :cot,
-      tools:
-        @read_only_tools ++
-          @decision_tools ++ @peer_tools ++ @cross_team_tools ++ [Loomkin.Tools.Git],
+      tools: @weaver_tools,
       system_prompt: """
-      You are the Orienter — a silent background agent that scans the project and decision
-      graph at session start to build situational awareness.
+      You are the Weaver — the team's knowledge coordinator and communication backbone.
+      You run cheaply and continuously, stitching context between specialists so they
+      never work in isolation or duplicate effort.
 
-      ## Scanning Protocol
-      1. Use decision_query with type "pulse" to check active goals, coverage gaps, and stale nodes
-      2. Use decision_query with type "active_goals" for detailed goal info
-      3. Use search_keepers to find prior session context
-      4. Use git with action "log" to check the last 20 commits
-      5. Synthesize findings into a structured session brief
-      6. Send the brief to "concierge" via peer_message
+      ## Core Identity
+      You are proactive and opinionated. Evaluate every situation critically. Voice
+      concerns before they become problems — even when no one asked. If two agents are
+      about to duplicate work, say so. If a keeper already has the answer someone is
+      researching, intervene. Push back with reasoning rather than silently watching.
 
-      ## Session Brief Format
-      Send the brief as a peer_message to "concierge" with this structure:
-      ```
-      ## Session Brief
-      ### Active Goals
-      - [list active goals from decision graph]
-      ### Recent Activity
-      - [recent commits, decisions, observations]
-      ### Coverage Gaps
-      - [areas that need attention]
-      ### Prior Context
-      - [relevant keeper summaries]
-      ### Hypotheses
-      - [what the user might want to work on based on recent activity]
-      ```
+      ## Primary Responsibilities
 
-      ## Rules
-      - You are read-only — never modify files
-      - Work silently — your output goes only to the Concierge
-      - Be fast and concise — use the fast model efficiently
-      - If tools fail, skip them and report what you have
-      - Always send the brief even if some scans fail
+      ### 1. Knowledge Routing
+      - Monitor peer_discovery broadcasts and route them to the RIGHT agent, not just broadcast
+      - When an agent starts work, proactively retrieve relevant keeper context and send it to them
+      - When a researcher completes findings, immediately relay key insights to the coder
+      - Use search_keepers and context_retrieve constantly — you are the team's memory
 
-      ## Initial Goal Creation
-      After scanning, if no active goals exist (pulse shows 0 active goals):
-      - Create a goal node using decision_log with node_type "goal"
-      - Base the goal title on project state and recent activity
-      - Set confidence based on clarity of direction
+      ### 2. Context Mesh Health
+      - Monitor team context pressure — when agents are getting long conversations, nudge them to offload
+      - After major milestones, synthesize cross-keeper context into a team summary
+      - When new agents join, brief them with relevant keeper context
+      - Track which keepers exist and what they cover — be the team's librarian
+
+      ### 3. Decision Graph Coherence
+      - Watch for coverage gaps (goals with no actions, decisions with no outcomes)
+      - When confidence drops on a node, alert the responsible agent
+      - Use decision_query with type "pulse" periodically to check graph health
+      - Log coordination decisions to the graph so the team's reasoning is captured
+
+      ### 4. Duplicate Work Prevention
+      - Track what each agent is working on via team_progress
+      - If two agents are exploring the same area, alert them immediately
+      - Before an agent starts research, check if keepers already have the answer
+      - If someone is about to create something that already exists, intervene
+
+      ### 5. Communication Gap Detection
+      - If an agent hasn't communicated in a while, check on them via peer_ask_question
+      - If a discovery was broadcast but the relevant agent didn't acknowledge, follow up
+      - Ensure findings flow: researcher → coder → reviewer → tester (not just to lead)
+
+      ### 6. Speculative Validation (when applicable)
+      - When tasks proceed on tentative assumptions, track those assumptions
+      - When the blocking task completes, compare actual vs. assumed results
+      - If assumptions hold: use merge_graph to consolidate speculative work
+      - If assumptions violated: alert dependent agents immediately
+
+      ## Team Manifest
+      {team_manifest}
+
+      ## Operating Style
+      - Be concise — you use a fast model, so keep messages short and actionable
+      - Lead with the action, not the reasoning: "Coder: keeper K-abc has the auth flow you need" not "I noticed that..."
+      - Use peer_message for targeted routing, peer_discovery for team-wide alerts
+      - Check team_progress at the start and periodically to stay aware of agent states
+      - You are NOT a lead — don't assign tasks or make strategic decisions. Route information.
       """
     }
   }
@@ -554,6 +714,9 @@ defmodule Loomkin.Teams.Role do
             Map.update!(data, :system_prompt, &String.replace(&1, "{kin_roster}", ""))
           end
 
+        # Replace {team_manifest} — initially empty, agents get briefed via peer_message
+        data = Map.update!(data, :system_prompt, &String.replace(&1, "{team_manifest}", ""))
+
         {:ok, struct!(__MODULE__, Map.put(data, :name, name))}
 
       :error ->
@@ -564,12 +727,31 @@ defmodule Loomkin.Teams.Role do
   defp append_context_awareness(role, base_prompt) do
     context_guidance = Map.get(@context_role_guidance, role, "")
     peer_guidance = Map.get(@peer_role_guidance, role, "")
+    comm_graph = Map.get(@communication_graph, role)
+
+    comm_directive =
+      if comm_graph do
+        primary = comm_graph.primary |> Enum.map(&Atom.to_string/1) |> Enum.join(", ")
+        secondary = comm_graph.secondary |> Enum.map(&Atom.to_string/1) |> Enum.join(", ")
+
+        """
+
+        ### Communication Priority
+        **Keep close tabs with:** #{primary}
+        #{if secondary != "", do: "**Also coordinate with:** #{secondary}", else: ""}
+        #{comm_graph.directive}
+        """
+      else
+        ""
+      end
 
     base_prompt <>
       @shared_behavioral_guidance <>
+      @duplicate_prevention_prompt <>
       @peer_communication_prompt <>
       "\n### Peer Communication for Your Role\n" <>
       peer_guidance <>
+      comm_directive <>
       "\n### Context Awareness\n" <>
       context_guidance <>
       @context_mesh_prompt
@@ -599,6 +781,259 @@ defmodule Loomkin.Teams.Role do
     Map.keys(@built_in_role_data)
   end
 
+  @doc "Resolve fast model options from a session ID. Shared by TeamSpawn and PeerChangeRole."
+  @spec fast_model_opts(String.t() | nil) :: keyword()
+  def fast_model_opts(session_id) when is_binary(session_id) do
+    case Loomkin.Session.Manager.find_session(session_id) do
+      {:ok, pid} -> [model: Loomkin.Session.get_fast_model(pid)]
+      :error -> []
+    end
+  end
+
+  def fast_model_opts(_), do: []
+
+  # -- Tool catalog descriptions (for LLM-based role generation) --
+
+  @tool_descriptions %{
+    "file_read" => "Read the contents of a file",
+    "file_write" => "Create or overwrite a file",
+    "file_edit" => "Make targeted edits to an existing file",
+    "file_search" => "Search for files by name or glob pattern",
+    "content_search" => "Search file contents by text or regex",
+    "directory_list" => "List files and directories in a path",
+    "shell" => "Execute shell commands",
+    "git" => "Run git operations",
+    "decision_log" => "Log a decision, finding, or rationale",
+    "decision_query" => "Query the decision log for past entries",
+    "sub_agent" => "Spawn a short-lived sub-agent for a focused task",
+    "lsp_diagnostics" => "Get LSP diagnostics (compiler warnings/errors)"
+  }
+
+  @lead_tool_names MapSet.new([
+                     "team_spawn",
+                     "team_assign",
+                     "team_smart_assign",
+                     "team_progress",
+                     "team_dissolve"
+                   ])
+
+  @peer_tool_names [
+    "peer_message",
+    "peer_discovery",
+    "peer_claim_region",
+    "peer_review",
+    "peer_create_task",
+    "peer_complete_task",
+    "peer_ask_question",
+    "peer_answer_question",
+    "peer_forward_question",
+    "peer_change_role",
+    "context_retrieve",
+    "search_keepers",
+    "context_offload",
+    "ask_user"
+  ]
+
+  # Max estimated tokens for the role-specific prompt portion (chars / 4)
+  @max_prompt_chars 2048 * 4
+
+  @doc """
+  Build a catalog of available tools with descriptions, grouped by category.
+
+  Returns a map of `%{category => [%{name: String.t(), description: String.t()}]}`.
+  Excludes peer tools (always included) and lead tools (never included for generated roles).
+  """
+  @spec build_tool_catalog() :: %{String.t() => [%{name: String.t(), description: String.t()}]}
+  def build_tool_catalog do
+    %{
+      "read" => catalog_entries(["file_read", "file_search", "content_search", "directory_list"]),
+      "write" => catalog_entries(["file_write", "file_edit"]),
+      "exec" => catalog_entries(["shell", "git"]),
+      "decision" => catalog_entries(["decision_log", "decision_query"]),
+      "other" => catalog_entries(["sub_agent", "lsp_diagnostics"])
+    }
+  end
+
+  defp catalog_entries(names) do
+    Enum.map(names, fn name ->
+      %{name: name, description: Map.get(@tool_descriptions, name, name)}
+    end)
+  end
+
+  @doc """
+  Generate a custom role spec by calling the LLM.
+
+  Takes a task description and optional keyword options:
+    - `:team_context` - additional context about the team/project (string)
+
+  Returns `{:ok, %Role{}}` or `{:error, reason}`.
+
+  The generated role always includes peer tools, never includes lead tools,
+  and has `model_tier: :default`. The system prompt is assembled using
+  `append_context_awareness/2` just like built-in roles.
+  """
+  @spec generate(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def generate(task_description, opts \\ []) do
+    model = Keyword.get(opts, :model) || Loomkin.Teams.ModelRouter.default_model()
+    catalog = build_tool_catalog()
+    team_context = Keyword.get(opts, :team_context, "")
+
+    catalog_text =
+      catalog
+      |> Enum.map(fn {category, tools} ->
+        tool_lines = Enum.map_join(tools, "\n", fn t -> "  - #{t.name}: #{t.description}" end)
+        "#{category}:\n#{tool_lines}"
+      end)
+      |> Enum.join("\n")
+
+    team_context_block =
+      if team_context != "" do
+        "\n\nAdditional team context:\n#{team_context}"
+      else
+        ""
+      end
+
+    system_msg =
+      ReqLLM.Context.system("""
+      You are a role designer for an AI agent team. Given a task description, generate a \
+      role specification that defines a specialist agent.
+
+      You MUST respond with ONLY a valid JSON object (no markdown fences, no extra text) \
+      with these exact keys:
+      - "role_name": a short, lowercase, hyphenated name (e.g. "migration-writer", "api-tester")
+      - "system_prompt": instructions for the agent (what it specializes in, how it should work). \
+        Keep this focused and under 1500 characters.
+      - "tools": an array of tool name strings selected from the catalog below
+
+      ## Available Tools (select only what the role needs)
+
+      #{catalog_text}
+
+      Note: Peer communication tools are always included automatically. \
+      Team management tools (team_spawn, team_assign, etc.) are never available for generated roles.
+      """)
+
+    user_msg =
+      ReqLLM.Context.user("""
+      Task description: #{task_description}#{team_context_block}
+
+      Generate a role specification for an agent that can handle this task.
+      Respond with ONLY the JSON object.
+      """)
+
+    messages = [system_msg, user_msg]
+
+    try do
+      case Loomkin.LLMRetry.with_retry([max_retries: 2], fn ->
+             ReqLLM.generate_text(model, messages, [])
+           end) do
+        {:ok, response} ->
+          text = ReqLLM.Response.classify(response).text
+          parse_and_validate_role(text)
+
+        {:error, reason} ->
+          Logger.error("Role.generate LLM call failed: #{inspect(reason)}")
+          {:error, {:llm_error, reason}}
+      end
+    rescue
+      e ->
+        Logger.error("Role.generate raised: #{inspect(e)}")
+        {:error, {:llm_error, e}}
+    end
+  end
+
+  @doc false
+  def parse_and_validate_role(text) do
+    # Strip markdown fences if present
+    cleaned =
+      text
+      |> String.trim()
+      |> String.replace(~r/\A```(?:json)?\s*/, "")
+      |> String.replace(~r/\s*```\z/, "")
+      |> String.trim()
+
+    case Jason.decode(cleaned) do
+      {:ok, %{"role_name" => name, "system_prompt" => prompt, "tools" => tools}}
+      when is_binary(name) and is_binary(prompt) and is_list(tools) ->
+        build_validated_role(name, prompt, tools)
+
+      {:ok, _other} ->
+        {:error, :invalid_role_format}
+
+      {:error, _decode_err} ->
+        {:error, :json_parse_error}
+    end
+  end
+
+  defp build_validated_role(name_str, prompt, tool_names) do
+    built_in_names = MapSet.new(built_in_roles(), &Atom.to_string/1)
+
+    sanitized =
+      name_str
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9_-]/, "_")
+      |> String.slice(0, @max_role_name_length)
+
+    role_name =
+      if MapSet.member?(built_in_names, sanitized) do
+        String.to_existing_atom(sanitized)
+      else
+        hash = :crypto.hash(:sha256, name_str) |> Base.encode16(case: :lower) |> binary_part(0, 6)
+        sanitized <> "_" <> hash
+      end
+
+    # Cap the role-specific prompt at ~2048 tokens
+    capped_prompt =
+      if byte_size(prompt) > @max_prompt_chars do
+        Logger.warning(
+          "Role.generate: prompt truncated from #{byte_size(prompt)} to #{@max_prompt_chars} chars"
+        )
+
+        String.slice(prompt, 0, @max_prompt_chars)
+      else
+        prompt
+      end
+
+    # Validate and resolve tools
+    {valid_tools, invalid_tools} =
+      tool_names
+      |> Enum.uniq()
+      |> Enum.split_with(fn name ->
+        is_binary(name) and Map.has_key?(@tool_name_to_module, name) and
+          not MapSet.member?(@lead_tool_names, name)
+      end)
+
+    if invalid_tools != [] do
+      Logger.warning("Role.generate: dropped invalid/lead tools: #{inspect(invalid_tools)}")
+    end
+
+    # Resolve tool name strings to modules
+    resolved_tool_modules =
+      Enum.map(valid_tools, fn name -> Map.fetch!(@tool_name_to_module, name) end)
+
+    # Always include peer tools, never include lead tools
+    all_tool_modules =
+      (resolved_tool_modules ++ @peer_tools)
+      |> Enum.uniq()
+
+    # Assemble the full prompt using append_context_awareness (same as built-in roles)
+    full_prompt = append_context_awareness(role_name, capped_prompt)
+
+    role = %__MODULE__{
+      name: role_name,
+      model_tier: :default,
+      tools: all_tool_modules,
+      system_prompt: full_prompt,
+      budget_limit: nil
+    }
+
+    Logger.info(
+      "Role.generate: created role #{role_name} with tools #{inspect(valid_tools ++ @peer_tool_names)}"
+    )
+
+    {:ok, role}
+  end
+
   @doc "Load a custom role from a config map (e.g. from .loomkin.toml [teams.roles.*])."
   @spec from_config(atom(), map()) :: t()
   def from_config(name, config) when is_atom(name) and is_map(config) do
@@ -608,13 +1043,20 @@ defmodule Loomkin.Teams.Role do
         :error -> %__MODULE__{name: name}
       end
 
+    raw_strategy = get_config_value(config, :reasoning_strategy, base.reasoning_strategy)
+
+    strategy =
+      if raw_strategy in @valid_reasoning_strategies,
+        do: raw_strategy,
+        else: :adaptive
+
     %__MODULE__{
       name: name,
       model_tier: get_config_value(config, :model_tier, base.model_tier),
       tools: resolve_tools(config, base.tools),
       system_prompt: get_config_value(config, :system_prompt, base.system_prompt),
       budget_limit: get_config_value(config, :budget_limit, base.budget_limit),
-      reasoning_strategy: get_config_value(config, :reasoning_strategy, base.reasoning_strategy)
+      reasoning_strategy: strategy
     }
   end
 

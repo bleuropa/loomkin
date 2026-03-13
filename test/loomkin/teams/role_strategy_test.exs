@@ -13,11 +13,6 @@ defmodule Loomkin.Teams.RoleStrategyTest do
       end
     end
 
-    test "orienter uses :cot strategy" do
-      {:ok, role} = Role.get(:orienter)
-      assert role.reasoning_strategy == :cot
-    end
-
     test "concierge uses :react strategy" do
       {:ok, role} = Role.get(:concierge)
       assert role.reasoning_strategy == :react
@@ -50,7 +45,7 @@ defmodule Loomkin.Teams.RoleStrategyTest do
     end
 
     test "from_config uses built-in default when not overridden" do
-      role = Role.from_config(:orienter, %{})
+      role = Role.from_config(:weaver, %{})
       assert role.reasoning_strategy == :cot
     end
 

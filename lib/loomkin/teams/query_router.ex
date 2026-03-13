@@ -6,6 +6,8 @@ defmodule Loomkin.Teams.QueryRouter do
   alias Loomkin.Teams.Comms
   alias Loomkin.Teams.ContextRetrieval
 
+  require Logger
+
   # --- Public API ---
 
   def start_link(opts \\ []) do
@@ -143,14 +145,23 @@ defmodule Loomkin.Teams.QueryRouter do
         query = %{query | answer: answer, hops: query.hops ++ [from]}
         state = put_in(state, [:queries, query_id], query)
 
-        # Route answer back — cross-team queries go to source_team_id
+        # Route answer back — cross-team queries go to source_team_id.
+        # Wrapped in try/rescue so a signal-delivery failure does not crash
+        # the router (which would surface as (EXIT) shutdown to callers).
         reply_team = Map.get(query, :source_team_id, query.team_id)
 
-        Comms.send_to(
-          reply_team,
-          query.origin,
-          {:query_answer, query_id, from, answer, query.enrichments}
-        )
+        try do
+          Comms.send_to(
+            reply_team,
+            query.origin,
+            {:query_answer, query_id, from, answer, query.enrichments}
+          )
+        rescue
+          e ->
+            Logger.error(
+              "[Kin:query_router] failed to deliver answer for #{query_id}: #{inspect(e)}"
+            )
+        end
 
         {:reply, :ok, state}
 

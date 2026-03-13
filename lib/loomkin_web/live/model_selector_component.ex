@@ -56,10 +56,11 @@ defmodule LoomkinWeb.ModelSelectorComponent do
   defp load_providers do
     all = Loomkin.Models.all_providers_enriched()
 
-    # Split into configured (has key/OAuth + models) and unconfigured
+    # Split into configured (has key/OAuth/local + models) and unconfigured
     {active, unconfigured} =
       Enum.split_with(all, fn {_p, _name, status, models} ->
-        (match?({:set, _}, status) or match?({:oauth, :connected}, status)) and models != []
+        (match?({:set, _}, status) or match?({:oauth, :connected}, status) or status == :local) and
+          models != []
       end)
 
     {active, unconfigured, all}
@@ -124,6 +125,7 @@ defmodule LoomkinWeb.ModelSelectorComponent do
             </svg>
             <input
               type="text"
+              aria-label="Search models"
               placeholder="Search models..."
               value={@search}
               phx-keyup="search_models"
@@ -412,9 +414,19 @@ defmodule LoomkinWeb.ModelSelectorComponent do
                 <span class="text-[10px]" style="color: rgba(52, 211, 153, 0.7);">API Key</span>
               </span>
             <% {:oauth, :connected} -> %>
-              <span class="flex items-center gap-1">
+              <span class="flex items-center gap-1.5">
                 <span class="w-1.5 h-1.5 rounded-full bg-brand"></span>
                 <span class="text-[10px] text-brand opacity-70">OAuth</span>
+                <button
+                  type="button"
+                  phx-click="disconnect_oauth"
+                  phx-value-provider={@provider_atom}
+                  phx-target={@myself}
+                  class="text-[10px] text-muted hover:text-secondary transition-colors cursor-pointer leading-none"
+                  title="Disconnect"
+                >
+                  &times;
+                </button>
               </span>
             <% {:oauth, :disconnected} -> %>
               <span class="flex items-center gap-1">
@@ -428,6 +440,13 @@ defmodule LoomkinWeb.ModelSelectorComponent do
                   {env_var}
                 </span>
               </span>
+            <% :local -> %>
+              <span class="flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                <span class="text-[10px]" style="color: rgba(52, 211, 153, 0.7);">Local</span>
+              </span>
+            <% _ -> %>
+              <span></span>
           <% end %>
         </div>
       </div>
@@ -695,6 +714,19 @@ defmodule LoomkinWeb.ModelSelectorComponent do
 
   def handle_event("submit_paste_code", _params, socket) do
     {:noreply, assign(socket, paste_back_error: "Please paste the code first.")}
+  end
+
+  def handle_event("disconnect_oauth", %{"provider" => provider}, socket) do
+    provider_atom = String.to_existing_atom(provider)
+    Loomkin.Auth.TokenStore.revoke_tokens(provider_atom)
+    {active, unconfigured, all} = load_providers()
+
+    {:noreply,
+     assign(socket,
+       active_providers: active,
+       unconfigured_providers: unconfigured,
+       all_providers: all
+     )}
   end
 
   def handle_event("cancel_paste", _params, socket) do

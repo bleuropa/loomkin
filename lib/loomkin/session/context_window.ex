@@ -274,7 +274,7 @@ defmodule Loomkin.Session.ContextWindow do
            ReqLLM.Context.user(prompt)
          ]) do
       {:ok, response} ->
-        text = ReqLLM.Response.classify(response).text || ""
+        text = ReqLLM.Response.classify(response).text
         "[Summary of #{count} earlier messages]\n#{text}"
 
       {:error, _reason} ->

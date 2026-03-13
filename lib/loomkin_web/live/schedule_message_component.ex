@@ -22,6 +22,7 @@ defmodule LoomkinWeb.ScheduleMessageComponent do
   attr :content, :string, default: ""
   attr :delay_minutes, :integer, default: 5
   attr :scheduled_messages, :list, default: []
+  attr :phx_target, :any, default: nil
 
   def schedule_popover(assigns) do
     delivery_time = DateTime.add(DateTime.utc_now(), assigns.delay_minutes * 60, :second)
@@ -36,6 +37,7 @@ defmodule LoomkinWeb.ScheduleMessageComponent do
       id={"schedule-popover-#{@target_agent || "team"}"}
       class="absolute bottom-full right-0 mb-2 w-80 z-50 animate-scale-in bg-surface-1 border border-subtle rounded-xl shadow-surface-lg"
       phx-click-away="close_scheduler"
+      phx-target={@phx_target}
     >
       <%!-- Header --%>
       <div class="flex items-center gap-2 px-4 py-3 border-b border-subtle">
@@ -46,6 +48,7 @@ defmodule LoomkinWeb.ScheduleMessageComponent do
         <div class="flex-1"></div>
         <button
           phx-click="close_scheduler"
+          phx-target={@phx_target}
           class="p-1 rounded-md interactive text-muted"
         >
           <.icon name="hero-x-mark-mini" class="w-3.5 h-3.5" />
@@ -86,6 +89,7 @@ defmodule LoomkinWeb.ScheduleMessageComponent do
               type="button"
               phx-click="set_schedule_delay"
               phx-value-minutes={minutes}
+              phx-target={@phx_target}
               class={[
                 "px-2.5 py-1 text-[11px] font-medium rounded-full transition-all duration-200 cursor-pointer",
                 if(@delay_minutes == minutes,
@@ -123,6 +127,7 @@ defmodule LoomkinWeb.ScheduleMessageComponent do
             <button
               type="button"
               phx-click="close_scheduler"
+              phx-target={@phx_target}
               class="text-xs px-3 py-1.5 rounded-lg interactive text-muted border border-subtle"
             >
               Cancel
