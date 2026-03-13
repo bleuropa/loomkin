@@ -76,6 +76,11 @@ defmodule Loomkin.Conversations.Server do
     call(conversation_id, :get_state)
   end
 
+  @doc "Signal that all agents are ready — kicks off the first turn."
+  def begin(conversation_id) do
+    call(conversation_id, :begin)
+  end
+
   @doc "Force-end the conversation."
   def terminate_conversation(conversation_id, reason) do
     call(conversation_id, {:terminate, reason})
@@ -127,7 +132,7 @@ defmodule Loomkin.Conversations.Server do
 
     emit_started(state)
 
-    {:ok, state, {:continue, :advance_turn}}
+    {:ok, state}
   end
 
   @impl true
@@ -149,9 +154,19 @@ defmodule Loomkin.Conversations.Server do
     {:noreply, state}
   end
 
-  # --- Speak ---
+  # --- Begin ---
 
   @impl true
+  def handle_call(:begin, _from, %{status: :active} = state) do
+    {:reply, :ok, state, {:continue, :advance_turn}}
+  end
+
+  def handle_call(:begin, _from, state) do
+    {:reply, {:error, :conversation_not_active}, state}
+  end
+
+  # --- Speak ---
+
   def handle_call({:speak, _, _, _}, _from, %{status: status} = state) when status != :active do
     {:reply, {:error, :conversation_not_active}, state}
   end

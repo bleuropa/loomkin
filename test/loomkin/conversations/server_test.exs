@@ -28,6 +28,7 @@ defmodule Loomkin.Conversations.ServerTest do
     ]
 
     {:ok, pid} = start_supervised({Server, Keyword.merge(defaults, opts)})
+    :ok = Server.begin(ctx.conv_id)
     pid
   end
 

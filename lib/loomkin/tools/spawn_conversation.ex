@@ -51,7 +51,11 @@ defmodule Loomkin.Tools.SpawnConversation do
   @max_personas 6
   @default_max_rounds 8
   @default_strategy "round_robin"
-  @required_persona_fields ["name", "perspective", "expertise"]
+  @required_persona_fields [
+    {:name, "name"},
+    {:perspective, "perspective"},
+    {:expertise, "expertise"}
+  ]
   @valid_strategies ["round_robin", "weighted", "facilitator"]
 
   @impl true
@@ -136,14 +140,12 @@ defmodule Loomkin.Tools.SpawnConversation do
   defp validate_personas(personas) do
     missing =
       Enum.flat_map(personas, fn persona ->
-        Enum.flat_map(@required_persona_fields, fn field ->
-          atom_key = String.to_existing_atom(field)
-          value = Map.get(persona, atom_key) || Map.get(persona, field)
+        Enum.flat_map(@required_persona_fields, fn {atom_key, str_key} ->
+          value = Map.get(persona, atom_key) || Map.get(persona, str_key)
 
           if is_nil(value) or value == "" do
-            [
-              "#{Map.get(persona, :name) || Map.get(persona, "name") || "unnamed"} missing #{field}"
-            ]
+            name = Map.get(persona, :name) || Map.get(persona, "name") || "unnamed"
+            ["#{name} missing #{str_key}"]
           else
             []
           end
@@ -229,7 +231,8 @@ defmodule Loomkin.Tools.SpawnConversation do
 
     with {:ok, _server_pid} <- start_server(conversation_opts),
          {:ok, _agent_pids} <- spawn_agents(conversation_id, team_id, config, model),
-         :ok <- spawn_weaver(conversation_id, team_id, model, spawned_by) do
+         :ok <- spawn_weaver(conversation_id, team_id, model, spawned_by),
+         :ok <- ConversationServer.begin(conversation_id) do
       participant_names =
         config.personas
         |> Enum.map(fn
@@ -318,6 +321,14 @@ defmodule Loomkin.Tools.SpawnConversation do
   end
 
   defp cleanup_conversation(conversation_id) do
+    # Broadcast :summarize to stop any agents/weaver that subscribed
+    Phoenix.PubSub.broadcast(
+      Loomkin.PubSub,
+      "conversation:#{conversation_id}",
+      {:summarize, conversation_id, [], "cancelled", []}
+    )
+
+    # Terminate the server if it's still running
     case Registry.lookup(Loomkin.Conversations.Registry, conversation_id) do
       [{pid, _}] -> DynamicSupervisor.terminate_child(Loomkin.Conversations.Supervisor, pid)
       [] -> :ok

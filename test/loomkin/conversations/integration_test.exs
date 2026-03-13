@@ -54,6 +54,9 @@ defmodule Loomkin.Conversations.IntegrationTest do
 
       weaver_ref = Process.monitor(weaver_pid)
 
+      # Begin the conversation now that weaver is subscribed
+      :ok = Server.begin(ctx.conv_id)
+
       # Simulate 3 agents speaking (rather than relying on LLM calls)
       assert_receive {:your_turn, _, _, _, _, "Alice"}, 1_000
       Server.speak(ctx.conv_id, "Alice", "I think we should use GenServer")
@@ -96,6 +99,7 @@ defmodule Loomkin.Conversations.IntegrationTest do
         id: :force_term_server
       )
 
+      :ok = Server.begin(ctx.conv_id)
       assert_receive {:your_turn, _, _, _, _, "Alice"}, 1_000
 
       # Have one agent speak
@@ -148,6 +152,10 @@ defmodule Loomkin.Conversations.IntegrationTest do
         id: :conv_2
       )
 
+      # Begin both conversations
+      :ok = Server.begin(ctx.conv_id)
+      :ok = Server.begin(conv_id_2)
+
       # Verify both are independently active
       {:ok, ctx_1} = Server.get_context(ctx.conv_id)
       {:ok, ctx_2} = Server.get_context(conv_id_2)
@@ -190,6 +198,7 @@ defmodule Loomkin.Conversations.IntegrationTest do
         id: :budget_server
       )
 
+      :ok = Server.begin(ctx.conv_id)
       assert_receive {:your_turn, _, _, _, _, "Alice"}, 1_000
 
       # Each speak call with explicit token counts
@@ -225,6 +234,7 @@ defmodule Loomkin.Conversations.IntegrationTest do
         id: :estimation_server
       )
 
+      :ok = Server.begin(ctx.conv_id)
       assert_receive {:your_turn, _, _, _, _, "Alice"}, 1_000
 
       # 12-char message ~= 4 tokens (12/4 + 1 = 4)

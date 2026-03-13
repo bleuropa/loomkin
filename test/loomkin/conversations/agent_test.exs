@@ -114,7 +114,7 @@ defmodule Loomkin.Conversations.AgentTest do
           id: :test_agent
         )
 
-      # Now start the server — its :your_turn broadcast will reach the agent
+      # Now start the server and begin — :your_turn broadcast will reach the agent
       start_supervised!(
         {Server,
          id: ctx.conv_id,
@@ -124,6 +124,8 @@ defmodule Loomkin.Conversations.AgentTest do
          max_rounds: 3},
         id: :test_server
       )
+
+      :ok = Server.begin(ctx.conv_id)
 
       assert Process.alive?(agent_pid)
 
