@@ -3,6 +3,14 @@ defmodule LoomkinWeb.SettingsLiveTest do
 
   import Phoenix.LiveViewTest
 
+  setup do
+    # Reset config to defaults so ETS pollution from other tests
+    # (e.g., config_test writing agents.max_iterations = 50) doesn't
+    # corrupt original_values in mount.
+    Loomkin.Config.load(System.tmp_dir!())
+    :ok
+  end
+
   describe "mount" do
     test "renders settings page with tabs", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/settings")
