@@ -98,7 +98,9 @@ defmodule LoomkinWeb.WorkspaceLive do
         social_panel_open: false,
         social_activity: [],
         # Cached set of followed user IDs for presence filtering (MapSet)
-        following_ids: MapSet.new()
+        following_ids: MapSet.new(),
+        # Save chat modal
+        show_save_chat_modal: false
       )
       |> stream(:comms_events, [], limit: -500)
 
@@ -734,6 +736,44 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   def handle_event("toggle_social_panel", _params, socket) do
     {:noreply, update(socket, :social_panel_open, &(!&1))}
+  end
+
+  def handle_event("open_save_chat_modal", _params, socket) do
+    {:noreply, assign(socket, show_save_chat_modal: true)}
+  end
+
+  def handle_event("close_save_chat_modal", _params, socket) do
+    {:noreply, assign(socket, show_save_chat_modal: false)}
+  end
+
+  def handle_event("save_chat_log", params, socket) do
+    user = socket.assigns.current_scope.user
+    session_id = socket.assigns.session_id
+
+    case Loomkin.Session.Persistence.get_session(session_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Session not found")}
+
+      session ->
+        attrs = %{
+          title: params["title"] || session.title || "Chat Log",
+          description: params["description"] || "",
+          tags: ["chat"],
+          visibility: String.to_existing_atom(params["visibility"] || "private"),
+          agent_count: length(socket.assigns[:cached_agents] || [])
+        }
+
+        case Loomkin.Social.save_chat_log(user, session, attrs) do
+          {:ok, _snippet} ->
+            {:noreply,
+             socket
+             |> assign(show_save_chat_modal: false)
+             |> put_flash(:info, "Chat saved as snippet!")}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Failed to save chat")}
+        end
+    end
   end
 
   @valid_trust_presets ~w(strict balanced autonomous full_trust)
@@ -2561,6 +2601,19 @@ defmodule LoomkinWeb.WorkspaceLive do
     {:noreply, assign(socket, kin_agents: load_kin_agents())}
   end
 
+  def handle_info({:kin_shared, {:ok, _snippet}}, socket) do
+    {:noreply,
+     put_flash(
+       socket,
+       :info,
+       "Kin published as snippet! Set visibility to public to share."
+     )}
+  end
+
+  def handle_info({:kin_shared, {:error, _reason}}, socket) do
+    {:noreply, put_flash(socket, :error, "Failed to publish kin as snippet.")}
+  end
+
   def handle_info({:spawn_kin_agent, kin}, socket) do
     team_id = socket.assigns[:active_team_id]
 
@@ -3752,6 +3805,63 @@ defmodule LoomkinWeb.WorkspaceLive do
         agents={@cached_agents}
       />
 
+      <%!-- Save Chat modal overlay --%>
+      <div
+        :if={@show_save_chat_modal}
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+        phx-click-away="close_save_chat_modal"
+      >
+        <div class="glass rounded-2xl p-6 w-full max-w-md space-y-4 animate-fade-in">
+          <h2 class="text-lg font-semibold text-white">Save Chat as Snippet</h2>
+          <form phx-submit="save_chat_log" class="space-y-4">
+            <div>
+              <label class="block text-xs font-medium text-gray-400 mb-1">Title</label>
+              <input
+                type="text"
+                name="title"
+                value={@page_title}
+                class="w-full px-3 py-2 rounded-lg text-sm text-white bg-surface-1 border border-border-subtle focus:border-brand/50 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-400 mb-1">Description</label>
+              <input
+                type="text"
+                name="description"
+                placeholder="What was this chat about?"
+                class="w-full px-3 py-2 rounded-lg text-sm text-white bg-surface-1 border border-border-subtle focus:border-brand/50 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-400 mb-1">Visibility</label>
+              <select
+                name="visibility"
+                class="w-full px-3 py-2 rounded-lg text-sm text-white bg-surface-1 border border-border-subtle focus:border-brand/50 focus:outline-none"
+              >
+                <option value="private">Private</option>
+                <option value="unlisted">Unlisted</option>
+                <option value="public">Public</option>
+              </select>
+            </div>
+            <div class="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                phx-click="close_save_chat_modal"
+                class="px-4 py-2 text-sm text-gray-400 hover:text-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                class="px-4 py-2 rounded-lg text-sm font-medium bg-brand text-white hover:bg-brand/90 transition-colors"
+              >
+                Save
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
       <%!-- ── Header ── --%>
       <header class="flex-shrink-0 flex items-center gap-3 px-3 py-1.5 sm:px-4 lg:px-5 relative bg-surface-1 border-b border-subtle z-50">
         <%!-- Brand mark — pulses when system is active --%>
@@ -3926,6 +4036,19 @@ defmodule LoomkinWeb.WorkspaceLive do
               :if={@live_friends != [] && !@social_panel_open}
               class="w-1.5 h-1.5 rounded-full bg-emerald-400"
             />
+          </button>
+
+          <%!-- Save Chat button (multi-tenant mode only) --%>
+          <button
+            :if={
+              Application.get_env(:loomkin, :multi_tenant) && @current_scope && @current_scope.user &&
+                @session_id
+            }
+            phx-click="open_save_chat_modal"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-gray-400 hover:text-white bg-surface-2 border border-border-subtle hover:border-border-hover transition-all"
+            title="Save chat as snippet"
+          >
+            <.icon name="hero-bookmark-mini" class="w-3.5 h-3.5" /> Save Chat
           </button>
 
           <%!-- Session switcher --%>
@@ -4197,6 +4320,7 @@ defmodule LoomkinWeb.WorkspaceLive do
         id="kin-panel"
         active_team_id={@active_team_id}
         active_agents={@cached_agents}
+        current_scope={@current_scope}
       />
 
       <%!-- File Explorer Drawer --%>
