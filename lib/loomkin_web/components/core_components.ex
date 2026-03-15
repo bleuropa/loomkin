@@ -171,10 +171,34 @@ defmodule LoomkinWeb.CoreComponents do
   end
 
   @doc """
+  Renders a header with title and optional subtitle.
+  """
+  slot :inner_block, required: true
+  slot :subtitle
+  slot :actions
+
+  def header(assigns) do
+    ~H"""
+    <header class="mb-6">
+      <h1 class="text-lg font-semibold text-gray-100">
+        {render_slot(@inner_block)}
+      </h1>
+      <p :for={subtitle <- @subtitle} class="mt-1 text-sm text-gray-400">
+        {render_slot(subtitle)}
+      </p>
+      <div :for={action <- @actions} class="mt-4">
+        {render_slot(action)}
+      </div>
+    </header>
+    """
+  end
+
+  @doc """
   Renders a button.
   """
   attr :type, :string, default: nil
   attr :class, :string, default: nil
+  attr :variant, :string, default: nil
   attr :rest, :global, include: ~w(disabled form name value)
 
   slot :inner_block, required: true

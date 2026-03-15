@@ -1,6 +1,8 @@
 defmodule LoomkinWeb.Router do
   use LoomkinWeb, :router
 
+  import LoomkinWeb.UserAuth
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
@@ -8,6 +10,7 @@ defmodule LoomkinWeb.Router do
     plug :put_root_layout, html: {LoomkinWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug :fetch_current_scope_for_user
   end
 
   scope "/api/webhooks" do
@@ -25,14 +28,79 @@ defmodule LoomkinWeb.Router do
     get "/:provider/status", AuthController, :status
   end
 
-  scope "/", LoomkinWeb do
-    pipe_through :browser
+  ## Authentication routes (only active in multi-tenant mode)
 
-    live "/", ProjectPickerLive, :index
-    live "/sessions/new", WorkspaceLive, :new
-    live "/sessions/:session_id", WorkspaceLive, :show
-    live "/dashboard", CostDashboardLive, :index
-    live "/settings", SettingsLive, :index
+  scope "/", LoomkinWeb do
+    pipe_through [:browser, :redirect_if_user_is_authenticated]
+
+    get "/users/register", UserRegistrationController, :new
+    post "/users/register", UserRegistrationController, :create
+  end
+
+  scope "/", LoomkinWeb do
+    pipe_through [:browser, :require_authenticated_user]
+
+    get "/users/settings", UserSettingsController, :edit
+    put "/users/settings", UserSettingsController, :update
+    get "/users/settings/confirm-email/:token", UserSettingsController, :confirm_email
+  end
+
+  scope "/", LoomkinWeb do
+    pipe_through [:browser]
+
+    get "/users/log-in", UserSessionController, :new
+    get "/users/log-in/:token", UserSessionController, :confirm
+    post "/users/log-in", UserSessionController, :create
+    delete "/users/log-out", UserSessionController, :delete
+  end
+
+  # Public social routes — accessible without authentication
+  scope "/", LoomkinWeb do
+    pipe_through [:browser]
+
+    live_session :public_social,
+      on_mount: [{LoomkinWeb.UserAuth, :mount_current_scope}] do
+      live "/explore", ExploreLive, :index
+      live "/@:username", ProfileLive, :show
+      live "/@:username/:slug", SnippetLive, :show
+    end
+  end
+
+  # Authenticated social routes — require login in deployed mode
+  scope "/", LoomkinWeb do
+    pipe_through [:browser, :require_auth_if_multi_tenant]
+
+    live_session :authenticated_social,
+      on_mount: [{LoomkinWeb.UserAuth, :require_authenticated_user}] do
+      live "/snippets/new", SnippetLive, :new
+      live "/snippets/:id/edit", SnippetLive, :edit
+    end
+  end
+
+  # Homepage — accessible to everyone (authenticated or not)
+  # Shows community feed + trending for visitors, full dashboard for logged-in users
+  # In local mode, redirects to project picker
+  scope "/", LoomkinWeb do
+    pipe_through [:browser]
+
+    live_session :home,
+      on_mount: [{LoomkinWeb.UserAuth, :mount_current_scope}] do
+      live "/", HomeLive, :index
+    end
+  end
+
+  # App routes — gated by multi-tenant auth (passes through in local mode)
+  scope "/", LoomkinWeb do
+    pipe_through [:browser, :require_auth_if_multi_tenant]
+
+    live_session :app,
+      on_mount: [{LoomkinWeb.UserAuth, :mount_current_scope}] do
+      live "/projects", ProjectPickerLive, :index
+      live "/sessions/new", WorkspaceLive, :new
+      live "/sessions/:session_id", WorkspaceLive, :show
+      live "/dashboard", CostDashboardLive, :index
+      live "/settings", SettingsLive, :index
+    end
   end
 
   if Mix.env() in [:dev, :test] do
@@ -41,6 +109,7 @@ defmodule LoomkinWeb.Router do
     scope "/dev" do
       pipe_through :browser
       live_dashboard "/dashboard", metrics: false
+      forward "/mailbox", Plug.Swoosh.MailboxPreview
     end
   end
 end

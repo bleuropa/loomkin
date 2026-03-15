@@ -25,6 +25,9 @@ defmodule Loomkin.Application do
         # PubSub for session event broadcasting (always started — needed even without web server)
         {Phoenix.PubSub, name: Loomkin.PubSub},
 
+        # Live user presence tracking
+        LoomkinWeb.Presence,
+
         # Jido Signal Bus for typed event routing
         {Jido.Signal.Bus,
          name: Loomkin.SignalBus, journal_adapter: Jido.Signal.Journal.Adapters.ETS},
@@ -40,6 +43,9 @@ defmodule Loomkin.Application do
 
         # Session registry for pid lookup by session_id
         {Registry, keys: :unique, name: Loomkin.SessionRegistry},
+
+        # Skill registry — ETS-backed, must start before Teams supervisors
+        Jido.AI.Skill.Registry,
 
         # LSP server management (starts empty, reacts to :config_loaded)
         Loomkin.LSP.Supervisor,

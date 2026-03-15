@@ -1,5 +1,18 @@
 import Config
 
+config :loomkin, :scopes,
+  user: [
+    default: true,
+    module: Loomkin.Accounts.Scope,
+    assign_key: :current_scope,
+    access_path: [:user, :id],
+    schema_key: :user_id,
+    schema_type: :id,
+    schema_table: :users,
+    test_data_fixture: Loomkin.AccountsFixtures,
+    test_setup_helper: :register_and_log_in_user
+  ]
+
 config :loomkin, ecto_repos: [Loomkin.Repo]
 
 config :loomkin, Loomkin.Repo,
@@ -75,6 +88,9 @@ config :req_llm,
       ]
     }
   ]
+
+# Swoosh mailer (local adapter for dev, test adapter for test)
+config :loomkin, Loomkin.Mailer, adapter: Swoosh.Adapters.Local
 
 # Use Jason for JSON parsing
 config :phoenix, :json_library, Jason

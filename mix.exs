@@ -47,6 +47,8 @@ defmodule Loomkin.MixProject do
 
   defp deps do
     [
+      {:bcrypt_elixir, "~> 3.0"},
+      {:swoosh, "~> 1.4"},
       # Jido ecosystem
       {:jido, "~> 2.0"},
       {:jido_action, "~> 2.0"},

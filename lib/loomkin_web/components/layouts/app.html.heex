@@ -5,6 +5,10 @@
   Skip to main content
 </a>
 <main>
-  <.flash_group flash={@flash} />
-  {@inner_content}
+  <.flash_group flash={assigns[:flash] || @flash} />
+  <%= if assigns[:inner_content] do %>
+    {@inner_content}
+  <% else %>
+    {render_slot(@inner_block)}
+  <% end %>
 </main>

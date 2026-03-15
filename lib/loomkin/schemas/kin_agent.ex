@@ -22,11 +22,13 @@ defmodule Loomkin.Schemas.KinAgent do
     field :tags, {:array, :string}, default: []
     field :enabled, :boolean, default: true
 
+    belongs_to :user, Loomkin.Accounts.User
+
     timestamps()
   end
 
   @required_fields ~w(name role)a
-  @optional_fields ~w(display_name auto_spawn potency spawn_context model_override system_prompt_extra tool_overrides budget_limit tags enabled)a
+  @optional_fields ~w(display_name auto_spawn potency spawn_context model_override system_prompt_extra tool_overrides budget_limit tags enabled user_id)a
 
   def changeset(kin_agent \\ %__MODULE__{}, attrs) do
     kin_agent

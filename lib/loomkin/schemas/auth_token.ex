@@ -20,11 +20,13 @@ defmodule Loomkin.Schemas.AuthToken do
     field :scopes, :string
     field :metadata, :map, default: %{}
 
+    belongs_to :user, Loomkin.Accounts.User
+
     timestamps(type: :utc_datetime)
   end
 
   @required_fields ~w(provider access_token_encrypted)a
-  @optional_fields ~w(refresh_token_encrypted expires_at account_id scopes metadata)a
+  @optional_fields ~w(refresh_token_encrypted expires_at account_id scopes metadata user_id)a
 
   def changeset(token, attrs) do
     token

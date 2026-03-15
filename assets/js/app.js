@@ -714,7 +714,8 @@ Hooks.WorkspaceState = {
       active_tab: d.activeTab,
       focused_agent: d.focusedAgent || null,
       inspector_mode: d.inspectorMode,
-      collapsed_inspector: d.collapsedInspector === "true"
+      collapsed_inspector: d.collapsedInspector === "true",
+      social_panel_open: d.socialPanelOpen === "true"
     }
     localStorage.setItem(`loomkin_ui:${d.sessionId}`, JSON.stringify(state))
   }

@@ -114,6 +114,7 @@ defmodule Loomkin.AgentLoop do
       project_path: Keyword.get(opts, :project_path),
       project_path_resolver: Keyword.get(opts, :project_path_resolver),
       session_id: Keyword.get(opts, :session_id),
+      user: Keyword.get(opts, :user),
       agent_name: Keyword.get(opts, :agent_name),
       team_id: Keyword.get(opts, :team_id),
       reasoning_strategy: Keyword.get(opts, :reasoning_strategy, :react),
@@ -178,7 +179,8 @@ defmodule Loomkin.AgentLoop do
         model: config.model,
         session_id: config.session_id,
         project_path: effective_project_path,
-        team_id: config[:team_id]
+        team_id: config[:team_id],
+        user: config[:user]
       )
 
     # Parse model and build req_llm messages

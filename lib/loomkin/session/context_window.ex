@@ -5,6 +5,7 @@ defmodule Loomkin.Session.ContextWindow do
   @default_reserved_output 4096
   @default_repo_map_tokens 2048
   @default_decision_context_tokens 1024
+  @default_skills_tokens 512
   @chars_per_token 4
 
   @doc """
@@ -26,13 +27,14 @@ defmodule Loomkin.Session.ContextWindow do
       system_prompt: 2048,
       decision_context: Keyword.get(opts, :max_decision_tokens, config_decision_context_tokens()),
       repo_map: Keyword.get(opts, :max_repo_map_tokens, config_repo_map_tokens()),
+      skills: @default_skills_tokens,
       tool_definitions: 2048,
       reserved_output: Keyword.get(opts, :reserved_output, config_reserved_output_tokens())
     }
 
     zone_sum =
       zones.system_prompt + zones.decision_context + zones.repo_map +
-        zones.tool_definitions + zones.reserved_output
+        zones.skills + zones.tool_definitions + zones.reserved_output
 
     history = max(total - zone_sum, 0)
 
@@ -125,6 +127,28 @@ defmodule Loomkin.Session.ContextWindow do
   end
 
   @doc """
+  Inject skill manifests into system prompt parts.
+
+  Calls `Loomkin.Skills.Resolver.list_manifests/2` and `Jido.AI.Skill.Prompt.render/2`
+  if available, otherwise returns system_parts unchanged.
+  """
+  @spec inject_skills([String.t()], String.t() | nil, term()) :: [String.t()]
+  def inject_skills(system_parts, project_path, user) do
+    manifests = Loomkin.Skills.Resolver.list_manifests(project_path, user)
+
+    if manifests == [] do
+      system_parts
+    else
+      case Jido.AI.Skill.Prompt.render(manifests, include_body: false) do
+        "" -> system_parts
+        skills_text -> system_parts ++ [skills_text]
+      end
+    end
+  rescue
+    _ -> system_parts
+  end
+
+  @doc """
   Build a windowed message list that fits within the model's context limit.
 
   Takes a list of message maps, a system prompt string, and options.
@@ -136,12 +160,14 @@ defmodule Loomkin.Session.ContextWindow do
     - `:reserved_output` - tokens reserved for output (default 4096)
     - `:session_id` - session ID for decision context injection
     - `:project_path` - project path for repo map and rules injection
+    - `:user` - user struct for skill manifest injection
   """
   @spec build_messages([map()], String.t(), keyword()) :: [map()]
   def build_messages(messages, system_prompt, opts \\ []) do
     model = Keyword.get(opts, :model)
     session_id = Keyword.get(opts, :session_id)
     project_path = Keyword.get(opts, :project_path)
+    user = Keyword.get(opts, :user)
 
     budget = allocate_budget(model, opts)
 
@@ -171,6 +197,7 @@ defmodule Loomkin.Session.ContextWindow do
     system_parts = inject_decision_context(system_parts, session_id)
     system_parts = inject_repo_map(system_parts, project_path, max_tokens: budget.repo_map)
     system_parts = inject_project_rules(system_parts, project_path)
+    system_parts = inject_skills(system_parts, project_path, user)
     system_parts = if latest_inline, do: system_parts ++ [latest_inline], else: system_parts
 
     enriched_system = Enum.join(system_parts, "\n\n")

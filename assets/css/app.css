@@ -1301,6 +1301,42 @@ body {
 }
 
 /* ══════════════════════════════════════════
+   Homepage — Aurora Ambient Background
+   ══════════════════════════════════════════ */
+.home-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 40%, rgba(124, 58, 237, 0.06) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 40% at 75% 25%, rgba(34, 211, 238, 0.03) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 60% at 50% 80%, rgba(245, 158, 11, 0.02) 0%, transparent 50%);
+  animation: aurora-drift 20s ease-in-out infinite alternate;
+}
+
+@keyframes aurora-drift {
+  0% {
+    background:
+      radial-gradient(ellipse 80% 50% at 20% 40%, rgba(124, 58, 237, 0.06) 0%, transparent 70%),
+      radial-gradient(ellipse 60% 40% at 75% 25%, rgba(34, 211, 238, 0.03) 0%, transparent 60%),
+      radial-gradient(ellipse 50% 60% at 50% 80%, rgba(245, 158, 11, 0.02) 0%, transparent 50%);
+  }
+  50% {
+    background:
+      radial-gradient(ellipse 70% 60% at 35% 50%, rgba(124, 58, 237, 0.05) 0%, transparent 70%),
+      radial-gradient(ellipse 50% 50% at 65% 35%, rgba(34, 211, 238, 0.04) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 40% at 40% 70%, rgba(16, 185, 129, 0.02) 0%, transparent 50%);
+  }
+  100% {
+    background:
+      radial-gradient(ellipse 60% 45% at 50% 35%, rgba(124, 58, 237, 0.04) 0%, transparent 65%),
+      radial-gradient(ellipse 70% 50% at 30% 50%, rgba(34, 211, 238, 0.03) 0%, transparent 55%),
+      radial-gradient(ellipse 55% 55% at 60% 75%, rgba(245, 158, 11, 0.025) 0%, transparent 50%);
+  }
+}
+
+/* ══════════════════════════════════════════
    Reduced Motion — Accessibility
    ══════════════════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {

@@ -13,7 +13,8 @@ defmodule Loomkin.Tools.Registry do
     Loomkin.Tools.DecisionLog,
     Loomkin.Tools.DecisionQuery,
     Loomkin.Tools.SubAgent,
-    Loomkin.Tools.LspDiagnostics
+    Loomkin.Tools.LspDiagnostics,
+    Loomkin.Tools.LoadSkill
   ]
 
   @peer_tools [

@@ -185,9 +185,4 @@ defmodule Loomkin.Channels.BindingTest do
       assert found.id == original.id
     end
   end
-
-  # Helper to extract errors from a changeset
-  defp errors_on(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
-  end
 end

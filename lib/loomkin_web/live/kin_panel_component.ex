@@ -10,6 +10,7 @@ defmodule LoomkinWeb.KinPanelComponent do
 
   alias Loomkin.Kin
   alias Loomkin.Schemas.KinAgent
+  alias Loomkin.Social
 
   @user_roles [:researcher, :coder, :reviewer, :tester]
 
@@ -54,6 +55,7 @@ defmodule LoomkinWeb.KinPanelComponent do
       |> assign_new(:form, fn -> nil end)
       |> assign_new(:editing_id, fn -> nil end)
       |> assign_new(:delete_confirm_id, fn -> nil end)
+      |> assign_new(:multi_tenant, fn -> Application.get_env(:loomkin, :multi_tenant, false) end)
 
     # Only load from DB on first mount (panel open)
     socket = if previously_loaded, do: socket, else: load_kin_agents(socket)
@@ -318,6 +320,18 @@ defmodule LoomkinWeb.KinPanelComponent do
             <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
               <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
             </svg>
+          </button>
+          <%!-- Share as snippet (multi-tenant only) --%>
+          <button
+            :if={@multi_tenant}
+            phx-click="share_kin"
+            phx-value-id={kin.id}
+            phx-target={@myself}
+            data-tooltip="Share as snippet"
+            aria-label="Share as snippet"
+            class="text-muted hover:text-brand p-1 rounded-md hover:bg-surface-3 transition-colors"
+          >
+            <span class="hero-arrow-up-on-square-mini w-3.5 h-3.5" />
           </button>
           <%!-- Toggle enabled --%>
           <button
@@ -782,6 +796,47 @@ defmodule LoomkinWeb.KinPanelComponent do
 
       kin ->
         send(self(), {:spawn_kin_agent, kin})
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("share_kin", %{"id" => id}, socket) do
+    user = socket.assigns[:current_scope] && socket.assigns.current_scope.user
+
+    if is_nil(user) do
+      {:noreply, socket}
+    else
+      do_share_kin(id, user, socket)
+    end
+  end
+
+  defp do_share_kin(id, user, socket) do
+    case Kin.get_kin(id) do
+      nil ->
+        {:noreply, socket}
+
+      kin ->
+        content = %{
+          "role" => to_string(kin.role),
+          "system_prompt_extra" => kin.system_prompt_extra || "",
+          "potency" => kin.potency,
+          "spawn_context" => kin.spawn_context || "",
+          "auto_spawn" => kin.auto_spawn || false,
+          "tool_overrides" => kin.tool_overrides || %{},
+          "budget_limit" => kin.budget_limit
+        }
+
+        attrs = %{
+          title: kin.display_name || kin.name,
+          description: kin.spawn_context || "#{kin.role} agent configuration",
+          type: :kin_agent,
+          visibility: :private,
+          content: content,
+          tags: ["kin", to_string(kin.role)]
+        }
+
+        result = Social.create_snippet(user, attrs)
+        send(self(), {:kin_shared, result})
         {:noreply, socket}
     end
   end

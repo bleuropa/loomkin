@@ -7,13 +7,14 @@ defmodule Loomkin.Schemas.PermissionGrant do
 
   schema "permission_grants" do
     belongs_to :session, Loomkin.Schemas.Session
+    belongs_to :user, Loomkin.Accounts.User
     field :tool, :string
     field :scope, :string, default: "*"
     field :granted_at, :utc_datetime
   end
 
   @required_fields ~w(session_id tool)a
-  @optional_fields ~w(scope granted_at)a
+  @optional_fields ~w(scope granted_at user_id)a
 
   def changeset(grant, attrs) do
     grant

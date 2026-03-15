@@ -18,13 +18,14 @@ defmodule Loomkin.Schemas.Session do
     field :team_id, :string
     field :bootstrap_spawned, :boolean, default: false
 
+    belongs_to :user, Loomkin.Accounts.User
     has_many :messages, Loomkin.Schemas.Message
 
     timestamps(type: :utc_datetime)
   end
 
   @required_fields ~w(model project_path)a
-  @optional_fields ~w(title status prompt_tokens completion_tokens cost_usd summary_message_id fast_model team_id bootstrap_spawned)a
+  @optional_fields ~w(title status prompt_tokens completion_tokens cost_usd summary_message_id fast_model team_id bootstrap_spawned user_id)a
 
   def changeset(session, attrs) do
     session

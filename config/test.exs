@@ -1,5 +1,11 @@
 import Config
 
+# Multi-tenant mode is disabled in tests by default
+config :loomkin, :multi_tenant, false
+
+# Only in tests, remove the complexity from the password hashing algorithm
+config :bcrypt_elixir, :log_rounds, 1
+
 config :loomkin, Loomkin.Repo,
   username: "postgres",
   password: "postgres",
@@ -21,3 +27,9 @@ config :logger, level: :warning
 # Disable auto-start of nervous system (AutoLogger/Broadcaster) in tests.
 # Tests that need them start them explicitly with sandbox-aware setup.
 config :loomkin, start_nervous_system: false
+
+# Use test adapter for Swoosh mailer
+config :loomkin, Loomkin.Mailer, adapter: Swoosh.Adapters.Test
+
+# Disable swoosh api client in test
+config :swoosh, :api_client, false

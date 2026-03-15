@@ -39,6 +39,8 @@ defmodule LoomkinWeb do
       use Phoenix.LiveView,
         layout: {LoomkinWeb.Layouts, :app}
 
+      on_mount {LoomkinWeb.UserAuth, :mount_current_scope}
+
       unquote(html_helpers())
     end
   end
@@ -68,6 +70,7 @@ defmodule LoomkinWeb do
       import LoomkinWeb.CoreComponents
 
       alias Phoenix.LiveView.JS
+      alias LoomkinWeb.Layouts
 
       unquote(verified_routes())
     end
