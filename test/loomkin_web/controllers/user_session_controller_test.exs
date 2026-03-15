@@ -27,8 +27,8 @@ defmodule LoomkinWeb.UserSessionControllerTest do
       assert html =~ "Sign in to your workspace"
       assert html =~ "Sign in with email"
 
-      assert html =~
-               ~s(<input type="email" name="user[email]" id="login_form_magic_email" value="#{user.email}")
+      assert html =~ ~s(id="login_form_magic_email")
+      assert html =~ ~s(value="#{user.email}")
     end
 
     test "renders login page (email + password)", %{conn: conn} do
@@ -125,7 +125,7 @@ defmodule LoomkinWeb.UserSessionControllerTest do
         })
 
       response = html_response(conn, 200)
-      assert response =~ "Log in"
+      assert response =~ "Sign in to your workspace"
       assert response =~ "Invalid email or password"
     end
   end

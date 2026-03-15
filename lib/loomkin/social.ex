@@ -190,7 +190,7 @@ defmodule Loomkin.Social do
           from(s in Snippet, where: s.id == ^snippet.id)
           |> Repo.update_all(inc: [favorite_count: -1])
 
-          {:ok, :unfavorited}
+          :unfavorited
         end)
 
       {:ok, favorite} ->
@@ -198,7 +198,7 @@ defmodule Loomkin.Social do
           from(s in Snippet, where: s.id == ^snippet.id)
           |> Repo.update_all(inc: [favorite_count: 1])
 
-          {:ok, {:favorited, favorite}}
+          {:favorited, favorite}
         end)
 
       {:error, changeset} ->

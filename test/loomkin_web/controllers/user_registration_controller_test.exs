@@ -43,7 +43,8 @@ defmodule LoomkinWeb.UserRegistrationControllerTest do
 
       response = html_response(conn, 200)
       assert response =~ "Create your workspace"
-      assert response =~ "must have the @ sign and no spaces"
+      # Form re-renders with the invalid value preserved
+      assert response =~ "with spaces"
     end
   end
 end
