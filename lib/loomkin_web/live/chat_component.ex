@@ -91,9 +91,36 @@ defmodule LoomkinWeb.ChatComponent do
 
   def render(assigns) do
     ~H"""
-    <div class="flex-1 relative overflow-hidden">
+    <div class="flex-1 flex flex-col overflow-hidden">
+      <%!-- Context Usage Bar --%>
       <div
-        class="absolute inset-0 overflow-auto"
+        :if={@has_messages && Map.has_key?(assigns, :context_info)}
+        class="flex-shrink-0 flex items-center gap-2 px-4 py-1.5 border-b border-gray-800/50 bg-gray-900/30"
+      >
+        <span class="text-[10px] text-gray-500 whitespace-nowrap">
+          Context: {@context_info.usage_pct}%
+        </span>
+        <div
+          class="flex-1 h-1 bg-gray-800 rounded-full overflow-hidden"
+          role="progressbar"
+          aria-valuenow={@context_info.usage_pct}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-label="Context window usage"
+        >
+          <div
+            class={"h-full rounded-full transition-all duration-300 #{context_bar_color(@context_info)}"}
+            style={"width: #{min(@context_info.usage_pct, 100)}%"}
+          >
+          </div>
+        </div>
+        <span class="text-[10px] text-gray-600 whitespace-nowrap">
+          {format_tokens(@context_info.used_tokens)} / {format_tokens(@context_info.total_tokens)}
+        </span>
+      </div>
+
+      <div
+        class="flex-1 overflow-auto"
         id="chat-messages"
         role="log"
         aria-label="Conversation"
@@ -428,4 +455,24 @@ defmodule LoomkinWeb.ChatComponent do
 
   defp agent_label(nil), do: "loom"
   defp agent_label(name), do: String.downcase(name)
+
+  defp context_bar_color(%{usage_pct: usage, threshold_pct: threshold}) do
+    cond do
+      usage >= threshold -> "bg-red-500"
+      usage >= threshold * 0.8 -> "bg-amber-500"
+      true -> "bg-violet-500"
+    end
+  end
+
+  defp format_tokens(tokens) when tokens >= 1_000_000 do
+    val = Float.round(tokens / 1_000_000, 1)
+    if val == Float.round(val), do: "#{trunc(val)}M", else: "#{val}M"
+  end
+
+  defp format_tokens(tokens) when tokens >= 1_000 do
+    val = Float.round(tokens / 1_000, 1)
+    if val == Float.round(val), do: "#{trunc(val)}K", else: "#{val}K"
+  end
+
+  defp format_tokens(tokens), do: "#{tokens}"
 end

@@ -456,6 +456,36 @@ defmodule Loomkin.Settings.Registry do
       tab: "Intelligence",
       section: "Context Window"
     },
+    %Setting{
+      key: [:context, :headroom_floor_pct],
+      label: "Headroom floor %",
+      description:
+        "Minimum max-utilization percentage, applied to the smallest context windows (32K tokens).",
+      why_change:
+        "Lower to allow more aggressive context filling on small models. Raise to keep more headroom on all models.",
+      type: :number,
+      default: 55,
+      range: {30, 70},
+      step: 5,
+      unit: "%",
+      tab: "Intelligence",
+      section: "Context Window"
+    },
+    %Setting{
+      key: [:context, :headroom_ceiling_pct],
+      label: "Headroom ceiling %",
+      description:
+        "Maximum max-utilization percentage, applied to the largest context windows (1M+ tokens).",
+      why_change:
+        "Lower to keep more headroom on large models. Raise to use more of the available context window.",
+      type: :number,
+      default: 93,
+      range: {80, 99},
+      step: 1,
+      unit: "%",
+      tab: "Intelligence",
+      section: "Context Window"
+    },
 
     # ── Intelligence: Conversations ───────────────────────────────────
     %Setting{

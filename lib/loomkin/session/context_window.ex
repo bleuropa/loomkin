@@ -9,6 +9,10 @@ defmodule Loomkin.Session.ContextWindow do
   @default_decision_context_tokens 1024
   @default_skills_tokens 512
   @chars_per_token 4
+  @default_headroom_floor_pct 55
+  @default_headroom_ceiling_pct 93
+  @min_context 32_000
+  @max_context 1_000_000
 
   @doc """
   Allocate the token budget across zones for a given model.
@@ -153,6 +157,77 @@ defmodule Loomkin.Session.ContextWindow do
   end
 
   @doc """
+  Compute the max utilization percentage for a given token limit.
+
+  Uses logarithmic interpolation between floor and ceiling percentages
+  based on the context window size, bounded by 32K and 1M.
+
+  ## Examples
+
+      iex> ContextWindow.compute_headroom(32_000, 55, 93)
+      55
+
+      iex> ContextWindow.compute_headroom(1_000_000, 55, 93)
+      93
+  """
+  @spec compute_headroom(pos_integer(), number(), number()) :: integer()
+  def compute_headroom(token_limit, floor_pct, ceiling_pct) do
+    clamped = token_limit |> max(@min_context) |> min(@max_context)
+    t = :math.log(clamped / @min_context) / :math.log(@max_context / @min_context)
+    round(floor_pct + t * (ceiling_pct - floor_pct))
+  end
+
+  @doc """
+  Return the max utilization percentage for a given model string.
+
+  Looks up the model's context limit, then computes the headroom threshold
+  using the configured floor/ceiling percentages.
+  """
+  @spec max_utilization_pct(String.t() | nil) :: integer()
+  def max_utilization_pct(model) do
+    compute_headroom(
+      model_limit(model),
+      config_headroom_floor_pct(),
+      config_headroom_ceiling_pct()
+    )
+  end
+
+  @doc """
+  Return context usage information for UI display.
+
+  Returns a map with:
+  - `:usage_pct` - current utilization as an integer percentage
+  - `:threshold_pct` - the dynamic max utilization threshold
+  - `:total_tokens` - total context window size
+  - `:used_tokens` - estimated tokens currently used
+  """
+  @spec context_usage_info(String.t() | nil, [map()], keyword()) :: map()
+  def context_usage_info(model, messages, opts \\ []) do
+    total = model_limit(model)
+    threshold = max_utilization_pct(model)
+    budget = allocate_budget(model, opts)
+
+    system_overhead =
+      Keyword.get(
+        opts,
+        :system_overhead,
+        budget.system_prompt + budget.decision_context + budget.repo_map +
+          budget.skills + budget.tool_definitions
+      )
+
+    message_tokens = messages |> Enum.map(&estimate_message_tokens/1) |> Enum.sum()
+    used = system_overhead + message_tokens
+    usage_pct = if total > 0, do: round(used / total * 100), else: 0
+
+    %{
+      usage_pct: usage_pct,
+      threshold_pct: threshold,
+      total_tokens: total,
+      used_tokens: used
+    }
+  end
+
+  @doc """
   Build a windowed message list that fits within the model's context limit.
 
   Takes a list of message maps, a system prompt string, and options.
@@ -245,12 +320,13 @@ defmodule Loomkin.Session.ContextWindow do
       history_tokens = recent_messages |> Enum.map(&estimate_message_tokens/1) |> Enum.sum()
       total = model_limit(model)
       usage = (estimate_tokens(enriched_system) + history_tokens) / total * 100
+      threshold = max_utilization_pct(model)
 
-      if usage > 50 do
+      if usage > threshold do
         pressure_msg = %{
           role: :system,
           content:
-            "[Context pressure: #{round(usage)}%]. Consider offloading completed topics via context_offload."
+            "[Context pressure: #{round(usage)}% of #{threshold}% threshold]. Consider offloading completed topics via context_offload."
         }
 
         messages_out ++ [pressure_msg]
@@ -436,5 +512,13 @@ defmodule Loomkin.Session.ContextWindow do
 
   defp config_reserved_output_tokens do
     Loomkin.Config.get(:context, :reserved_output_tokens) || @default_reserved_output
+  end
+
+  defp config_headroom_floor_pct do
+    Loomkin.Config.get(:context, :headroom_floor_pct) || @default_headroom_floor_pct
+  end
+
+  defp config_headroom_ceiling_pct do
+    Loomkin.Config.get(:context, :headroom_ceiling_pct) || @default_headroom_ceiling_pct
   end
 end

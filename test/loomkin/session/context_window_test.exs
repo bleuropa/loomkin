@@ -258,6 +258,96 @@ defmodule Loomkin.Session.ContextWindowTest do
     end
   end
 
+  describe "compute_headroom/3" do
+    test "returns floor for 32K context" do
+      assert ContextWindow.compute_headroom(32_000, 55, 93) == 55
+    end
+
+    test "returns ceiling for 1M context" do
+      assert ContextWindow.compute_headroom(1_000_000, 55, 93) == 93
+    end
+
+    test "returns ~71 for 128K context" do
+      result = ContextWindow.compute_headroom(128_000, 55, 93)
+      assert result >= 69 and result <= 73
+    end
+
+    test "clamps below 32K to floor" do
+      assert ContextWindow.compute_headroom(8_000, 55, 93) == 55
+    end
+
+    test "clamps above 1M to ceiling" do
+      assert ContextWindow.compute_headroom(2_000_000, 55, 93) == 93
+    end
+
+    test "works with different floor/ceiling values" do
+      assert ContextWindow.compute_headroom(32_000, 40, 95) == 40
+      assert ContextWindow.compute_headroom(1_000_000, 40, 95) == 95
+    end
+
+    test "returns same value when floor equals ceiling" do
+      assert ContextWindow.compute_headroom(32_000, 75, 75) == 75
+      assert ContextWindow.compute_headroom(128_000, 75, 75) == 75
+      assert ContextWindow.compute_headroom(1_000_000, 75, 75) == 75
+    end
+  end
+
+  describe "max_utilization_pct/1" do
+    test "returns value in expected range for nil model" do
+      result = ContextWindow.max_utilization_pct(nil)
+      # nil model -> 128K default context limit
+      assert result >= 55 and result <= 93
+    end
+
+    test "returns value in expected range for unknown model" do
+      result = ContextWindow.max_utilization_pct("unknown:model")
+      assert result >= 55 and result <= 93
+    end
+  end
+
+  describe "context_usage_info/3" do
+    test "includes system overhead for empty messages" do
+      info = ContextWindow.context_usage_info(nil, [])
+      # Default system overhead = 2048 + 1024 + 2048 + 512 + 2048 = 7680
+      assert info.used_tokens == 7680
+      assert info.usage_pct == 6
+      assert info.total_tokens == 128_000
+      assert info.threshold_pct >= 55
+      assert info.threshold_pct <= 93
+    end
+
+    test "returns nonzero usage for messages with content" do
+      messages = [
+        %{role: :user, content: String.duplicate("x", 4000)},
+        %{role: :assistant, content: String.duplicate("y", 4000)}
+      ]
+
+      info = ContextWindow.context_usage_info(nil, messages)
+      assert info.usage_pct > 0
+      # used_tokens includes system overhead (7680) + message tokens
+      assert info.used_tokens > 7680
+    end
+
+    test "explicit system_overhead option overrides default" do
+      info = ContextWindow.context_usage_info(nil, [], system_overhead: 10_000)
+      assert info.used_tokens == 10_000
+    end
+
+    test "system_overhead: 0 reproduces legacy behavior" do
+      info = ContextWindow.context_usage_info(nil, [], system_overhead: 0)
+      assert info.used_tokens == 0
+      assert info.usage_pct == 0
+    end
+
+    test "combines system overhead with message tokens" do
+      # 400 chars = 100 tokens + 4 overhead = 104 per message
+      messages = [%{role: :user, content: String.duplicate("x", 400)}]
+      info = ContextWindow.context_usage_info(nil, messages)
+      # 7680 (system) + 104 (message) = 7784
+      assert info.used_tokens == 7784
+    end
+  end
+
   describe "summarize_old_messages/2" do
     @tag :skip
     test "returns summary string with message count" do

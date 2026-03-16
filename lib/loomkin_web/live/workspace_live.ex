@@ -101,7 +101,8 @@ defmodule LoomkinWeb.WorkspaceLive do
         following_ids: MapSet.new(),
         # Save chat modal
         show_save_chat_modal: false,
-        multi_tenant: Application.get_env(:loomkin, :multi_tenant, false)
+        multi_tenant: Application.get_env(:loomkin, :multi_tenant, false),
+        context_info: Loomkin.Session.ContextWindow.context_usage_info(nil, [])
       )
       |> stream(:comms_events, [], limit: -500)
 
@@ -400,7 +401,8 @@ defmodule LoomkinWeb.WorkspaceLive do
       channel_bindings: channel_bindings,
       kin_agents: load_kin_agents(),
       trust_preset: Loomkin.Permissions.TrustPolicy.get_preset_name(session_id),
-      trust_expanded: false
+      trust_expanded: false,
+      context_info: Loomkin.Session.ContextWindow.context_usage_info(effective_model, messages)
     )
   end
 
@@ -563,6 +565,12 @@ defmodule LoomkinWeb.WorkspaceLive do
             metadata: %{from: "You", to: "All Agents", agent_count: length(agents)}
           }
 
+          context_info =
+            Loomkin.Session.ContextWindow.context_usage_info(
+              socket.assigns.model,
+              updated_messages
+            )
+
           {:noreply,
            socket
            |> push_activity_event(broadcast_event)
@@ -571,6 +579,7 @@ defmodule LoomkinWeb.WorkspaceLive do
              async_task: task,
              status: :thinking,
              messages: updated_messages,
+             context_info: context_info,
              last_user_message: %{text: trimmed, to: "All Agents"}
            )
            |> push_event("clear-input", %{})}
@@ -606,6 +615,14 @@ defmodule LoomkinWeb.WorkspaceLive do
           # Append preserves chronological order required by ChatComponent stream diffing
           updated_messages = Enum.take(socket.assigns.messages ++ [user_msg], -@max_messages)
 
+          context_info =
+            Loomkin.Session.ContextWindow.context_usage_info(
+              socket.assigns.model,
+              updated_messages
+            )
+
+          socket = assign(socket, context_info: context_info)
+
           # Auto-title page from first user message
           socket =
             if socket.assigns.messages == [] do
@@ -622,6 +639,12 @@ defmodule LoomkinWeb.WorkspaceLive do
               socket
             end
 
+          context_info =
+            Loomkin.Session.ContextWindow.context_usage_info(
+              socket.assigns.model,
+              updated_messages
+            )
+
           {:noreply,
            socket
            |> assign(
@@ -629,6 +652,7 @@ defmodule LoomkinWeb.WorkspaceLive do
              async_task: task,
              status: :thinking,
              messages: updated_messages,
+             context_info: context_info,
              last_user_message: %{text: trimmed, to: "Kin"}
            )
            |> push_event("clear-input", %{})}
@@ -704,7 +728,11 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   def handle_event("change_model", %{"model" => model}, socket) do
     Session.update_model(socket.assigns.session_id, model)
-    {:noreply, assign(socket, model: model)}
+
+    context_info =
+      Loomkin.Session.ContextWindow.context_usage_info(model, socket.assigns.messages)
+
+    {:noreply, assign(socket, model: model, context_info: context_info)}
   end
 
   def handle_event("new_session", _params, socket) do
@@ -2278,7 +2306,15 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   def handle_info({:new_message, _session_id, msg}, socket) do
     # Append preserves chronological order required by ChatComponent stream diffing
-    socket = assign(socket, messages: Enum.take(socket.assigns.messages ++ [msg], -@max_messages))
+    updated_messages = Enum.take(socket.assigns.messages ++ [msg], -@max_messages)
+
+    context_info =
+      Loomkin.Session.ContextWindow.context_usage_info(
+        socket.assigns.model,
+        updated_messages
+      )
+
+    socket = assign(socket, messages: updated_messages, context_info: context_info)
 
     # Also add assistant messages to activity feed for mission control mode
     socket =
@@ -2562,6 +2598,14 @@ defmodule LoomkinWeb.WorkspaceLive do
       end)
 
     user_msg = %{role: :user, content: prompt}
+    # Append preserves chronological order required by ChatComponent stream diffing
+    updated_messages = Enum.take(socket.assigns.messages ++ [user_msg], -@max_messages)
+
+    context_info =
+      Loomkin.Session.ContextWindow.context_usage_info(
+        socket.assigns.model,
+        updated_messages
+      )
 
     {:noreply,
      socket
@@ -2569,8 +2613,8 @@ defmodule LoomkinWeb.WorkspaceLive do
        input_text: "",
        async_task: task,
        status: :thinking,
-       # Append preserves chronological order required by ChatComponent stream diffing
-       messages: Enum.take(socket.assigns.messages ++ [user_msg], -@max_messages)
+       messages: updated_messages,
+       context_info: context_info
      )
      |> push_event("clear-input", %{})}
   end
@@ -2667,7 +2711,10 @@ defmodule LoomkinWeb.WorkspaceLive do
       Teams.Manager.update_all_models(team_id, model)
     end
 
-    {:noreply, assign(socket, model: model)}
+    context_info =
+      Loomkin.Session.ContextWindow.context_usage_info(model, socket.assigns.messages)
+
+    {:noreply, assign(socket, model: model, context_info: context_info)}
   end
 
   def handle_info({:change_fast_model, model}, socket) do
@@ -3150,11 +3197,18 @@ defmodule LoomkinWeb.WorkspaceLive do
         Session.send_message(session_id, content)
       end)
 
+    context_info =
+      Loomkin.Session.ContextWindow.context_usage_info(
+        socket.assigns.model,
+        messages
+      )
+
     {:noreply,
      assign(socket,
        async_task: task,
        status: :thinking,
        messages: messages,
+       context_info: context_info,
        failed_message_idx: nil
      )}
   end
@@ -4180,6 +4234,7 @@ defmodule LoomkinWeb.WorkspaceLive do
                 plan_steps={@plan_steps}
                 current_step={@current_step}
                 failed_message_idx={@failed_message_idx}
+                context_info={@context_info}
               />
             </div>
 
@@ -4265,6 +4320,7 @@ defmodule LoomkinWeb.WorkspaceLive do
                   plan_steps={@plan_steps}
                   current_step={@current_step}
                   failed_message_idx={@failed_message_idx}
+                  context_info={@context_info}
                 />
               </div>
 
