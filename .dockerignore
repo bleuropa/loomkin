@@ -1,0 +1,5 @@
+# Only send what the Dockerfile needs — keep build context small
+*
+!.mise.toml
+!.devcontainer/sshd_config
+!.devcontainer/entrypoint.sh

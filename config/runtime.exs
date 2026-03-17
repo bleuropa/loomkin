@@ -23,6 +23,11 @@ if database_url = System.get_env("DATABASE_URL") do
   config :loomkin, Loomkin.Repo,
     url: database_url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10")
+else
+  # Inside the dev container, connect to the postgres service by hostname
+  if System.get_env("HOSTNAME") == "loomkin-dev" do
+    config :loomkin, Loomkin.Repo, hostname: "postgres", port: 5432
+  end
 end
 
 if config_env() == :prod do

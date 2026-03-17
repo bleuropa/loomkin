@@ -41,6 +41,7 @@ npm-debug.log
 # Environment
 .env
 .env.*
+.devcontainer/.env
 
 # Build artifacts
 /loomkin
