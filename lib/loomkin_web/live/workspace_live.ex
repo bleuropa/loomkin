@@ -4294,7 +4294,11 @@ defmodule LoomkinWeb.WorkspaceLive do
             </div>
 
             <%!-- Chat + Composer column --%>
-            <div id="mc-bottom-pane" class="flex flex-col min-w-0 border-r border-subtle" style="flex: 1 1 auto; min-height: 150px;">
+            <div
+              id="mc-bottom-pane"
+              class="flex flex-col min-w-0 border-r border-subtle"
+              style="flex: 1 1 auto; min-height: 150px;"
+            >
               <.live_component
                 module={LoomkinWeb.SessionSwitcherComponent}
                 id="session-switcher"

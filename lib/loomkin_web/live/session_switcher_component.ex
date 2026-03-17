@@ -139,7 +139,6 @@ defmodule LoomkinWeb.SessionSwitcherComponent do
         >
           No previous sessions
         </div>
-
       </div>
     </div>
     """
