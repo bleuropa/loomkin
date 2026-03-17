@@ -116,6 +116,8 @@ defmodule LoomkinWeb.WorkspaceLive do
           stored_sessions = get_connect_params(socket)["stored_sessions"] || %{}
           stored_id = stored_sessions[project_path]
 
+          user = socket.assigns[:current_scope] && socket.assigns.current_scope.user
+
           stored_session =
             if stored_id,
               do: Loomkin.Session.Persistence.get_session(stored_id),
@@ -123,10 +125,13 @@ defmodule LoomkinWeb.WorkspaceLive do
 
           cond do
             stored_session && stored_session.status == :active &&
-                stored_session.project_path == project_path ->
+              stored_session.project_path == project_path &&
+                (is_nil(user) or is_nil(stored_session.user_id) or
+                   stored_session.user_id == user.id) ->
               {:ok, push_navigate(socket, to: ~p"/sessions/#{stored_session.id}")}
 
-            latest = Loomkin.Session.Persistence.find_latest_active_session(project_path) ->
+            latest =
+                Loomkin.Session.Persistence.find_latest_active_session(project_path, user: user) ->
               {:ok, push_navigate(socket, to: ~p"/sessions/#{latest.id}")}
 
             true ->
@@ -140,16 +145,22 @@ defmodule LoomkinWeb.WorkspaceLive do
 
       :show ->
         session_id = params["session_id"]
+        user = socket.assigns[:current_scope] && socket.assigns.current_scope.user
 
         # Read the DB-stored project_path so resumed sessions use the correct
         # path instead of falling back to File.cwd!()
-        db_project_path =
-          case Loomkin.Session.Persistence.get_session(session_id) do
-            %{project_path: path} when is_binary(path) -> path
-            _ -> nil
-          end
+        case Loomkin.Session.Persistence.get_session(session_id) do
+          %{user_id: uid}
+          when not is_nil(user) and not is_nil(uid) and uid != user.id ->
+            # Session belongs to a different user — redirect away
+            {:ok, push_navigate(socket, to: ~p"/projects")}
 
-        {:ok, start_and_subscribe(socket, session_id, db_project_path)}
+          %{project_path: path} when is_binary(path) ->
+            {:ok, start_and_subscribe(socket, session_id, path)}
+
+          _ ->
+            {:ok, start_and_subscribe(socket, session_id, nil)}
+        end
     end
   end
 
@@ -172,6 +183,7 @@ defmodule LoomkinWeb.WorkspaceLive do
     # Use full lead tool set — every session is a team-capable lead agent
     tools = Loomkin.Tools.Registry.for_lead()
     project_path = project_path || File.cwd!()
+    user = socket.assigns[:current_scope] && socket.assigns.current_scope.user
 
     {:ok, pid} =
       Manager.start_session(
@@ -180,7 +192,8 @@ defmodule LoomkinWeb.WorkspaceLive do
         fast_model: socket.assigns[:fast_model] || socket.assigns.model,
         project_path: project_path,
         tools: tools,
-        auto_approve: false
+        auto_approve: false,
+        user_id: user && user.id
       )
 
     # Read the effective model back from the session — for resumed sessions

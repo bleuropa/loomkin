@@ -167,12 +167,13 @@ defmodule Loomkin.Session do
     project_path = Keyword.get(opts, :project_path, File.cwd!())
     title = Keyword.get(opts, :title)
     tools = Keyword.get(opts, :tools, [])
+    user_id = Keyword.get(opts, :user_id)
 
     auto_approve = Keyword.get(opts, :auto_approve, false)
 
     fast_model = Keyword.get(opts, :fast_model)
 
-    case load_or_create_session(session_id, model, project_path, title) do
+    case load_or_create_session(session_id, model, project_path, title, user_id) do
       {:ok, db_session, messages} ->
         # Prefer the DB-persisted model for resumed sessions so the user's
         # last selection survives page refreshes — but only if the provider
@@ -548,16 +549,18 @@ defmodule Loomkin.Session do
 
   # --- Private ----------------------------------------
 
-  defp load_or_create_session(session_id, model, project_path, title) do
+  defp load_or_create_session(session_id, model, project_path, title, user_id) do
     case Persistence.get_session(session_id) do
       nil ->
         # Create new session
-        attrs = %{
-          id: session_id,
-          model: model,
-          project_path: project_path,
-          title: title || "Session #{DateTime.utc_now() |> Calendar.strftime("%Y-%m-%d %H:%M")}"
-        }
+        attrs =
+          %{
+            id: session_id,
+            model: model,
+            project_path: project_path,
+            title: title || "Session #{DateTime.utc_now() |> Calendar.strftime("%Y-%m-%d %H:%M")}"
+          }
+          |> maybe_put(:user_id, user_id)
 
         case Persistence.create_session(attrs) do
           {:ok, db_session} ->
@@ -607,6 +610,27 @@ defmodule Loomkin.Session do
 
   defp default_model do
     Application.get_env(:loomkin, :default_model, "zai:glm-5")
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp load_workspace_for_kindred(state) do
+    case state.db_session do
+      %{workspace_id: wid} when is_binary(wid) -> Loomkin.Repo.get(Loomkin.Workspace, wid)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp load_user_for_kindred(state) do
+    case state.db_session do
+      %{user_id: uid} when is_integer(uid) -> Loomkin.Repo.get(Loomkin.Accounts.User, uid)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
   end
 
   # Validate a persisted model string — fall back if the provider isn't available.
@@ -754,10 +778,12 @@ defmodule Loomkin.Session do
       end
     end
 
-    # Load kin agents from DB for concierge prompt injection
+    # Resolve kin agents via kindred (org → user → fallback to Kin.list_by_potency)
     kin_agents =
       try do
-        Loomkin.Kin.list_by_potency(21)
+        workspace = load_workspace_for_kindred(state)
+        user = load_user_for_kindred(state)
+        Loomkin.Kindred.Resolver.resolve(workspace, user)
       rescue
         _ -> []
       end
