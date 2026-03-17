@@ -53,8 +53,8 @@ defmodule Loomkin.ShellCommand do
   """
   @allowed_prefixes ~w(mix elixir iex true false sleep echo cat)
 
-  # Shell metacharacters that enable command chaining/injection
-  @dangerous_pattern ~r/[;|&`$><]|\$\(/
+  # Shell metacharacters that enable command chaining/injection (including newline)
+  @dangerous_pattern ~r/[;\n\r|&`$><]|\$\(/
 
   @spec validate_command(String.t()) :: :ok | {:error, String.t()}
   def validate_command(command) do

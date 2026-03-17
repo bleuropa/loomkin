@@ -27,7 +27,7 @@ defmodule Loomkin.Schemas.Snippet do
   end
 
   @required_fields ~w(title type)a
-  @optional_fields ~w(description visibility content tags slug forked_from_id version)a
+  @optional_fields ~w(description visibility content tags slug forked_from_id version user_id)a
 
   def changeset(snippet, attrs) do
     snippet

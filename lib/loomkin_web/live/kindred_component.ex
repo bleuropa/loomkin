@@ -39,9 +39,13 @@ defmodule LoomkinWeb.KindredComponent do
   end
 
   def handle_event("select_kindred", %{"id" => id}, socket) do
-    kindred = KindredContext.get_kindred!(id)
+    scope = socket.assigns.scope
+    kindred = KindredContext.get_kindred_for_user!(scope, id)
     items = KindredContext.list_items(kindred)
     {:noreply, assign(socket, kindred: kindred, items: items)}
+  rescue
+    Ecto.NoResultsError ->
+      {:noreply, put_flash(socket, :error, "Kindred not found")}
   end
 
   def handle_event("new_kindred", _params, socket) do

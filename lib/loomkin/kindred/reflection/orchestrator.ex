@@ -14,10 +14,22 @@ defmodule Loomkin.Kindred.Reflection.Orchestrator do
   alias Loomkin.Kindred.Reflection.Collector
   alias Loomkin.Repo
 
-  @doc "Run reflection on demand (user-triggered)."
-  @spec run_on_demand(String.t(), map()) :: {:ok, map()} | {:error, term()}
+  @doc "Run reflection on demand (user-triggered). Runs async via TaskSupervisor."
+  @spec run_on_demand(String.t(), map()) :: :ok
   def run_on_demand(workspace_id, scope) do
-    run_reflection(workspace_id, scope, :on_demand)
+    Task.Supervisor.start_child(Loomkin.Teams.TaskSupervisor, fn ->
+      case run_reflection(workspace_id, scope, :on_demand) do
+        {:ok, _result} ->
+          Logger.info("[Reflection] On-demand reflection complete workspace=#{workspace_id}")
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Reflection] On-demand reflection failed workspace=#{workspace_id} reason=#{inspect(reason)}"
+          )
+      end
+    end)
+
+    :ok
   end
 
   @doc "Run reflection on workspace milestone."

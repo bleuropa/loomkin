@@ -319,7 +319,7 @@ defmodule Loomkin.Workspace.Server do
       if user_id do
         where(query, [w], w.user_id == ^user_id)
       else
-        where(query, [w], is_nil(w.user_id))
+        query
       end
 
     case query

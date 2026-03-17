@@ -13,24 +13,28 @@ defmodule Loomkin.Kindred.Proposals do
   end
 
   def approve_proposal(%{user: user}, %KindredProposal{} = proposal) do
-    proposal
-    |> KindredProposal.changeset(%{
-      status: :approved,
-      reviewed_by: user.id,
-      reviewed_at: DateTime.utc_now()
-    })
-    |> Repo.update()
+    with :ok <- authorize_proposal(user, proposal) do
+      proposal
+      |> KindredProposal.changeset(%{
+        status: :approved,
+        reviewed_by: user.id,
+        reviewed_at: DateTime.utc_now()
+      })
+      |> Repo.update()
+    end
   end
 
   def reject_proposal(%{user: user}, %KindredProposal{} = proposal, notes) do
-    proposal
-    |> KindredProposal.changeset(%{
-      status: :rejected,
-      reviewed_by: user.id,
-      reviewed_at: DateTime.utc_now(),
-      review_notes: notes
-    })
-    |> Repo.update()
+    with :ok <- authorize_proposal(user, proposal) do
+      proposal
+      |> KindredProposal.changeset(%{
+        status: :rejected,
+        reviewed_by: user.id,
+        reviewed_at: DateTime.utc_now(),
+        review_notes: notes
+      })
+      |> Repo.update()
+    end
   end
 
   def apply_proposal(%{user: _user} = scope, %KindredProposal{status: :approved} = proposal) do
@@ -38,19 +42,22 @@ defmodule Loomkin.Kindred.Proposals do
     changes = proposal.changes || %{}
 
     Repo.transaction(fn ->
-      # Apply item changes from the proposal
-      apply_item_changes(scope, kindred, changes)
+      case apply_item_changes(scope, kindred, changes) do
+        :ok -> :ok
+        {:error, reason} -> Repo.rollback(reason)
+      end
 
-      # Increment version
-      {:ok, _kindred} = Loomkin.Kindred.publish_kindred(scope, kindred)
+      case Loomkin.Kindred.publish_kindred(scope, kindred) do
+        {:ok, _kindred} -> :ok
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
 
-      # Mark proposal as applied
-      {:ok, applied} =
-        proposal
-        |> KindredProposal.changeset(%{status: :applied})
-        |> Repo.update()
-
-      applied
+      case proposal
+           |> KindredProposal.changeset(%{status: :applied})
+           |> Repo.update() do
+        {:ok, applied} -> applied
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
     end)
   end
 
@@ -74,38 +81,70 @@ defmodule Loomkin.Kindred.Proposals do
 
   # --- Private ---
 
+  defp authorize_proposal(user, %KindredProposal{} = proposal) do
+    kindred = Loomkin.Kindred.get_kindred(proposal.kindred_id)
+
+    cond do
+      is_nil(kindred) ->
+        {:error, :not_found}
+
+      kindred.user_id && kindred.user_id == user.id ->
+        :ok
+
+      kindred.organization_id ->
+        role =
+          Loomkin.Organizations.member_role(
+            %Loomkin.Schemas.Organization{id: kindred.organization_id},
+            user
+          )
+
+        if role in [:owner, :admin], do: :ok, else: {:error, :unauthorized}
+
+      true ->
+        {:error, :unauthorized}
+    end
+  end
+
   defp apply_item_changes(scope, kindred, changes) do
-    # Apply kin_config updates
-    for %{"type" => "kin_config_update", "target" => name} = change <-
-          Map.get(changes, "recommendations", []) do
-      items = Loomkin.Kindred.list_items(kindred)
+    results =
+      for %{"type" => "kin_config_update", "target" => name} = change <-
+            Map.get(changes, "recommendations", []) do
+        items = Loomkin.Kindred.list_items(kindred)
 
-      case Enum.find(items, fn i -> i.item_type == :kin_config && i.content["name"] == name end) do
-        nil ->
-          # Add new item
-          Loomkin.Kindred.add_item(scope, kindred, %{
-            item_type: :kin_config,
-            content: Map.get(change, "changes", %{}) |> Map.put("name", name)
-          })
+        case Enum.find(items, fn i ->
+               i.item_type == :kin_config && i.content["name"] == name
+             end) do
+          nil ->
+            Loomkin.Kindred.add_item(scope, kindred, %{
+              item_type: :kin_config,
+              content: Map.get(change, "changes", %{}) |> Map.put("name", name)
+            })
 
-        item ->
-          # Update existing item
-          new_content = Map.merge(item.content, Map.get(change, "changes", %{}))
-          Loomkin.Kindred.update_item(scope, item, %{content: new_content})
+          item ->
+            new_content = Map.merge(item.content, Map.get(change, "changes", %{}))
+            Loomkin.Kindred.update_item(scope, item, %{content: new_content})
+        end
       end
-    end
 
-    # Apply skill additions
-    for %{"type" => "skill_addition"} = change <- Map.get(changes, "recommendations", []) do
-      Loomkin.Kindred.add_item(scope, kindred, %{
-        item_type: :skill_ref,
-        content: %{
-          "skill_name" => change["name"],
-          "inline_body" => change["body"]
-        }
-      })
-    end
+    skill_results =
+      for %{"type" => "skill_addition"} = change <- Map.get(changes, "recommendations", []) do
+        Loomkin.Kindred.add_item(scope, kindred, %{
+          item_type: :skill_ref,
+          content: %{
+            "skill_name" => change["name"],
+            "inline_body" => change["body"]
+          }
+        })
+      end
 
-    :ok
+    all_results = results ++ skill_results
+
+    case Enum.find(all_results, fn
+           {:error, _} -> true
+           _ -> false
+         end) do
+      nil -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 end

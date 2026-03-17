@@ -10,68 +10,103 @@ defmodule Loomkin.Kindred do
   # --- Kindred CRUD ---
 
   def create_kindred(%{user: user}, attrs) when not is_nil(user) do
-    attrs = Map.put_new(attrs, :user_id, user.id)
+    attrs =
+      case attrs[:owner_type] do
+        :organization ->
+          # Org kindred: set organization_id, do NOT set user_id
+          attrs
+
+        _ ->
+          # Personal kindred: default owner_type to :user and set user_id
+          attrs
+          |> Map.put_new(:owner_type, :user)
+          |> Map.put_new(:user_id, user.id)
+      end
 
     %Kindred{}
     |> Kindred.changeset(attrs)
     |> Repo.insert()
   end
 
-  def update_kindred(%{user: _user}, %Kindred{} = kindred, attrs) do
-    kindred
-    |> Kindred.changeset(attrs)
-    |> Repo.update()
+  def update_kindred(%{user: user}, %Kindred{} = kindred, attrs) do
+    with :ok <- authorize_kindred(user, kindred) do
+      kindred
+      |> Kindred.changeset(attrs)
+      |> Repo.update()
+    end
   end
 
-  def publish_kindred(%{user: _user}, %Kindred{} = kindred) do
-    kindred
-    |> Kindred.changeset(%{
-      status: :active,
-      version: kindred.version + 1
-    })
-    |> Repo.update()
+  def publish_kindred(%{user: user}, %Kindred{} = kindred) do
+    with :ok <- authorize_kindred(user, kindred) do
+      kindred
+      |> Kindred.changeset(%{
+        status: :active,
+        version: kindred.version + 1
+      })
+      |> Repo.update()
+    end
   end
 
-  def archive_kindred(%{user: _user}, %Kindred{} = kindred) do
-    kindred
-    |> Kindred.changeset(%{status: :archived})
-    |> Repo.update()
+  def archive_kindred(%{user: user}, %Kindred{} = kindred) do
+    with :ok <- authorize_kindred(user, kindred) do
+      kindred
+      |> Kindred.changeset(%{status: :archived})
+      |> Repo.update()
+    end
   end
 
   def get_kindred(id), do: Repo.get(Kindred, id)
 
   def get_kindred!(id), do: Repo.get!(Kindred, id)
 
-  # --- Items ---
+  def get_kindred_for_user!(%{user: user}, id) do
+    kindred = Repo.get!(Kindred, id)
 
-  def add_item(%{user: _user}, %Kindred{} = kindred, attrs) do
-    max_position =
-      KindredItem
-      |> where([i], i.kindred_id == ^kindred.id)
-      |> select([i], max(i.position))
-      |> Repo.one() || -1
-
-    attrs =
-      attrs
-      |> Map.put(:kindred_id, kindred.id)
-      |> Map.put_new(:position, max_position + 1)
-
-    %KindredItem{}
-    |> KindredItem.changeset(attrs)
-    |> Repo.insert()
-  end
-
-  def remove_item(%{user: _user}, %Kindred{} = _kindred, item_id) do
-    case Repo.get(KindredItem, item_id) do
-      nil -> {:error, :not_found}
-      item -> Repo.delete(item)
+    case authorize_kindred(user, kindred) do
+      :ok -> kindred
+      {:error, :unauthorized} -> raise Ecto.NoResultsError, queryable: Kindred
     end
   end
 
-  def update_item(%{user: _user}, %KindredItem{} = item, attrs) do
-    item
-    |> KindredItem.changeset(attrs)
-    |> Repo.update()
+  # --- Items ---
+
+  def add_item(%{user: user}, %Kindred{} = kindred, attrs) do
+    with :ok <- authorize_kindred(user, kindred) do
+      max_position =
+        KindredItem
+        |> where([i], i.kindred_id == ^kindred.id)
+        |> select([i], max(i.position))
+        |> Repo.one() || -1
+
+      attrs =
+        attrs
+        |> Map.put(:kindred_id, kindred.id)
+        |> Map.put_new(:position, max_position + 1)
+
+      %KindredItem{}
+      |> KindredItem.changeset(attrs)
+      |> Repo.insert()
+    end
+  end
+
+  def remove_item(%{user: user}, %Kindred{} = kindred, item_id) do
+    with :ok <- authorize_kindred(user, kindred) do
+      case Repo.get(KindredItem, item_id) do
+        nil -> {:error, :not_found}
+        %{kindred_id: kid} = item when kid == kindred.id -> Repo.delete(item)
+        _item -> {:error, :not_found}
+      end
+    end
+  end
+
+  def update_item(%{user: user}, %KindredItem{} = item, attrs) do
+    kindred = get_kindred!(item.kindred_id)
+
+    with :ok <- authorize_kindred(user, kindred) do
+      item
+      |> KindredItem.changeset(attrs)
+      |> Repo.update()
+    end
   end
 
   def list_items(%Kindred{} = kindred) do
@@ -113,5 +148,28 @@ defmodule Loomkin.Kindred do
     |> limit(1)
     |> preload(:items)
     |> Repo.one()
+  end
+
+  # --- Authorization ---
+
+  defp authorize_kindred(user, %Kindred{} = kindred) do
+    cond do
+      # User owns this kindred directly
+      kindred.user_id && kindred.user_id == user.id ->
+        :ok
+
+      # Kindred belongs to an org — check membership
+      kindred.organization_id ->
+        role =
+          Loomkin.Organizations.member_role(
+            %Loomkin.Schemas.Organization{id: kindred.organization_id},
+            user
+          )
+
+        if role in [:owner, :admin], do: :ok, else: {:error, :unauthorized}
+
+      true ->
+        {:error, :unauthorized}
+    end
   end
 end

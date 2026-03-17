@@ -7,25 +7,24 @@ defmodule Loomkin.Organizations do
   alias Loomkin.Schemas.Organization
   alias Loomkin.Schemas.OrganizationMembership
 
+  @allowed_member_roles [:admin, :member]
+
   # --- Organization CRUD ---
 
   def create_organization(%{user: user}, attrs) when not is_nil(user) do
     Repo.transaction(fn ->
-      case %Organization{} |> Organization.changeset(attrs) |> Repo.insert() do
-        {:ok, org} ->
-          {:ok, _membership} =
-            %OrganizationMembership{}
-            |> OrganizationMembership.changeset(%{
-              organization_id: org.id,
-              user_id: user.id,
-              role: :owner
-            })
-            |> Repo.insert()
-
-          org
-
-        {:error, changeset} ->
-          Repo.rollback(changeset)
+      with {:ok, org} <- %Organization{} |> Organization.changeset(attrs) |> Repo.insert(),
+           {:ok, _membership} <-
+             %OrganizationMembership{}
+             |> OrganizationMembership.changeset(%{
+               organization_id: org.id,
+               user_id: user.id,
+               role: :owner
+             })
+             |> Repo.insert() do
+        org
+      else
+        {:error, changeset} -> Repo.rollback(changeset)
       end
     end)
   end
@@ -51,7 +50,8 @@ defmodule Loomkin.Organizations do
   # --- Membership ---
 
   def add_member(%{user: actor}, %Organization{} = org, user, role) do
-    with :ok <- authorize(org, actor, [:owner, :admin]) do
+    with :ok <- authorize(org, actor, [:owner, :admin]),
+         :ok <- validate_assignable_role(role) do
       %OrganizationMembership{}
       |> OrganizationMembership.changeset(%{
         organization_id: org.id,
@@ -63,7 +63,8 @@ defmodule Loomkin.Organizations do
   end
 
   def remove_member(%{user: actor}, %Organization{} = org, user) do
-    with :ok <- authorize(org, actor, [:owner, :admin]) do
+    with :ok <- authorize(org, actor, [:owner, :admin]),
+         :ok <- prevent_owner_removal(org, user) do
       OrganizationMembership
       |> where([m], m.organization_id == ^org.id and m.user_id == ^user.id)
       |> Repo.delete_all()
@@ -73,7 +74,8 @@ defmodule Loomkin.Organizations do
   end
 
   def update_member_role(%{user: actor}, %Organization{} = org, user, new_role) do
-    with :ok <- authorize(org, actor, [:owner]) do
+    with :ok <- authorize(org, actor, [:owner]),
+         :ok <- validate_assignable_role(new_role) do
       case get_membership(org, user) do
         nil ->
           {:error, :not_found}
@@ -142,6 +144,16 @@ defmodule Loomkin.Organizations do
       :ok
     else
       {:error, :unauthorized}
+    end
+  end
+
+  defp validate_assignable_role(role) when role in @allowed_member_roles, do: :ok
+  defp validate_assignable_role(_role), do: {:error, :invalid_role}
+
+  defp prevent_owner_removal(%Organization{} = org, user) do
+    case member_role(org, user) do
+      :owner -> {:error, :cannot_remove_owner}
+      _ -> :ok
     end
   end
 end

@@ -6,11 +6,8 @@ defmodule LoomkinWeb.ReflectionPanelComponent do
   """
   use LoomkinWeb, :live_component
 
-  import Ecto.Query
-
   alias Loomkin.Kindred.Proposals
-  alias Loomkin.Repo
-  alias Loomkin.Schemas.Snippet
+  alias Loomkin.Kindred.Reflection.Orchestrator
 
   def mount(socket) do
     {:ok,
@@ -25,7 +22,7 @@ defmodule LoomkinWeb.ReflectionPanelComponent do
   def update(assigns, socket) do
     socket = assign(socket, assigns)
 
-    reports = load_reports(assigns[:workspace_id], assigns[:user])
+    reports = Loomkin.Snippets.list_reflection_reports(assigns[:workspace_id], assigns[:user])
     proposals = load_proposals(assigns[:kindred_id])
 
     {:ok, assign(socket, reports: reports, proposals: proposals)}
@@ -35,12 +32,10 @@ defmodule LoomkinWeb.ReflectionPanelComponent do
     workspace_id = socket.assigns[:workspace_id]
 
     if workspace_id do
-      socket = assign(socket, running: true)
-
-      # Run async — the orchestrator will publish a PubSub event when done
-      Loomkin.Kindred.Reflection.Orchestrator.run_on_demand(workspace_id, socket.assigns[:scope])
-
-      {:noreply, assign(socket, running: false)}
+      # Orchestrator.run_on_demand is async — it spawns a Task and returns :ok.
+      # PubSub event {:reflection_complete, ...} will notify the UI when done.
+      Orchestrator.run_on_demand(workspace_id, socket.assigns[:scope])
+      {:noreply, assign(socket, running: true)}
     else
       {:noreply, socket}
     end
@@ -79,29 +74,6 @@ defmodule LoomkinWeb.ReflectionPanelComponent do
     else
       {:noreply, socket}
     end
-  end
-
-  defp load_reports(nil, _user), do: []
-
-  defp load_reports(workspace_id, user) do
-    query =
-      from(s in Snippet,
-        where: s.type == :reflection_report,
-        where: fragment("?->>'workspace_id' = ?", s.content, ^workspace_id),
-        order_by: [desc: s.inserted_at],
-        limit: 10
-      )
-
-    query =
-      if user do
-        where(query, [s], s.user_id == ^user.id)
-      else
-        query
-      end
-
-    Repo.all(query)
-  rescue
-    _ -> []
   end
 
   defp load_proposals(nil), do: []

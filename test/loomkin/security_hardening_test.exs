@@ -127,6 +127,11 @@ defmodule Loomkin.SecurityHardeningTest do
       assert :ok = ShellCommand.validate_command("elixir -e 'IO.puts(1)'")
     end
 
+    test "rejects newline chaining" do
+      assert {:error, _} = ShellCommand.validate_command("mix test\necho pwned")
+      assert {:error, _} = ShellCommand.validate_command("mix test\r\necho pwned")
+    end
+
     test "rejects disallowed prefix" do
       assert {:error, _} = ShellCommand.validate_command("rm -rf /")
       assert {:error, _} = ShellCommand.validate_command("curl evil.com")

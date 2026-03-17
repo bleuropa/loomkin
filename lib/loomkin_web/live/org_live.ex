@@ -54,6 +54,11 @@ defmodule LoomkinWeb.OrgLive do
     end
   end
 
+  def handle_params(_params, _uri, %{assigns: %{live_action: :new}} = socket) do
+    form = %Loomkin.Schemas.Organization{} |> Ecto.Changeset.change() |> to_form()
+    {:noreply, assign(socket, view: :new, form: form)}
+  end
+
   def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
   def handle_event("new_org", _params, socket) do
@@ -64,10 +69,7 @@ defmodule LoomkinWeb.OrgLive do
   def handle_event("create_org", %{"organization" => attrs}, socket) do
     scope = socket.assigns.current_scope
 
-    case Organizations.create_organization(
-           scope,
-           Map.new(attrs, fn {k, v} -> {String.to_existing_atom(k), v} end)
-         ) do
+    case Organizations.create_organization(scope, attrs) do
       {:ok, org} ->
         {:noreply,
          socket
@@ -92,28 +94,38 @@ defmodule LoomkinWeb.OrgLive do
     {:noreply, assign(socket, member_role: val)}
   end
 
+  @allowed_ui_roles %{"member" => :member, "admin" => :admin}
+
   def handle_event("add_member", _params, socket) do
     email = String.trim(socket.assigns.member_email)
-    role = String.to_existing_atom(socket.assigns.member_role)
 
-    case Loomkin.Repo.get_by(Loomkin.Accounts.User, email: email) do
-      nil ->
-        {:noreply, put_flash(socket, :error, "User not found: #{email}")}
+    case Map.fetch(@allowed_ui_roles, socket.assigns.member_role) do
+      {:ok, role} ->
+        case Loomkin.Repo.get_by(Loomkin.Accounts.User, email: email) do
+          nil ->
+            {:noreply, put_flash(socket, :error, "User not found: #{email}")}
 
-      user ->
-        scope = socket.assigns.current_scope
+          user ->
+            scope = socket.assigns.current_scope
 
-        case Organizations.add_member(scope, socket.assigns.org, user, role) do
-          {:ok, _} ->
-            members = Organizations.list_members(socket.assigns.org)
+            case Organizations.add_member(scope, socket.assigns.org, user, role) do
+              {:ok, _} ->
+                members = Organizations.list_members(socket.assigns.org)
 
-            {:noreply,
-             assign(socket, members: members, member_email: "")
-             |> put_flash(:info, "Member added")}
+                {:noreply,
+                 assign(socket, members: members, member_email: "")
+                 |> put_flash(:info, "Member added")}
 
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, "Failed to add member")}
+              {:error, :invalid_role} ->
+                {:noreply, put_flash(socket, :error, "Invalid role")}
+
+              {:error, _} ->
+                {:noreply, put_flash(socket, :error, "Failed to add member")}
+            end
         end
+
+      :error ->
+        {:noreply, put_flash(socket, :error, "Invalid role")}
     end
   end
 
@@ -125,6 +137,9 @@ defmodule LoomkinWeb.OrgLive do
       :ok ->
         members = Organizations.list_members(socket.assigns.org)
         {:noreply, assign(socket, members: members) |> put_flash(:info, "Member removed")}
+
+      {:error, :cannot_remove_owner} ->
+        {:noreply, put_flash(socket, :error, "Cannot remove the organization owner")}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Failed to remove member")}

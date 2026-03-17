@@ -154,19 +154,26 @@ defmodule Loomkin.Kindred.Resolver do
   end
 
   defp resolve_active_kindred(nil, nil), do: nil
-  defp resolve_active_kindred(nil, user), do: KindredContext.active_kindred_for_user(user)
+
+  defp resolve_active_kindred(nil, user) when not is_nil(user),
+    do: KindredContext.active_kindred_for_user(user)
 
   defp resolve_active_kindred(%{organization_id: org_id}, user) when is_binary(org_id) do
     org = Loomkin.Organizations.get_organization(org_id)
 
     if org do
-      KindredContext.active_kindred_for_org(org) || KindredContext.active_kindred_for_user(user)
+      KindredContext.active_kindred_for_org(org) || user_kindred_or_nil(user)
     else
-      KindredContext.active_kindred_for_user(user)
+      user_kindred_or_nil(user)
     end
   end
+
+  defp resolve_active_kindred(_workspace, nil), do: nil
 
   defp resolve_active_kindred(_workspace, user) do
     KindredContext.active_kindred_for_user(user)
   end
+
+  defp user_kindred_or_nil(nil), do: nil
+  defp user_kindred_or_nil(user), do: KindredContext.active_kindred_for_user(user)
 end

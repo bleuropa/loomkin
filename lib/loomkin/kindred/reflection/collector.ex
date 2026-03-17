@@ -10,6 +10,8 @@ defmodule Loomkin.Kindred.Reflection.Collector do
   - Capabilities ETS (per-agent success rates by task type)
   """
 
+  require Logger
+
   import Ecto.Query
 
   alias Loomkin.Repo
@@ -71,7 +73,9 @@ defmodule Loomkin.Kindred.Reflection.Collector do
         %{total: length(metrics), by_model: by_model, by_task_type: by_task_type}
     end
   rescue
-    _ -> %{total: 0, by_model: %{}, by_task_type: %{}}
+    e ->
+      Logger.warning("[Reflection.Collector] collect_metrics failed: #{inspect(e)}")
+      %{total: 0, by_model: %{}, by_task_type: %{}}
   end
 
   defp collect_failure_patterns(workspace_id) do
@@ -91,7 +95,12 @@ defmodule Loomkin.Kindred.Reflection.Collector do
             }
           end)
         rescue
-          _ -> []
+          e ->
+            Logger.warning(
+              "[Reflection.Collector] collect_failure_patterns failed: #{inspect(e)}"
+            )
+
+            []
         end
     end
   end
@@ -115,7 +124,12 @@ defmodule Loomkin.Kindred.Reflection.Collector do
             }
           end)
         rescue
-          _ -> []
+          e ->
+            Logger.warning(
+              "[Reflection.Collector] collect_decision_outcomes failed: #{inspect(e)}"
+            )
+
+            []
         end
     end
   end
@@ -135,7 +149,9 @@ defmodule Loomkin.Kindred.Reflection.Collector do
       }
     end)
   rescue
-    _ -> []
+    e ->
+      Logger.warning("[Reflection.Collector] collect_task_journal failed: #{inspect(e)}")
+      []
   end
 
   defp collect_capability_scores(workspace_id) do
@@ -160,7 +176,9 @@ defmodule Loomkin.Kindred.Reflection.Collector do
       team_id -> team_id
     end
   rescue
-    _ -> nil
+    e ->
+      Logger.warning("[Reflection.Collector] get_workspace_team_id failed: #{inspect(e)}")
+      nil
   end
 
   defp avg([], _field), do: 0
