@@ -1,0 +1,13 @@
+Port 22
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+AllowUsers loomkin
+LogLevel INFO
+X11Forwarding no
+PrintMotd yes
+AcceptEnv LANG LC_*
+
+# Enable PAM for proper user authentication
+UsePAM yes

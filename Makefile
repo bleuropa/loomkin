@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help setup dev test format db.up db.down db.reset
+.PHONY: help setup dev test format db.up db.down db.reset dev.up dev.down
 
 help:          ## Show available targets
 	@grep -E '^[a-zA-Z_.-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -36,3 +36,10 @@ db.down:       ## Stop the Postgres container
 
 db.reset:      ## Reset the database (drop, create, migrate, seed)
 	mix ecto.reset
+
+dev.up:   ## Start the shared dev container
+	docker compose -f .devcontainer/docker-compose.yml up -d --build
+
+dev.down: ## Stop the shared dev container
+	docker compose -f .devcontainer/docker-compose.yml down
+

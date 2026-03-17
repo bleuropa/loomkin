@@ -1,0 +1,105 @@
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    container_name: loomkin-dev
+    hostname: loomkin-dev
+    ports:
+      - "2222:22"
+    networks:
+      loomkin-dev-net:
+        aliases:
+          - loomkin-dev
+          - loomkin-dev
+    volumes:
+      - dev-home:/home/loomkin
+      - dev-tailscale:/var/lib/tailscale
+      - ../:/home/loomkin/loomkin
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "sshd"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: loomkin-dev-postgres
+    ports:
+      - "5432:5432"
+    networks:
+      loomkin-dev-net:
+        ipv4_address: 172.19.0.2
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: loomkin_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  loomkin-dev-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/24
+
+volumes:
+  dev-home:
+    labels:
+      loomkin.dev/nas-mounted: "false"
+      loomkin.dev/purpose: "dev-container-home"
+      loomkin.dev/data-type: "user-home"
+  dev-tailscale:
+    labels:
+      loomkin.dev/nas-mounted: "false"
+      loomkin.dev/purpose: "dev-container-tailscale-state"
+      loomkin.dev/data-type: "application-state"
+  pgdata:
+    labels:
+      loomkin.dev/nas-mounted: "false"
+      loomkin.dev/purpose: "dev-container-postgres-data"
+      loomkin.dev/data-type: "database"
