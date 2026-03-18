@@ -186,8 +186,8 @@ defmodule LoomkinWeb.Live.WorkspaceLiveSpawnGateTest do
   # handle_info: spawn gate comms feed events
   # ---------------------------------------------------------------------------
 
-  describe "spawn gate comms feed events" do
-    test "SpawnGateRequested inserts a spawn_gate_opened comms event" do
+  describe "spawn gate signals do not insert comms events (routed to signals)" do
+    test "SpawnGateRequested does not insert comms event" do
       socket = build_test_socket(agent_name: "leader", gate_id: nil)
 
       sig = %Jido.Signal{
@@ -207,10 +207,10 @@ defmodule LoomkinWeb.Live.WorkspaceLiveSpawnGateTest do
 
       {:noreply, updated_socket} = WorkspaceLive.handle_info(sig, socket)
 
-      assert updated_socket.assigns.comms_event_count == socket.assigns.comms_event_count + 1
+      assert updated_socket.assigns.comms_event_count == socket.assigns.comms_event_count
     end
 
-    test "SpawnGateResolved inserts a spawn_gate_resolved comms event" do
+    test "SpawnGateResolved does not insert comms event" do
       socket = build_test_socket(agent_name: "leader", gate_id: "gate-comms-2")
 
       sig = %Jido.Signal{
@@ -224,10 +224,10 @@ defmodule LoomkinWeb.Live.WorkspaceLiveSpawnGateTest do
 
       {:noreply, updated_socket} = WorkspaceLive.handle_info(sig, socket)
 
-      assert updated_socket.assigns.comms_event_count == socket.assigns.comms_event_count + 1
+      assert updated_socket.assigns.comms_event_count == socket.assigns.comms_event_count
     end
 
-    test "SpawnGateResolved with denied outcome inserts denied comms event" do
+    test "SpawnGateResolved with denied outcome does not insert comms event" do
       socket = build_test_socket(agent_name: "leader", gate_id: "gate-comms-3")
 
       sig = %Jido.Signal{
@@ -241,7 +241,7 @@ defmodule LoomkinWeb.Live.WorkspaceLiveSpawnGateTest do
 
       {:noreply, updated_socket} = WorkspaceLive.handle_info(sig, socket)
 
-      assert updated_socket.assigns.comms_event_count == socket.assigns.comms_event_count + 1
+      assert updated_socket.assigns.comms_event_count == socket.assigns.comms_event_count
     end
   end
 

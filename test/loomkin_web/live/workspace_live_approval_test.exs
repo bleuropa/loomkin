@@ -232,7 +232,7 @@ defmodule LoomkinWeb.Live.WorkspaceLiveApprovalTest do
       assert %{gate_id: ^gate_id, question: ^question} = card.pending_approval
     end
 
-    test "ApprovalRequested pushes approval_gate_requested comms event" do
+    test "ApprovalRequested does not push comms event (routed to signals)" do
       gate_id = "gate-comms-001"
       agent_name = "worker-agent"
 
@@ -242,7 +242,7 @@ defmodule LoomkinWeb.Live.WorkspaceLiveApprovalTest do
 
       {:noreply, updated_socket} = WorkspaceLive.handle_info(signal, socket)
 
-      assert updated_socket.assigns.comms_event_count == 1
+      assert updated_socket.assigns.comms_event_count == 0
     end
 
     test "leader_approval_pending assign is cleared when ApprovalResolved signal arrives" do
@@ -284,7 +284,7 @@ defmodule LoomkinWeb.Live.WorkspaceLiveApprovalTest do
       assert is_nil(card[:pending_approval])
     end
 
-    test "ApprovalResolved pushes approval_gate_resolved comms event" do
+    test "ApprovalResolved does not push comms event (routed to signals)" do
       gate_id = "gate-resolved-comms-001"
       agent_name = "worker-agent"
 
@@ -294,7 +294,7 @@ defmodule LoomkinWeb.Live.WorkspaceLiveApprovalTest do
 
       {:noreply, updated_socket} = WorkspaceLive.handle_info(signal, socket)
 
-      assert updated_socket.assigns.comms_event_count == 1
+      assert updated_socket.assigns.comms_event_count == 0
     end
   end
 
