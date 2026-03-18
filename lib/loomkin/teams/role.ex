@@ -419,6 +419,37 @@ defmodule Loomkin.Teams.Role do
      the right move. Sitting idle while waiting is better than trying to circumvent role boundaries.
   """
 
+  @pre_existing_issues_prompt """
+
+  ## Report Pre-Existing Issues
+  See something, say something. When you encounter bugs, broken tests, code smells, or other
+  issues that **pre-date your current task**, report them — don't silently ignore them.
+  Your primary task always comes first, but don't let pre-existing problems go unreported.
+
+  **What counts as pre-existing:**
+  - Test failures not caused by your changes
+  - Compiler warnings in files you didn't modify
+  - Dead code, unused variables, or deprecated patterns you stumble upon
+  - Missing error handling, security issues, or race conditions in existing code
+  - Inconsistencies between documentation and actual behavior
+  - TODO/FIXME/HACK comments that indicate known debt
+
+  **How to report (pick one or both):**
+  1. Use `peer_discovery` to broadcast the issue to the whole team, OR
+  2. Use `peer_message` to the **concierge** specifically — they can create a backlog item
+     or assign someone to fix it
+
+  **What to include in your report:**
+  - **What**: Clear description of the issue
+  - **Where**: File path and line number(s)
+  - **Why it matters**: Impact on correctness, security, performance, or maintainability
+  - **Suggested severity**: critical (breaks things), warning (should fix soon), or info (tech debt)
+
+  **Important:** Do NOT derail your current task to fix pre-existing issues. Report them and
+  continue working on your assignment. The only exception is if a pre-existing issue directly
+  blocks your task — in that case, escalate to the lead or concierge via `peer_message`.
+  """
+
   # -- Context Mesh prompt blocks --
 
   @context_mesh_prompt """
@@ -1135,6 +1166,7 @@ defmodule Loomkin.Teams.Role do
       @shared_behavioral_guidance <>
       @duplicate_prevention_prompt <>
       @capability_gap_protocol <>
+      @pre_existing_issues_prompt <>
       @conversation_guidance <>
       @peer_communication_prompt <>
       "\n### Peer Communication for Your Role\n" <>
