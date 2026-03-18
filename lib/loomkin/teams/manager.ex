@@ -488,7 +488,22 @@ defmodule Loomkin.Teams.Manager do
 
     import Ecto.Query, only: [from: 2]
 
-    case Repo.one(from w in Workspace, where: w.team_id == ^team_id, limit: 1) do
+    workspace =
+      try do
+        Repo.one(from w in Workspace, where: w.team_id == ^team_id, limit: 1)
+      rescue
+        _error ->
+          Logger.warning("[Manager] DB unavailable while recovering ETS for team=#{team_id}")
+
+          nil
+      catch
+        :exit, _reason ->
+          Logger.warning("[Manager] DB unavailable while recovering ETS for team=#{team_id}")
+
+          nil
+      end
+
+    case workspace do
       nil ->
         Logger.warning("[Manager] Cannot recover ETS for team=#{team_id}: no workspace found")
         :error

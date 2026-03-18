@@ -12,6 +12,7 @@ defmodule LoomkinWeb.ComposerComponentTest do
     queue_drawer: nil,
     scheduled_messages: [],
     agent_queues: %{},
+    agent_cards: %{},
     active_team_id: "team-1",
     session_id: "sess-1",
     show_agent_picker: false,

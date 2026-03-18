@@ -27,8 +27,8 @@ defmodule Loomkin.Conversations.IntegrationTest do
 
   describe "3-agent conversation lifecycle" do
     test "manual simulation with weaver produces summary", ctx do
-      # Subscribe to summary notifications
-      Phoenix.PubSub.subscribe(Loomkin.PubSub, "conversation:#{ctx.conv_id}:summary")
+      # Subscribe to collaboration signals to receive the ended signal with summary
+      Loomkin.Signals.subscribe("collaboration.**")
 
       # Start conversation server with max 1 round (temporary so it won't restart after :stop)
       start_supervised!(
@@ -72,8 +72,17 @@ defmodule Loomkin.Conversations.IntegrationTest do
       # Weaver should receive summarize and stop
       assert_receive {:DOWN, ^weaver_ref, :process, ^weaver_pid, :normal}, 10_000
 
-      # Summary should arrive via PubSub
-      assert_receive {:conversation_summary, conv_id, summary}, 5_000
+      # Summary should arrive via Jido signal (ConversationEnded)
+      assert_receive {:signal,
+                      %Jido.Signal{
+                        type: "collaboration.conversation.ended",
+                        data: %{
+                          conversation_id: conv_id,
+                          summary: summary
+                        }
+                      }},
+                     5_000
+
       assert conv_id == ctx.conv_id
 
       # Verify summary structure (fallback summary since no real LLM)

@@ -61,9 +61,10 @@ defmodule Loomkin.Session.ArchitectTest do
   end
 
   describe "architect model resolution" do
-    test "default model config uses primary model" do
+    test "default model config returns nil when no model configured" do
       default = Loomkin.Config.get(:model, :default)
-      assert is_binary(default)
+      # Default model is nil until user selects one via the UI or .loomkin.toml
+      assert is_nil(default)
     end
 
     test "editor model defaults to nil (uses primary model)" do
