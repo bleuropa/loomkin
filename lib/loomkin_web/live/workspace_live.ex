@@ -2076,6 +2076,7 @@ defmodule LoomkinWeb.WorkspaceLive do
 
         socket
         |> append_activity_event(event)
+        |> push_to_thought_history(agent_name, msg.content, :message)
         |> update_agent_card(agent_name, %{
           content_type: :message,
           latest_content: msg.content,
@@ -2704,6 +2705,14 @@ defmodule LoomkinWeb.WorkspaceLive do
   def handle_info({:agent_stream_end, agent_name, _payload}, socket) do
     # Preserve :message content — only reset to :idle if currently :thinking
     card = get_in(socket.assigns, [:agent_cards, agent_name])
+
+    # Save completed thought to history
+    socket =
+      if card && card.content_type == :thinking && card.latest_content not in [nil, ""] do
+        push_to_thought_history(socket, agent_name, card.latest_content, :thinking)
+      else
+        socket
+      end
 
     socket =
       cond do
@@ -5315,6 +5324,33 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   defp update_agent_card(socket, _, _), do: socket
 
+  @thought_history_limit 50
+
+  defp push_to_thought_history(socket, agent_name, content, type) do
+    card = get_in(socket.assigns, [:agent_cards, agent_name])
+
+    if card do
+      trimmed = if is_binary(content), do: String.trim(content), else: ""
+
+      if trimmed != "" do
+        entry = %{
+          content: trimmed,
+          type: type,
+          timestamp: DateTime.utc_now()
+        }
+
+        history = Map.get(card, :thought_history, [])
+        updated_history = Enum.take(history ++ [entry], -@thought_history_limit)
+
+        update_agent_card(socket, agent_name, %{thought_history: updated_history})
+      else
+        socket
+      end
+    else
+      socket
+    end
+  end
+
   defp update_card_budget(socket, agent_name, payload) do
     cards = socket.assigns.agent_cards
 
@@ -5449,7 +5485,8 @@ defmodule LoomkinWeb.WorkspaceLive do
       budget_used: 0,
       budget_limit: 0,
       updated_at: DateTime.utc_now(),
-      new: true
+      new: true,
+      thought_history: []
     }
   end
 
