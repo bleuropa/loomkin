@@ -13,6 +13,9 @@ defmodule Loomkin.Config do
   @defaults %{
     model: %{
       default: "zai:glm-5",
+      # Cheaper/faster model for lightweight tasks (conversations, grunt work).
+      # Falls back to :default when nil.
+      fast: "zai:glm-4.5",
       # Secondary model for editor tasks — nil means "use the primary model".
       # Only used when an agent determines a lesser model is acceptable.
       # Users can set this in .loomkin.toml: [model] editor = "zai:glm-4.5"
@@ -305,7 +308,7 @@ defmodule Loomkin.Config do
 
   # Known config keys that may appear in .loomkin.toml
   @known_keys ~w(model permissions context decisions mcp web lsp repo shell channels auth
-    default weak architect editor auto_approve max_repo_map_tokens max_decision_context_tokens
+    default weak fast architect editor auto_approve max_repo_map_tokens max_decision_context_tokens
     reserved_output_tokens enabled enforce_pre_edit auto_log_commits
     allowlist_enabled allowlist
     servers name command args url port server_enabled watch_enabled

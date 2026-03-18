@@ -341,6 +341,13 @@ defmodule Loomkin.Tools.SpawnConversation do
     end
   end
 
+  defp fast_model(session_id) when is_binary(session_id) do
+    case Loomkin.Session.Manager.find_session(session_id) do
+      {:ok, pid} -> Loomkin.Session.get_fast_model(pid)
+      :error -> Loomkin.Config.get(:model, :fast) || Loomkin.Config.get(:model, :default)
+    end
+  end
+
   defp fast_model(_session_id) do
     Loomkin.Config.get(:model, :fast) || Loomkin.Config.get(:model, :default)
   end
