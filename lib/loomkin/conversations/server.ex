@@ -508,17 +508,24 @@ defmodule Loomkin.Conversations.Server do
   defp emit_ended(state) do
     participant_names = Enum.map(state.participants, & &1.name)
 
-    Signals.publish(
-      Loomkin.Signals.Collaboration.ConversationEnded.new!(%{
-        conversation_id: state.id,
-        team_id: state.team_id,
-        reason: format_reason(state.end_reason || :summary_complete),
-        rounds: state.current_round,
-        tokens_used: state.tokens_used,
-        participants: participant_names,
-        summary: state.summary
-      })
-    )
+    base = %{
+      conversation_id: state.id,
+      team_id: state.team_id,
+      reason: format_reason(state.end_reason || :summary_complete),
+      rounds: state.current_round,
+      tokens_used: state.tokens_used,
+      participants: participant_names,
+      summary: state.summary
+    }
+
+    signal_data =
+      if state.spawned_by do
+        Map.put(base, :spawned_by, state.spawned_by)
+      else
+        base
+      end
+
+    Signals.publish(Loomkin.Signals.Collaboration.ConversationEnded.new!(signal_data))
   end
 
   defp format_reason(reason) when is_atom(reason), do: to_string(reason)

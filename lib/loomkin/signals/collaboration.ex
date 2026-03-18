@@ -116,7 +116,8 @@ defmodule Loomkin.Signals.Collaboration do
         rounds: [type: :integer, required: true],
         tokens_used: [type: :integer, required: true],
         participants: [type: {:list, :string}, required: false],
-        summary: [type: :map, required: false]
+        summary: [type: :map, required: false],
+        spawned_by: [type: :string, required: false]
       ]
   end
 

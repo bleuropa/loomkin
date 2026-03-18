@@ -372,13 +372,6 @@ defmodule LoomkinWeb.ComposerComponent do
 
   # --- Helpers ---
 
-  defp agent_picker_dot_class(:idle), do: "bg-green-400"
-  defp agent_picker_dot_class(:thinking), do: "bg-violet-400 status-dot-thinking"
-  defp agent_picker_dot_class(:executing_tool), do: "bg-blue-400"
-  defp agent_picker_dot_class(:error), do: "bg-red-400"
-  defp agent_picker_dot_class(:blocked), do: "bg-amber-400"
-  defp agent_picker_dot_class(_), do: "bg-gray-400"
-
   defp agent_color(name), do: LoomkinWeb.AgentColors.agent_color(name)
 
   defp role_icon_for(agent_name, agent_cards) when is_map(agent_cards) do

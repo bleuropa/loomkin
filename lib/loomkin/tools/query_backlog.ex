@@ -32,7 +32,7 @@ defmodule Loomkin.Tools.QueryBacklog do
       limit: [type: :string, doc: "Max results to return (default 20)"]
     ]
 
-  import Loomkin.Tool, only: [param!: 2, param: 2, param: 3]
+  import Loomkin.Tool, only: [param!: 2, param: 2]
 
   alias Loomkin.Backlog
 

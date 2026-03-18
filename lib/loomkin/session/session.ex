@@ -650,7 +650,8 @@ defmodule Loomkin.Session do
   end
 
   defp default_model do
-    Application.get_env(:loomkin, :default_model, "zai:glm-5")
+    Application.get_env(:loomkin, :default_model) ||
+      Loomkin.Config.get(:model, :default)
   end
 
   defp maybe_put(map, _key, nil), do: map

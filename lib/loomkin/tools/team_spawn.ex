@@ -310,47 +310,4 @@ defmodule Loomkin.Tools.TeamSpawn do
         nil
     end
   end
-
-  defp format_personal_manifest(
-         my_name,
-         team_name,
-         purpose,
-         teammates,
-         requesting_agent,
-         parent_team_id
-       ) do
-    teammate_lines =
-      teammates
-      |> Enum.map(fn %{name: name, role: role} ->
-        comm_hint = communication_hint(role)
-        "- **#{name}** (#{role})#{comm_hint}"
-      end)
-      |> Enum.join("\n")
-
-    requester_section =
-      if requesting_agent && parent_team_id do
-        """
-
-        **Spawned by:** #{requesting_agent} (in parent team #{parent_team_id}).
-        Report your results back to #{requesting_agent} via cross_team_query or peer_complete_task.
-        If you need clarification on your task, ask #{requesting_agent} directly.
-        """
-      else
-        ""
-      end
-
-    """
-    [Team Briefing] You are #{my_name} in team "#{team_name}".
-    Purpose: #{purpose}
-
-    Your teammates:
-    #{teammate_lines}
-    #{requester_section}
-    Use peer_message to communicate. Check search_keepers for prior context before starting work.
-    """
-  end
-
-  defp communication_hint(:weaver), do: " — your knowledge coordinator, keep them updated"
-  defp communication_hint(:lead), do: " — your team lead"
-  defp communication_hint(_), do: ""
 end

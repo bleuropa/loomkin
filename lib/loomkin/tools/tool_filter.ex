@@ -103,6 +103,12 @@ defmodule Loomkin.Tools.ToolFilter do
     Loomkin.Tools.MergeGraph
   ]
 
+  @backlog_tools [
+    Loomkin.Tools.QueryBacklog,
+    Loomkin.Tools.CreateBacklogItem,
+    Loomkin.Tools.UpdateBacklogItem
+  ]
+
   # -- Tool-to-category mapping (built from the lists above) --
 
   @tool_categories (for {cat, tools} <- [
@@ -110,6 +116,7 @@ defmodule Loomkin.Tools.ToolFilter do
                           # coordination before lead (TeamProgress/TeamComms are coordination tools)
                           coordination: @coordination_tools,
                           consensus: @consensus_tools,
+                          backlog: @backlog_tools,
                           read: @read_tools,
                           write: @write_tools,
                           exec: @exec_tools,
@@ -144,7 +151,8 @@ defmodule Loomkin.Tools.ToolFilter do
       :cross_team,
       :investigation,
       :graph_merge,
-      :consensus
+      :consensus,
+      :backlog
     ],
     concierge: [
       :read,
@@ -157,7 +165,8 @@ defmodule Loomkin.Tools.ToolFilter do
       :cross_team,
       :investigation,
       :graph_merge,
-      :consensus
+      :consensus,
+      :backlog
     ],
     weaver: [:peer, :decision, :coordination, :cross_team, :consensus, :graph_merge]
   }
@@ -270,6 +279,7 @@ defmodule Loomkin.Tools.ToolFilter do
       :cross_team -> @cross_team_tools
       :investigation -> @investigation_tools
       :graph_merge -> @graph_merge_tools
+      :backlog -> @backlog_tools
       _ -> []
     end
   end

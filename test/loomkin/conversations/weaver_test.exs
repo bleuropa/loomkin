@@ -75,8 +75,8 @@ defmodule Loomkin.Conversations.WeaverTest do
         restart: :temporary
       )
 
-      # Subscribe to summary notifications
-      Phoenix.PubSub.subscribe(Loomkin.PubSub, "conversation:#{ctx.conv_id}:summary")
+      # Subscribe to the Jido Signal Bus for conversation ended signals
+      {:ok, _sub_id} = Loomkin.Signals.subscribe("collaboration.conversation.ended")
 
       # Start the weaver
       weaver_pid =
@@ -101,9 +101,12 @@ defmodule Loomkin.Conversations.WeaverTest do
       # Weaver should stop after summarizing
       assert_receive {:DOWN, ^ref, :process, ^weaver_pid, :normal}, 5_000
 
-      # Summary should be delivered via PubSub
-      assert_receive {:conversation_summary, conv_id, summary}, 5_000
-      assert conv_id == ctx.conv_id
+      # Summary should be delivered via the ConversationEnded signal (emitted by Server.attach_summary)
+      assert_receive {:signal, %Jido.Signal{type: "collaboration.conversation.ended"} = sig},
+                     5_000
+
+      assert sig.data.conversation_id == ctx.conv_id
+      summary = sig.data.summary
 
       # Verify summary structure
       assert summary.topic == "Cache architecture"

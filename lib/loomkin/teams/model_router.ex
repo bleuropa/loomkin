@@ -28,15 +28,22 @@ defmodule Loomkin.Teams.ModelRouter do
 
   @table :loomkin_model_router
 
-  # Legacy tier names kept for backward-compatible hint resolution
-  @legacy_tier_models %{
-    grunt: "zai:glm-4.5",
-    standard: "zai:glm-5",
-    expert: "zai:glm-5",
-    architect: "zai:glm-5"
-  }
+  # Legacy tier names kept for backward-compatible hint resolution.
+  # These are resolved dynamically via the user's configured default model.
+  defp legacy_tier_models do
+    default = Loomkin.Config.get(:model, :default)
 
-  @fallback_model "zai:glm-5"
+    %{
+      grunt: Loomkin.Config.get(:model, :fast) || default,
+      standard: default,
+      expert: default,
+      architect: default
+    }
+  end
+
+  defp fallback_model do
+    Loomkin.Config.get(:model, :default)
+  end
 
   # ── ETS initialization ───────────────────────────────────────────────
 
@@ -230,13 +237,13 @@ defmodule Loomkin.Teams.ModelRouter do
   Return the user's configured default model.
 
   Reads `[model].default` from `.loomkin.toml` via `Loomkin.Config`, falling back
-  to `#{@fallback_model}` if Config is not running or not set.
+  to the configured default if Config is not running or not set.
   """
   def default_model do
     case safe_config_get(:model, :default) do
-      nil -> @fallback_model
+      nil -> fallback_model()
       model when is_binary(model) -> model
-      _ -> @fallback_model
+      _ -> fallback_model()
     end
   end
 
@@ -252,10 +259,10 @@ defmodule Loomkin.Teams.ModelRouter do
   def configured_tiers do
     case safe_config_get(:teams, :models) do
       %{} = models ->
-        Map.merge(@legacy_tier_models, atomize_tier_keys(models))
+        Map.merge(legacy_tier_models(), atomize_tier_keys(models))
 
       _ ->
-        @legacy_tier_models
+        legacy_tier_models()
     end
   end
 

@@ -342,7 +342,7 @@ defmodule Loomkin.Tools.SpawnConversation do
   end
 
   defp fast_model(_session_id) do
-    Loomkin.Config.get(:model, :fast) || "zai:glm-4.5"
+    Loomkin.Config.get(:model, :fast) || Loomkin.Config.get(:model, :default)
   end
 
   defp config_max_personas do

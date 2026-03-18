@@ -509,12 +509,12 @@ defmodule Loomkin.Session.ContextWindow do
   defp weak_model do
     if Code.ensure_loaded?(Loomkin.Config) do
       try do
-        Loomkin.Config.get(:model, :editor) || "zai:glm-4.5"
+        Loomkin.Config.get(:model, :editor) || Loomkin.Config.get(:model, :default)
       rescue
-        _ -> "zai:glm-4.5"
+        _ -> Loomkin.Config.get(:model, :default)
       end
     else
-      "zai:glm-4.5"
+      "google_vertex:claude-sonnet-4-6@default"
     end
   end
 

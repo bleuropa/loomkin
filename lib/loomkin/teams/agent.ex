@@ -1723,6 +1723,29 @@ defmodule Loomkin.Teams.Agent do
     end
   end
 
+  def handle_info(%Jido.Signal{type: "collaboration.conversation.ended"} = sig, state) do
+    spawned_by = sig.data[:spawned_by]
+    agent_name = to_string(state.name)
+
+    if spawned_by == agent_name do
+      summary = sig.data[:summary] || %{}
+      conversation_id = sig.data[:conversation_id]
+      topic = summary[:topic] || "unknown"
+
+      synthesis_text = format_conversation_synthesis(summary, conversation_id, topic)
+
+      synthesis_msg = %{
+        role: :user,
+        content: "[Conversation synthesis]: #{synthesis_text}"
+      }
+
+      state = %{state | messages: state.messages ++ [synthesis_msg]}
+      {:noreply, maybe_wake_idle(state)}
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info(%Jido.Signal{type: "team.dissolved"}, state) do
     {:noreply, state}
   end
@@ -4087,5 +4110,27 @@ defmodule Loomkin.Teams.Agent do
     e ->
       Logger.warning("[Kin:agent] broadcast_team failed: #{inspect(e)}")
       :ok
+  end
+
+  defp format_conversation_synthesis(summary, conversation_id, topic) do
+    parts = ["Topic: #{topic}", "Conversation ID: #{conversation_id}"]
+
+    parts =
+      parts ++
+        format_summary_list("Key points", summary[:key_points]) ++
+        format_summary_list("Consensus", summary[:consensus]) ++
+        format_summary_list("Disagreements", summary[:disagreements]) ++
+        format_summary_list("Open questions", summary[:open_questions]) ++
+        format_summary_list("Recommended actions", summary[:recommended_actions])
+
+    Enum.join(parts, "\n")
+  end
+
+  defp format_summary_list(_label, nil), do: []
+  defp format_summary_list(_label, []), do: []
+
+  defp format_summary_list(label, items) when is_list(items) do
+    formatted = Enum.map_join(items, "\n", fn item -> "  - #{item}" end)
+    ["#{label}:\n#{formatted}"]
   end
 end

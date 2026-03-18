@@ -63,7 +63,11 @@ defmodule Loomkin.Tools.SubAgent do
       {:error, reason} -> {:error, "Sub-agent failed: #{inspect(reason)}"}
     end
   rescue
-    e -> {:error, "Sub-agent error: #{Exception.message(e)}"}
+    e in [RuntimeError, ArgumentError] ->
+      {:error, "Sub-agent error: #{Exception.message(e)}"}
+
+    e ->
+      {:error, "Sub-agent error: #{inspect(e)}"}
   end
 
   defp run_sub_loop(_messages, _tool_defs, _model, _context, iteration)
@@ -115,9 +119,11 @@ defmodule Loomkin.Tools.SubAgent do
 
         result_text =
           case result do
-            {:ok, %{result: text}} -> text
+            {:ok, %{result: text}} when is_binary(text) -> text
             {:ok, text} when is_binary(text) -> text
-            {:error, text} -> "Error: #{text}"
+            {:error, text} when is_binary(text) -> "Error: #{text}"
+            {:error, %{message: msg}} -> "Error: #{msg}"
+            {:error, other} -> "Error: #{inspect(other)}"
           end
 
         acc ++ [ReqLLM.Context.tool_result(tool_call_id, result_text)]
@@ -140,7 +146,12 @@ defmodule Loomkin.Tools.SubAgent do
   defp execute_read_tool(name, args, context) do
     case Jido.AI.ToolAdapter.lookup_action(name, @read_only_tools) do
       {:ok, tool_module} ->
-        Jido.Exec.run(tool_module, args, context, timeout: 30_000)
+        case Jido.Exec.run(tool_module, args, context, timeout: 30_000) do
+          {:ok, result} -> {:ok, result}
+          {:error, %{message: msg}} -> {:error, msg}
+          {:error, reason} when is_binary(reason) -> {:error, reason}
+          {:error, reason} -> {:error, inspect(reason)}
+        end
 
       {:error, :not_found} ->
         {:error, "Tool '#{name}' not available in sub-agent (read-only tools only)"}
@@ -164,12 +175,13 @@ defmodule Loomkin.Tools.SubAgent do
   defp weak_model do
     if Code.ensure_loaded?(Loomkin.Config) do
       try do
-        Loomkin.Config.get(:model, :editor) || "zai:glm-4.5"
+        Loomkin.Config.get(:model, :editor) || Loomkin.Config.get(:model, :default)
       rescue
-        _ -> "zai:glm-4.5"
+        _ -> Loomkin.Config.get(:model, :default)
       end
     else
-      "zai:glm-4.5"
+      # Fallback during compilation — will be overridden at runtime
+      "google_vertex:claude-sonnet-4-6@default"
     end
   end
 end

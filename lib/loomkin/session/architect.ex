@@ -990,8 +990,7 @@ defmodule Loomkin.Session.Architect do
     # Use the user-selected model (passed via opts from the session).
     # Falls back to config, then a sensible default.
     Keyword.get(opts, :architect_model) ||
-      Loomkin.Config.get(:model, :default) ||
-      "zai:glm-5"
+      Loomkin.Config.get(:model, :default)
   end
 
   defp resolve_editor_model(opts) do

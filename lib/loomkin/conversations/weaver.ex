@@ -74,14 +74,8 @@ defmodule Loomkin.Conversations.Weaver do
     Process.demonitor(ref, [:flush])
     Server.attach_summary(state.conversation_id, summary)
 
-    # Notify the spawning agent via PubSub if specified
-    if state.spawned_by do
-      Phoenix.PubSub.broadcast(
-        Loomkin.PubSub,
-        "conversation:#{state.conversation_id}:summary",
-        {:conversation_summary, state.conversation_id, summary}
-      )
-    end
+    # The ConversationServer emits a collaboration.conversation.ended signal
+    # with the summary, which the spawning agent handles via its signal subscription.
 
     {:stop, :normal, state}
   end
@@ -106,13 +100,8 @@ defmodule Loomkin.Conversations.Weaver do
 
     Server.attach_summary(state.conversation_id, fallback)
 
-    if state.spawned_by do
-      Phoenix.PubSub.broadcast(
-        Loomkin.PubSub,
-        "conversation:#{state.conversation_id}:summary",
-        {:conversation_summary, state.conversation_id, fallback}
-      )
-    end
+    # The ConversationServer emits a collaboration.conversation.ended signal
+    # with the fallback summary, which the spawning agent handles via its signal subscription.
 
     {:stop, :normal, state}
   end
