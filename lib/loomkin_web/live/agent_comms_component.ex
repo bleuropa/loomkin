@@ -9,8 +9,8 @@ defmodule LoomkinWeb.AgentCommsComponent do
 
   use Phoenix.Component
 
-  alias Phoenix.LiveView.JS
   alias LoomkinWeb.AgentColors
+  alias Phoenix.LiveView.JS
 
   @type_config %{
     message: %{

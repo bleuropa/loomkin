@@ -5804,12 +5804,10 @@ defmodule LoomkinWeb.WorkspaceLive do
   defp load_channel_bindings(nil), do: []
 
   defp load_channel_bindings(team_id) do
-    try do
-      Loomkin.Channels.Bindings.list_bindings_for_team(team_id)
-    rescue
-      _e ->
-        []
-    end
+    Loomkin.Channels.Bindings.list_bindings_for_team(team_id)
+  rescue
+    _e ->
+      []
   end
 
   # agent_is_working?/2 moved to ComposerComponent
