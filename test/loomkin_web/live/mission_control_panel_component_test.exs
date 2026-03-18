@@ -20,9 +20,8 @@ defmodule LoomkinWeb.MissionControlPanelComponentTest do
 
   test "renders waiting state when no agents" do
     html = render_component(LoomkinWeb.MissionControlPanelComponent, @base_assigns)
-    assert html =~ "C"
-    assert html =~ "Concierge"
-    assert html =~ "Send a message to get started"
+    assert html =~ "Your concierge is ready"
+    assert html =~ "Send a message below and your kin team will assemble to help."
   end
 
   test "renders kin section header" do

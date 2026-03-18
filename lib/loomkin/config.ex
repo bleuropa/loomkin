@@ -40,7 +40,7 @@ defmodule Loomkin.Config do
         ~w(mix elixir iex git cat head tail ls find grep rg sed awk echo mkdir cp mv touch node npm npx yarn bun cargo rustc go python python3 pip ruby gem)
     },
     agents: %{
-      max_iterations: 25,
+      max_iterations: 100,
       max_rate_limit_retries: 3,
       llm_max_retries: 3,
       llm_base_backoff_ms: 1_000,

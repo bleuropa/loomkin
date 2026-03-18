@@ -73,9 +73,6 @@ defmodule LoomkinWeb.WorkspaceLive do
         # Cached roster data (recomputed on roster refresh, not per render)
         cached_agents: [],
         cached_tasks: [],
-        cached_budget: %{spent: 0.0, limit: 5.0},
-        budget_pct: 0,
-        budget_bar_color_class: "bg-emerald-500",
         last_user_message: nil,
         failed_message_idx: nil,
         # Message queue UI state
@@ -3686,287 +3683,287 @@ defmodule LoomkinWeb.WorkspaceLive do
       </div>
 
       <%!-- ── Header ── --%>
-      <header class="flex-shrink-0 flex items-center gap-3 px-3 py-1.5 sm:px-4 lg:px-5 relative bg-surface-1 border-b border-subtle z-50">
-        <%!-- Brand mark — pulses when system is active --%>
-        <a
-          href="/"
-          aria-label="Loomkin"
-          class={[
-            "flex items-center gap-2 flex-shrink-0 group",
-            @status in [:thinking, :executing_tool] && "brand-active"
-          ]}
-          title={status_label(@status, @current_tool_name)}
-        >
-          <svg
-            class="w-5 h-5 transition-transform duration-200 group-hover:scale-110"
-            viewBox="0 0 32 32"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            aria-hidden="true"
-          >
-            <polygon points="10,2 6,10 15,7" fill="#5B21B6" />
-            <polygon points="22,2 26,10 17,7" fill="#5B21B6" />
-            <polygon points="6,10 4,20 12,15" fill="#4B0082" />
-            <polygon points="26,10 28,20 20,15" fill="#4B0082" />
-            <polygon points="12,15 16,7 20,15" fill="#7C3AED" />
-            <polygon points="12,15 16,24 20,15" fill="#4B0082" />
-            <circle cx="12" cy="14" r="3" fill="#F59E0B" />
-            <circle cx="20" cy="14" r="3" fill="#F59E0B" />
-          </svg>
-        </a>
+      <header class="flex-shrink-0 relative z-50 header-refined">
+        <div class="flex items-center gap-2 px-4 py-2 sm:px-5 lg:px-6">
+          <%!-- Left zone: Brand + Project --%>
+          <div class="flex items-center gap-3 flex-shrink-0">
+            <%!-- Brand mark — pulses when system is active --%>
+            <a
+              href="/"
+              aria-label="Loomkin"
+              class={[
+                "flex items-center gap-2 flex-shrink-0 group",
+                @status in [:thinking, :executing_tool] && "brand-active"
+              ]}
+              title={status_label(@status, @current_tool_name)}
+            >
+              <svg
+                class="w-5 h-5 transition-transform duration-200 group-hover:scale-110"
+                viewBox="0 0 32 32"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+              >
+                <polygon points="10,2 6,10 15,7" fill="#5B21B6" />
+                <polygon points="22,2 26,10 17,7" fill="#5B21B6" />
+                <polygon points="6,10 4,20 12,15" fill="#4B0082" />
+                <polygon points="26,10 28,20 20,15" fill="#4B0082" />
+                <polygon points="12,15 16,7 20,15" fill="#7C3AED" />
+                <polygon points="12,15 16,24 20,15" fill="#4B0082" />
+                <circle cx="12" cy="14" r="3" fill="#F59E0B" />
+                <circle cx="20" cy="14" r="3" fill="#F59E0B" />
+              </svg>
+            </a>
 
-        <%!-- Thinking model selector --%>
-        <.live_component
-          module={LoomkinWeb.ModelSelectorComponent}
-          id="thinking-model-selector"
-          model={@model}
-          selector_mode={:thinking}
-        />
-
-        <%!-- Fast model selector --%>
-        <.live_component
-          module={LoomkinWeb.ModelSelectorComponent}
-          id="fast-model-selector"
-          model={@fast_model || @model}
-          selector_mode={:fast}
-        />
-
-        <%!-- Trust policy selector --%>
-        <LoomkinWeb.TrustPolicyComponent.trust_policy_selector
-          current_preset={@trust_preset}
-          pending_count={length(@pending_permissions)}
-          expanded={@trust_expanded}
-          class="hidden md:flex"
-        />
-
-        <%!-- Project pill --%>
-        <button
-          phx-click="initiate_switch_project"
-          class="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] interactive press-down text-secondary"
-          title={@project_path}
-        >
-          <span class="relative flex h-1.5 w-1.5 flex-shrink-0">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-40">
-            </span>
-            <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
-          </span>
-          <span class="font-mono truncate max-w-[8rem]">{Path.basename(@project_path)}</span>
-        </button>
-
-        <%!-- Team indicator (mission control mode) --%>
-        <div
-          :if={@mode == :mission_control && @active_team_id}
-          class="hidden md:flex items-center gap-1.5"
-        >
-          <div class="flex items-center gap-1 px-2 py-0.5 rounded-md bg-brand-subtle">
-            <span class="text-brand">
-              <.icon name="hero-user-group-mini" class="w-3 h-3" />
-            </span>
-            <span class="text-[11px] font-medium text-brand">
-              {length(@cached_agents)}
-            </span>
+            <%!-- Project pill --%>
+            <button
+              phx-click="initiate_switch_project"
+              class="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-lg text-[11px] transition-all duration-200 hover:bg-surface-2/80 press-down group/project"
+              title={@project_path}
+            >
+              <span class="relative flex h-1.5 w-1.5 flex-shrink-0">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-40" />
+                <span class="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
+              </span>
+              <span class="font-mono truncate max-w-[10rem] text-secondary group-hover/project:text-primary transition-colors">
+                {Path.basename(@project_path)}
+              </span>
+            </button>
           </div>
-          <.live_component
-            module={LoomkinWeb.TeamTreeComponent}
-            id="team-tree"
-            team_tree={@team_tree}
-            root_team_id={@team_id}
-            active_team_id={@active_team_id}
-            agent_counts={compute_agent_counts(@cached_agents)}
-            team_names={@team_names}
-          />
-        </div>
 
-        <%!-- Spacer --%>
-        <div class="flex-1"></div>
+          <%!-- Separator --%>
+          <div class="hidden md:block w-px h-4 bg-border-subtle flex-shrink-0" />
 
-        <%!-- Right: Controls --%>
-        <div class="flex items-center gap-1">
-          <%!-- Cost --%>
-          <a
-            href="/dashboard"
-            class="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition-all duration-200 interactive text-muted"
-            title="View dashboard"
-          >
-            <span class="font-mono text-secondary">
-              ${format_cost(@session_cost)}
-            </span>
-            <span class="hidden font-mono sm:inline text-muted text-[10px]">
-              {format_tokens(@session_tokens)}t
-            </span>
-          </a>
-
-          <%!-- Settings --%>
-          <.link
-            navigate={~p"/settings"}
-            class="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition-all duration-200 interactive text-muted"
-            title="Settings"
-          >
-            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-              />
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-              />
-            </svg>
-          </.link>
-
-          <%!-- File Explorer --%>
-          <button
-            phx-click="toggle_file_drawer"
-            class={[
-              "flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] transition-colors hover:bg-surface-2",
-              if(@file_drawer_open, do: "text-brand", else: "text-muted")
-            ]}
-            data-tooltip="Files & diffs"
-            aria-label="Files & diffs"
-          >
-            <.icon name="hero-folder-open-mini" class="w-3.5 h-3.5" />
-          </button>
-
-          <%!-- Kin Management --%>
-          <button
-            phx-click="open_kin_panel"
-            class="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] transition-colors hover:bg-surface-2 text-muted"
-            data-tooltip="Manage kin templates"
-            aria-label="Manage kin templates"
-          >
-            <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-              <path d="M7 8a3 3 0 100-6 3 3 0 000 6zM14.5 9a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM1.615 16.428a1.224 1.224 0 01-.569-1.175 6.002 6.002 0 0111.908 0c.058.467-.172.92-.57 1.174A9.953 9.953 0 017 18a9.953 9.953 0 01-5.385-1.572zM14.5 16h-.106c.07-.297.088-.611.048-.933a7.47 7.47 0 00-1.588-3.755 4.502 4.502 0 015.874 2.636.818.818 0 01-.36.98A7.465 7.465 0 0114.5 16z" />
-            </svg>
-          </button>
-
-          <%!-- Social Panel (deployed mode only) --%>
-          <button
-            :if={@live_friends != [] || @social_panel_open}
-            phx-click="toggle_social_panel"
-            class={[
-              "flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] transition-colors hover:bg-surface-2",
-              if(@social_panel_open, do: "text-brand", else: "text-muted")
-            ]}
-            data-tooltip="Social"
-            aria-label="Social panel"
-          >
-            <.icon name="hero-user-group-mini" class="w-3.5 h-3.5" />
-            <span
-              :if={@live_friends != [] && !@social_panel_open}
-              class="w-1.5 h-1.5 rounded-full bg-emerald-400"
+          <%!-- Center zone: Model selectors + Trust + Team --%>
+          <div class="flex items-center gap-1.5">
+            <.live_component
+              module={LoomkinWeb.ModelSelectorComponent}
+              id="thinking-model-selector"
+              model={@model}
+              selector_mode={:thinking}
             />
-          </button>
+            <.live_component
+              module={LoomkinWeb.ModelSelectorComponent}
+              id="fast-model-selector"
+              model={@fast_model || @model}
+              selector_mode={:fast}
+            />
 
-          <%!-- Save Chat button moved to Session History modal --%>
+            <LoomkinWeb.TrustPolicyComponent.trust_policy_selector
+              current_preset={@trust_preset}
+              pending_count={length(@pending_permissions)}
+              expanded={@trust_expanded}
+              class="hidden md:flex"
+            />
+
+            <%!-- Team indicator (mission control mode) --%>
+            <div
+              :if={@mode == :mission_control && @active_team_id}
+              class="hidden md:flex items-center gap-1.5 ml-1"
+            >
+              <div class="flex items-center gap-1 px-2 py-0.5 rounded-md bg-brand-subtle/60">
+                <span class="text-brand">
+                  <.icon name="hero-user-group-mini" class="w-3 h-3" />
+                </span>
+                <span class="text-[11px] font-medium text-brand">
+                  {length(@cached_agents)}
+                </span>
+              </div>
+              <.live_component
+                module={LoomkinWeb.TeamTreeComponent}
+                id="team-tree"
+                team_tree={@team_tree}
+                root_team_id={@team_id}
+                active_team_id={@active_team_id}
+                agent_counts={compute_agent_counts(@cached_agents)}
+                team_names={@team_names}
+              />
+            </div>
+          </div>
+
+          <%!-- Spacer --%>
+          <div class="flex-1" />
+
+          <%!-- Right zone: Cost + Controls --%>
+          <div class="flex items-center gap-0.5">
+            <%!-- Cost — compact mono display --%>
+            <a
+              href="/dashboard"
+              class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] transition-all duration-200 hover:bg-surface-2/80 group/cost"
+              title="View dashboard"
+            >
+              <span class="font-mono tabular-nums text-secondary group-hover/cost:text-primary transition-colors">
+                ${format_cost(@session_cost)}
+              </span>
+              <span class="hidden sm:inline font-mono tabular-nums text-[10px] text-muted">
+                {format_tokens(@session_tokens)}t
+              </span>
+            </a>
+
+            <%!-- Separator --%>
+            <div class="hidden sm:block w-px h-4 bg-border-subtle mx-1" />
+
+            <%!-- Icon buttons --%>
+            <.link
+              navigate={~p"/settings"}
+              class="header-icon-btn"
+              data-tooltip="Settings"
+              aria-label="Settings"
+            >
+              <.icon name="hero-cog-6-tooth-mini" class="w-4 h-4" />
+            </.link>
+
+            <button
+              phx-click="toggle_file_drawer"
+              class={["header-icon-btn", @file_drawer_open && "header-icon-btn-active"]}
+              data-tooltip="Files & diffs"
+              aria-label="Files & diffs"
+            >
+              <.icon name="hero-folder-open-mini" class="w-4 h-4" />
+            </button>
+
+            <button
+              phx-click="open_kin_panel"
+              class="header-icon-btn"
+              data-tooltip="Manage kin"
+              aria-label="Manage kin templates"
+            >
+              <.icon name="hero-user-group-mini" class="w-4 h-4" />
+            </button>
+
+            <button
+              :if={@live_friends != [] || @social_panel_open}
+              phx-click="toggle_social_panel"
+              class={["header-icon-btn", @social_panel_open && "header-icon-btn-active"]}
+              data-tooltip="Social"
+              aria-label="Social panel"
+            >
+              <.icon name="hero-chat-bubble-left-right-mini" class="w-4 h-4" />
+              <span
+                :if={@live_friends != [] && !@social_panel_open}
+                class="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400"
+              />
+            </button>
+          </div>
         </div>
+
+        <%!-- Luminous status thread — thin line that changes based on system state --%>
+        <div class={[
+          "h-[2px] w-full transition-all duration-500",
+          cond do
+            @status in [:thinking, :executing_tool] -> "status-thread-active"
+            @streaming -> "status-thread-streaming"
+            true -> "status-thread-idle"
+          end
+        ]} />
       </header>
 
-      <%!-- Status Banner — always visible, loud indicators for debugging --%>
-      <div class={[
-        "flex-shrink-0 flex items-center gap-4 px-4 py-2 border-b text-sm font-medium",
-        if(@status in [:thinking, :executing_tool, :streaming],
-          do: "bg-violet-950/80 border-violet-500/40",
-          else: "bg-surface-1 border-subtle"
-        )
-      ]}>
-        <%!-- Status pill — large and color-coded --%>
-        <span class={status_banner_class(@status)}>
-          {status_label(@status, @current_tool_name)}
-        </span>
+      <%!-- Status Strip — refined, compact system status --%>
+      <div
+        :if={
+          @status != :idle || @architect_phase || @current_tool || @streaming || @cached_agents != []
+        }
+        class={[
+          "flex-shrink-0 flex items-center gap-3 px-5 py-1 text-xs transition-all duration-300",
+          if(@status in [:thinking, :executing_tool, :streaming],
+            do: "bg-violet-950/40",
+            else: "bg-surface-0/50"
+          )
+        ]}
+      >
+        <%!-- Status indicator --%>
+        <div class="flex items-center gap-2">
+          <span class={[
+            "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-medium transition-all duration-300",
+            status_strip_class(@status)
+          ]}>
+            <span class={[
+              "w-1.5 h-1.5 rounded-full flex-shrink-0",
+              cond do
+                @status in [:thinking, :executing_tool] -> "bg-violet-400 animate-pulse"
+                @streaming -> "bg-emerald-400 animate-pulse"
+                true -> "bg-zinc-500"
+              end
+            ]} />
+            <span class="text-[11px]">{status_label(@status, @current_tool_name)}</span>
+          </span>
+        </div>
 
-        <%!-- Architect phase — bold amber --%>
+        <%!-- Architect phase --%>
         <span
           :if={@architect_phase}
-          class="flex items-center gap-1.5 text-amber-300 font-mono font-bold"
+          class="flex items-center gap-1.5 text-[11px] text-amber-300/80 font-mono"
         >
-          <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
           {@architect_phase}
         </span>
 
-        <%!-- Current tool — bold blue with spinner --%>
+        <%!-- Current tool --%>
         <span
           :if={@current_tool}
-          class="flex items-center gap-1.5 text-blue-300 font-mono font-bold truncate max-w-[40%]"
+          class="flex items-center gap-1.5 text-[11px] text-blue-300/80 font-mono truncate max-w-[30%]"
         >
           <svg
-            class="animate-spin h-3.5 w-3.5 text-blue-400 flex-shrink-0"
+            class="animate-spin h-3 w-3 text-blue-400/60 flex-shrink-0"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"
           >
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4">
-            </circle>
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
             <path
               class="opacity-75"
               fill="currentColor"
               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-            >
-            </path>
+            />
           </svg>
           {@current_tool}
         </span>
 
-        <%!-- Streaming indicator — green pulse --%>
-        <span :if={@streaming} class="flex items-center gap-1.5 text-emerald-300 font-bold">
-          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> streaming
+        <%!-- Streaming --%>
+        <span :if={@streaming} class="flex items-center gap-1.5 text-[11px] text-emerald-300/80">
+          streaming
         </span>
+
+        <%!-- Spacer --%>
+        <div class="flex-1" />
 
         <%!-- Agent count --%>
-        <span :if={@cached_agents != []} class="flex items-center gap-1 text-purple-300">
-          <span class="text-purple-400">{length(@cached_agents)}</span> agents
+        <span :if={@cached_agents != []} class="text-[11px] text-muted font-mono tabular-nums">
+          {length(@cached_agents)} <span class="text-zinc-600">agents</span>
         </span>
 
-        <%!-- Session history toggle (mission control only) --%>
+        <%!-- Session history toggle --%>
         <button
           :if={@mode == :mission_control}
           phx-click="toggle_session_history"
           class={[
-            "ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors",
+            "flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] transition-colors",
             if(@show_session_history,
-              do: "bg-violet-600/30 text-violet-300",
-              else: "hover:bg-surface-2 text-zinc-400 hover:text-zinc-200"
+              do: "text-violet-300 bg-violet-500/15",
+              else: "text-zinc-500 hover:text-zinc-300 hover:bg-surface-2/50"
             )
           ]}
         >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            class="h-3.5 w-3.5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-          <span class="text-xs">history</span>
+          <.icon name="hero-clock-mini" class="w-3 h-3" />
+          <span>history</span>
         </button>
 
-        <%!-- Debug panel toggle — signal count badge --%>
+        <%!-- Debug signals toggle --%>
         <button
           phx-click="toggle_debug_panel"
           class={[
-            "flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors",
-            if(@mode != :mission_control, do: "ml-auto"),
+            "flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] transition-colors",
             if(@debug_panel_open,
-              do: "bg-violet-600/30 text-violet-300",
-              else: "hover:bg-surface-2 text-zinc-400 hover:text-zinc-200"
+              do: "text-violet-300 bg-violet-500/15",
+              else: "text-zinc-500 hover:text-zinc-300 hover:bg-surface-2/50"
             )
           ]}
         >
-          <span class="text-xs">signals</span>
+          <span>signals</span>
           <span class={[
-            "inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full text-[11px] font-bold",
+            "inline-flex items-center justify-center min-w-[1rem] h-4 px-1 rounded-full text-[10px] font-semibold",
             if(length(@debug_signals) > 0,
-              do: "bg-violet-500/40 text-violet-200",
-              else: "bg-zinc-700 text-zinc-500"
+              do: "bg-violet-500/30 text-violet-300",
+              else: "bg-zinc-800 text-zinc-600"
             )
           ]}>
             {length(@debug_signals)}
@@ -4006,7 +4003,7 @@ defmodule LoomkinWeb.WorkspaceLive do
             <%!-- Pending ask_user questions (also shown in solo mode) --%>
             <div
               :if={@pending_questions != []}
-              class="flex-shrink-0 px-3 py-2 border-t border-brand bg-surface-1"
+              class="flex-shrink-0 px-4 py-2.5 bg-violet-950/20"
             >
               <.live_component
                 module={LoomkinWeb.AskUserComponent}
@@ -4021,9 +4018,6 @@ defmodule LoomkinWeb.WorkspaceLive do
               input_text={@input_text}
               reply_target={Map.get(assigns, :reply_target)}
               cached_agents={@cached_agents}
-              cached_budget={@cached_budget}
-              budget_pct={@budget_pct}
-              budget_bar_color_class={@budget_bar_color_class}
               last_user_message={@last_user_message}
               queue_drawer={@queue_drawer}
               scheduled_messages={@scheduled_messages}
@@ -4053,7 +4047,7 @@ defmodule LoomkinWeb.WorkspaceLive do
           <%!-- Mission Control Left: Kin Cards + Comms (full height) + Composer --%>
           <div
             id="mc-main-container"
-            class="flex-1 flex flex-col min-w-0 min-h-0 border-r border-subtle overflow-hidden"
+            class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden"
           >
             <%!-- Kin cards + comms fill all available space --%>
             <div class="flex-1 overflow-hidden flex flex-col min-h-0">
@@ -4078,7 +4072,7 @@ defmodule LoomkinWeb.WorkspaceLive do
             <%!-- Pending ask_user questions --%>
             <div
               :if={@pending_questions != []}
-              class="flex-shrink-0 px-3 py-2 border-t border-brand bg-surface-1"
+              class="flex-shrink-0 px-4 py-2.5 bg-violet-950/20"
             >
               <.live_component
                 module={LoomkinWeb.AskUserComponent}
@@ -4094,9 +4088,6 @@ defmodule LoomkinWeb.WorkspaceLive do
               input_text={@input_text}
               reply_target={Map.get(assigns, :reply_target)}
               cached_agents={@cached_agents}
-              cached_budget={@cached_budget}
-              budget_pct={@budget_pct}
-              budget_bar_color_class={@budget_bar_color_class}
               last_user_message={@last_user_message}
               queue_drawer={@queue_drawer}
               scheduled_messages={@scheduled_messages}
@@ -4275,27 +4266,8 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   # render_mode/2 removed — inlined in render/1 with .live_component calls
   # card_grid_cols/1, any_agents_active?/2, render_ghost_cards/1, kin_potency_color/1
-  # render_budget_bar/1 moved to their respective extracted components
-
-  # render_last_message_strip/1, render_input_bar/1, format_decimal_cost/1 moved to ComposerComponent
-
-  # budget_pct/1 and budget_bar_color/1 stay here — used by refresh_roster/1 to compute assigns
-  defp budget_pct(%{spent: spent, limit: limit}) when limit > 0,
-    do: round(spent / limit * 100)
-
-  defp budget_pct(_), do: 0
-
-  defp budget_bar_color(%{spent: spent, limit: limit}) when limit > 0 do
-    pct = spent / limit * 100
-
-    cond do
-      pct >= 90 -> "bg-red-500"
-      pct >= 70 -> "bg-amber-500"
-      true -> "bg-emerald-500"
-    end
-  end
-
-  defp budget_bar_color(_), do: "bg-emerald-500"
+  # render_budget_bar/1 removed (budget bar UI removed)
+  # render_last_message_strip/1, render_input_bar/1 moved to ComposerComponent
 
   # --- Helpers ---
 
@@ -4334,31 +4306,24 @@ defmodule LoomkinWeb.WorkspaceLive do
   defp status_label(:unknown, _tool), do: "Unknown"
   defp status_label(status, _tool), do: to_string(status)
 
-  defp status_banner_class(:idle),
-    do: "px-3 py-1 rounded-full text-sm font-semibold bg-zinc-700/80 text-zinc-300"
+  # Refined status strip pills — subtle, compact
+  defp status_strip_class(:idle),
+    do: "bg-zinc-800/60 text-zinc-400"
 
-  defp status_banner_class(:thinking),
-    do:
-      "px-3 py-1 rounded-full text-sm font-bold bg-amber-500/20 text-amber-200 ring-2 ring-amber-500/50 animate-pulse"
+  defp status_strip_class(:thinking),
+    do: "bg-violet-500/10 text-violet-300"
 
-  defp status_banner_class(:streaming),
-    do:
-      "px-3 py-1 rounded-full text-sm font-bold bg-emerald-500/20 text-emerald-200 ring-2 ring-emerald-500/50 animate-pulse"
+  defp status_strip_class(:streaming),
+    do: "bg-emerald-500/10 text-emerald-300"
 
-  defp status_banner_class(:executing_tool),
-    do:
-      "px-3 py-1 rounded-full text-sm font-bold bg-blue-500/20 text-blue-200 ring-2 ring-blue-500/50 animate-pulse"
+  defp status_strip_class(:executing_tool),
+    do: "bg-blue-500/10 text-blue-300"
 
-  defp status_banner_class(:error),
-    do:
-      "px-3 py-1 rounded-full text-sm font-bold bg-red-500/20 text-red-200 ring-2 ring-red-500/50"
+  defp status_strip_class(:error),
+    do: "bg-red-500/10 text-red-300"
 
-  defp status_banner_class(:unknown),
-    do:
-      "px-3 py-1 rounded-full text-sm font-bold bg-red-500/20 text-red-200 ring-2 ring-red-500/50"
-
-  defp status_banner_class(_),
-    do: "px-3 py-1 rounded-full text-sm font-semibold bg-zinc-700/80 text-zinc-300"
+  defp status_strip_class(_),
+    do: "bg-zinc-800/60 text-zinc-400"
 
   defp append_debug_signal(socket, sig) do
     entry = %{
@@ -4631,7 +4596,6 @@ defmodule LoomkinWeb.WorkspaceLive do
     team_id = socket.assigns[:active_team_id]
     agents = roster_agents(team_id)
     tasks = roster_tasks(team_id)
-    budget = roster_budget(team_id)
 
     agent_names = Enum.map(agents, & &1.name)
 
@@ -4650,10 +4614,7 @@ defmodule LoomkinWeb.WorkspaceLive do
 
     assign(socket,
       cached_agents: agents,
-      cached_tasks: tasks,
-      cached_budget: budget,
-      budget_pct: budget_pct(budget),
-      budget_bar_color_class: budget_bar_color(budget)
+      cached_tasks: tasks
     )
   end
 
@@ -5685,21 +5646,6 @@ defmodule LoomkinWeb.WorkspaceLive do
 
   defp roster_tasks(team_id) do
     Loomkin.Teams.Tasks.list_all(team_id)
-  end
-
-  defp roster_budget(nil), do: %{spent: 0.0, limit: 5.0}
-
-  defp roster_budget(team_id) do
-    summary = Loomkin.Teams.CostTracker.team_cost_summary(team_id)
-
-    spent =
-      case summary[:total_cost_usd] do
-        %Decimal{} = d -> Decimal.to_float(d)
-        n when is_number(n) -> n / 1
-        _ -> 0.0
-      end
-
-    %{spent: spent, limit: 5.0}
   end
 
   defp load_kin_agents do

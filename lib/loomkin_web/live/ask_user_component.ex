@@ -13,7 +13,7 @@ defmodule LoomkinWeb.AskUserComponent do
 
   def render(assigns) do
     ~H"""
-    <div :if={@questions != []} class="space-y-3">
+    <div class="space-y-3">
       <div
         :for={q <- @questions}
         class="bg-gradient-to-br from-violet-900/30 to-purple-900/20 border border-violet-500/30 rounded-xl p-4 animate-scale-in shadow-lg shadow-violet-500/10"

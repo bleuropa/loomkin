@@ -57,16 +57,17 @@ defmodule LoomkinWeb.Live.AgentCardComponentTest do
   end
 
   describe "dual state indicator" do
-    test "renders pause_queued badge when pause_queued is true" do
+    test "renders force pause button when waiting_permission" do
       html = render_card(%{status: :waiting_permission, pause_queued: true})
 
-      assert html =~ "pause queued"
+      assert html =~ "force_pause_card_agent"
+      assert html =~ "Cancel pending permission?"
     end
 
-    test "does not render pause_queued badge when pause_queued is false" do
+    test "renders waiting_permission status without force pause when not queued" do
       html = render_card(%{status: :waiting_permission, pause_queued: false})
 
-      refute html =~ "pause queued"
+      assert html =~ "Waiting for permission"
     end
   end
 
@@ -114,17 +115,16 @@ defmodule LoomkinWeb.Live.AgentCardComponentTest do
   end
 
   describe "last-transition hint" do
-    test "renders previous_status hint" do
+    test "renders status label for current status" do
       html = render_card(%{status: :paused, previous_status: :working})
 
-      assert html =~ "from:"
-      assert html =~ "working"
+      assert html =~ "Paused"
     end
 
-    test "does not render hint when no previous_status" do
+    test "renders status label without previous_status" do
       html = render_card(%{status: :paused})
 
-      refute html =~ "from:"
+      assert html =~ "Paused"
     end
   end
 end

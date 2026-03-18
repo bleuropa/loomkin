@@ -46,10 +46,9 @@ defmodule LoomkinWeb.Live.AgentCardHealingTest do
       assert html =~ "Healing..."
     end
 
-    test "renders amber status pill class" do
+    test "renders amber status text" do
       html = render_card(%{status: :suspended_healing})
 
-      assert html =~ "bg-amber-500/20"
       assert html =~ "text-amber-400"
     end
 
@@ -59,10 +58,10 @@ defmodule LoomkinWeb.Live.AgentCardHealingTest do
       assert html =~ "agent-card-healing"
     end
 
-    test "applies healing ring class" do
+    test "applies healing border style" do
       html = render_card(%{status: :suspended_healing})
 
-      assert html =~ "ring-amber-400/50"
+      assert html =~ "border-amber-500/20"
     end
   end
 

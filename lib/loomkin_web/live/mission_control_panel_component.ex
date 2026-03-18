@@ -57,7 +57,7 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
     assigns = assign(assigns, :focused_card, focused_card)
 
     ~H"""
-    <div class="flex-1 flex flex-col min-w-0 min-h-0 bg-surface-0 border-r border-subtle">
+    <div class="flex-1 flex flex-col min-w-0 min-h-0 bg-surface-0">
       <%= if @focused_card do %>
         <%!-- Focused single-agent view --%>
         <div class="flex-1 flex flex-col min-h-0 p-3 overflow-hidden">
@@ -93,7 +93,7 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
         <div
           :if={@leader_approval_pending}
           data-testid="leader-approval-banner"
-          class="flex-shrink-0 mx-3 mt-3 px-4 py-3 rounded-lg border border-violet-500 bg-violet-950/60 flex items-start gap-3"
+          class="flex-shrink-0 mx-4 mt-3 px-4 py-3 rounded-xl border border-violet-500/50 bg-violet-950/40 backdrop-blur-sm flex items-start gap-3"
         >
           <div class="w-2 h-2 rounded-full bg-violet-400 animate-pulse mt-1 flex-shrink-0"></div>
           <div class="flex-1 min-w-0">
@@ -117,7 +117,7 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
         </div>
 
         <%!-- Tab switcher: Kin / Comms --%>
-        <div class="flex items-center gap-1 px-3 pt-2 pb-1 flex-shrink-0 border-b border-subtle">
+        <div class="flex items-center gap-0.5 px-4 pt-2.5 pb-1.5 flex-shrink-0">
           <button
             phx-click="switch_tab"
             phx-value-tab="kin"
@@ -125,14 +125,15 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
             class={[
               "flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium transition-colors interactive",
               if(@active_tab == :kin,
-                do: "text-brand bg-brand-subtle",
-                else: "text-muted hover:text-secondary"
+                do:
+                  "text-brand relative after:absolute after:bottom-0 after:inset-x-1 after:h-[2px] after:rounded-full after:bg-brand",
+                else: "text-muted hover:text-secondary hover:bg-surface-2/50"
               )
             ]}
           >
             <.icon name="hero-user-group-mini" class="w-3.5 h-3.5" />
             <span>Kin</span>
-            <span class="text-[10px] tabular-nums px-1 py-0.5 rounded-full bg-surface-2 text-muted">
+            <span class="text-[10px] tabular-nums px-1.5 py-0.5 rounded-full bg-surface-2/60 text-muted">
               {length(@concierge_card_names) + length(@worker_card_names)}
             </span>
           </button>
@@ -143,8 +144,9 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
             class={[
               "flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium transition-colors interactive",
               if(@active_tab == :comms,
-                do: "text-brand bg-brand-subtle",
-                else: "text-muted hover:text-secondary"
+                do:
+                  "text-brand relative after:absolute after:bottom-0 after:inset-x-1 after:h-[2px] after:rounded-full after:bg-brand",
+                else: "text-muted hover:text-secondary hover:bg-surface-2/50"
               )
             ]}
           >
@@ -152,7 +154,7 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
             <span>Comms</span>
             <span
               :if={@comms_event_count > 0}
-              class="text-[10px] tabular-nums px-1 py-0.5 rounded-full bg-surface-2 text-muted"
+              class="text-[10px] tabular-nums px-1.5 py-0.5 rounded-full bg-surface-2/60 text-muted"
             >
               {@comms_event_count}
             </span>
@@ -163,7 +165,7 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
 
         <%= if @active_tab == :kin do %>
           <%!-- Concierge — dedicated top card --%>
-          <div :if={@concierge_card_names != []} class="flex-shrink-0 p-3 pb-0">
+          <div :if={@concierge_card_names != []} class="flex-shrink-0 p-4 pb-1">
             <.live_component
               :for={name <- @concierge_card_names}
               module={LoomkinWeb.AgentCardComponent}
@@ -195,32 +197,72 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
           </div>
 
           <%!-- Team Agents Section --%>
-          <div class="flex-1 p-3 pb-0 overflow-y-auto min-h-[120px]">
+          <div class="flex-1 p-4 pb-0 overflow-y-auto min-h-[120px]">
             <%!-- Waiting state: session exists but agents haven't spawned yet --%>
             <div
               :if={@concierge_card_names == [] && @worker_card_names == [] && @active_team_id}
-              class="rounded-lg py-4 px-4 text-center bg-surface-1 border border-subtle"
+              class="flex flex-col items-center justify-center h-full min-h-[320px] text-center px-8"
             >
-              <div class="flex justify-center mb-2">
-                <div class="w-8 h-8 rounded-full bg-violet-500/15 flex items-center justify-center text-violet-400 text-xs font-bold">
-                  C
+              <%!-- Concierge avatar — warm, inviting --%>
+              <div class="relative mb-6">
+                <div class="w-16 h-16 rounded-2xl bg-surface-2 flex items-center justify-center shadow-md">
+                  <span class="text-2xl font-bold text-brand">C</span>
+                </div>
+                <div class="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-500/80 flex items-center justify-center">
+                  <div class="w-2 h-2 rounded-full bg-emerald-300 animate-pulse" />
                 </div>
               </div>
-              <div class="text-xs font-medium text-secondary">
-                Concierge ready
-              </div>
-              <div class="text-[10px] mt-0.5 text-muted">
-                Send a message to get started
+
+              <h3 class="text-base font-semibold text-primary mb-1">
+                Your concierge is ready
+              </h3>
+              <p class="text-sm text-muted max-w-[280px] leading-relaxed mb-8">
+                Send a message below and your kin team will assemble to help.
+              </p>
+
+              <%!-- What happens next — warm hints --%>
+              <div class="flex flex-col gap-3 w-full max-w-[300px]">
+                <div class="flex items-center gap-3 text-left">
+                  <div class="w-8 h-8 rounded-lg bg-surface-2 flex items-center justify-center flex-shrink-0">
+                    <.icon name="hero-chat-bubble-left-right-mini" class="w-4 h-4 text-brand/60" />
+                  </div>
+                  <div>
+                    <div class="text-xs font-medium text-secondary">Describe your task</div>
+                    <div class="text-[11px] text-muted">The concierge will plan the approach</div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-3 text-left">
+                  <div class="w-8 h-8 rounded-lg bg-surface-2 flex items-center justify-center flex-shrink-0">
+                    <.icon name="hero-user-group-mini" class="w-4 h-4 text-brand/60" />
+                  </div>
+                  <div>
+                    <div class="text-xs font-medium text-secondary">Specialists spawn</div>
+                    <div class="text-[11px] text-muted">Agents appear here as they join</div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-3 text-left">
+                  <div class="w-8 h-8 rounded-lg bg-surface-2 flex items-center justify-center flex-shrink-0">
+                    <.icon name="hero-eye-mini" class="w-4 h-4 text-brand/60" />
+                  </div>
+                  <div>
+                    <div class="text-xs font-medium text-secondary">Watch them work</div>
+                    <div class="text-[11px] text-muted">See thinking, tools, and comms live</div>
+                  </div>
+                </div>
               </div>
             </div>
+
             <%!-- No session state --%>
             <div
               :if={@concierge_card_names == [] && @worker_card_names == [] && !@active_team_id}
-              class="rounded-lg border border-dashed border-subtle py-4 px-4 text-center"
+              class="flex flex-col items-center justify-center h-full min-h-[200px] text-center px-8"
             >
-              <div class="text-muted text-xs">Start a session to meet your kin</div>
-              <div class="text-[10px] mt-0.5 text-muted">
-                Concierge + Weaver spawn automatically
+              <div class="w-12 h-12 rounded-xl bg-surface-2 flex items-center justify-center mb-4">
+                <.icon name="hero-sparkles-mini" class="w-6 h-6 text-muted" />
+              </div>
+              <div class="text-sm font-medium text-secondary mb-1">No session yet</div>
+              <div class="text-xs text-muted">
+                Start a session to meet your kin
               </div>
             </div>
 
@@ -280,7 +322,7 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
           phx-click="spawn_dormant_kin"
           phx-value-id={kin.id}
           phx-target={@myself}
-          class="group flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-subtle transition-all hover:border-solid hover:bg-surface-2"
+          class="group flex items-center gap-2.5 px-3.5 py-2.5 rounded-lg border border-dashed border-subtle/50 transition-all duration-200 hover:border-solid hover:border-subtle hover:bg-surface-2/60"
           aria-label={"Spawn #{kin.display_name || kin.name}"}
         >
           <span
@@ -310,12 +352,9 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
     <% else %>
       <div
         :if={@worker_card_names == []}
-        class="mt-2 rounded-lg border border-dashed border-subtle py-6 px-4 text-center"
+        class="mt-3 py-8 text-center"
       >
-        <div class="text-muted text-xs">No kin specialists available yet</div>
-        <div class="text-[10px] mt-1 text-muted">
-          The concierge will spawn agents as needed
-        </div>
+        <div class="text-xs text-muted/60">Specialists will appear here as they join</div>
       </div>
     <% end %>
     """

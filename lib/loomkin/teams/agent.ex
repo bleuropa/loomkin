@@ -942,6 +942,21 @@ defmodule Loomkin.Teams.Agent do
   end
 
   @impl true
+  def handle_cast(:close_spawn_gate, state) do
+    # Clear approval_pending status after the spawn gate resolves (approved, denied, or timed out).
+    # This allows the agent to retry team_spawn within the same loop if the spawn fails.
+    state =
+      if state.status == :approval_pending do
+        set_status_and_broadcast(state, :working)
+      else
+        state
+      end
+
+    state = maybe_apply_queued_pause(state, state.messages)
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_cast({:enter_awaiting_synthesis, _researcher_count}, state) do
     state = set_status_and_broadcast(state, :awaiting_synthesis)
     {:noreply, state}
@@ -1365,7 +1380,7 @@ defmodule Loomkin.Teams.Agent do
       })
     end
 
-    state = %{state | messages: msgs, loop_task: nil}
+    state = %{state | messages: msgs, loop_task: nil, pending_permission: nil}
 
     state =
       if state.role == :weaver do
@@ -1475,7 +1490,7 @@ defmodule Loomkin.Teams.Agent do
           })
         end
 
-        state = %{state | loop_task: nil}
+        state = %{state | loop_task: nil, pending_permission: nil}
 
         status =
           if reason in [:normal, :shutdown] do
@@ -3213,18 +3228,28 @@ defmodule Loomkin.Teams.Agent do
           {:spawn_gate_response, ^gate_id, %{outcome: :approved}} ->
             Registry.unregister(Loomkin.Teams.AgentRegistry, {:spawn_gate, gate_id})
 
-            execute_spawn_and_notify(
-              agent_pid,
-              tool_module,
-              tool_args,
-              context,
-              gate_id,
-              team_id,
-              agent_name
-            )
+            result =
+              execute_spawn_and_notify(
+                agent_pid,
+                tool_module,
+                tool_args,
+                context,
+                gate_id,
+                team_id,
+                agent_name
+              )
+
+            # Clear approval_pending status so agent can retry team_spawn
+            # within the same loop if the spawn fails.
+            GenServer.cast(agent_pid, :close_spawn_gate)
+
+            result
 
           {:spawn_gate_response, ^gate_id, %{outcome: :denied, reason: reason}} ->
             Registry.unregister(Loomkin.Teams.AgentRegistry, {:spawn_gate, gate_id})
+
+            # Clear approval_pending status on denial
+            GenServer.cast(agent_pid, :close_spawn_gate)
 
             resolved =
               Loomkin.Signals.Spawn.GateResolved.new!(%{
@@ -3247,6 +3272,9 @@ defmodule Loomkin.Teams.Agent do
         after
           timeout_ms ->
             Registry.unregister(Loomkin.Teams.AgentRegistry, {:spawn_gate, gate_id})
+
+            # Clear approval_pending status on timeout
+            GenServer.cast(agent_pid, :close_spawn_gate)
 
             resolved =
               Loomkin.Signals.Spawn.GateResolved.new!(%{

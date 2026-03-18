@@ -212,9 +212,47 @@ defmodule Loomkin.Workspace.Server do
 
   @impl true
   def handle_call({:get_or_create_team_id, create_fn}, _from, state) do
+    alias Loomkin.Teams.TableRegistry
+
     case state.team_id do
       team_id when is_binary(team_id) ->
-        {:reply, {:ok, team_id}, state}
+        # Verify the ETS table still exists in TableRegistry.
+        # After an app restart, TableRegistry state is lost but the workspace
+        # DB record still has the old team_id. If the table is missing,
+        # recreate it and re-insert the team metadata so agents can function.
+        case TableRegistry.get_table(team_id) do
+          {:ok, _ref} ->
+            {:reply, {:ok, team_id}, state}
+
+          {:error, :not_found} ->
+            Logger.warning("[Workspace] ETS table missing for team=#{team_id}, recreating")
+
+            project_path =
+              case state.project_paths do
+                [p | _] -> p
+                _ -> nil
+              end
+
+            {:ok, ref} = TableRegistry.create_table(team_id)
+
+            :ets.insert(
+              ref,
+              {:meta,
+               %{
+                 id: team_id,
+                 name: state.name,
+                 project_path: project_path,
+                 parent_team_id: nil,
+                 depth: 0,
+                 created_at: DateTime.utc_now()
+               }}
+            )
+
+            # Re-start nervous system processes for the recovered team
+            Loomkin.Teams.Manager.ensure_nervous_system(team_id)
+
+            {:reply, {:ok, team_id}, state}
+        end
 
       nil ->
         case create_fn.() do

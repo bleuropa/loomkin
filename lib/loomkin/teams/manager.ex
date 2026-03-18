@@ -68,7 +68,9 @@ defmodule Loomkin.Teams.Manager do
     name = opts[:name] || raise ArgumentError, ":name is required"
     max_depth = opts[:max_depth] || config_max_nesting_depth()
 
-    case get_team_meta(parent_team_id) do
+    # Use ensure_team_table to recover the parent's ETS table if it was lost
+    # (e.g. after an app restart when TableRegistry state is cleared).
+    case ensure_team_table(parent_team_id) do
       {:ok, parent_meta} ->
         parent_depth = parent_meta[:depth] || 0
 
@@ -460,6 +462,68 @@ defmodule Loomkin.Teams.Manager do
     end
   end
 
+  @doc """
+  Ensure the ETS table for a team exists, recovering from the workspace DB if needed.
+
+  After an app restart, ETS tables are lost but the workspace DB still knows
+  the team_id. This function checks if the table exists and recreates it
+  from workspace data if missing.
+
+  Returns `{:ok, meta}` if the table exists or was recovered, `:error` otherwise.
+  """
+  @spec ensure_team_table(String.t()) :: {:ok, map()} | :error
+  def ensure_team_table(team_id) do
+    case get_team_meta(team_id) do
+      {:ok, meta} ->
+        {:ok, meta}
+
+      :error ->
+        recover_team_table(team_id)
+    end
+  end
+
+  defp recover_team_table(team_id) do
+    alias Loomkin.Repo
+    alias Loomkin.Workspace
+
+    import Ecto.Query, only: [from: 2]
+
+    case Repo.one(from w in Workspace, where: w.team_id == ^team_id, limit: 1) do
+      nil ->
+        Logger.warning("[Manager] Cannot recover ETS for team=#{team_id}: no workspace found")
+        :error
+
+      workspace ->
+        Logger.info(
+          "[Manager] Recovering ETS table for team=#{team_id} from workspace=#{workspace.id}"
+        )
+
+        project_path =
+          case workspace.project_paths do
+            [p | _] -> p
+            _ -> nil
+          end
+
+        {:ok, ref} = TableRegistry.create_table(team_id)
+
+        meta = %{
+          id: team_id,
+          name: workspace.name,
+          project_path: project_path,
+          parent_team_id: nil,
+          depth: 0,
+          created_at: DateTime.utc_now()
+        }
+
+        :ets.insert(ref, {:meta, meta})
+
+        # Re-start nervous system processes for the recovered team
+        ensure_nervous_system(team_id)
+
+        {:ok, meta}
+    end
+  end
+
   defp get_sub_team_ids(parent_team_id) do
     case TableRegistry.get_table(parent_team_id) do
       {:ok, table} ->
@@ -488,6 +552,17 @@ defmodule Loomkin.Teams.Manager do
       _ ->
         :ok
     end
+  end
+
+  @doc """
+  Ensure nervous system processes are running for a team.
+
+  Idempotent — if processes are already running (registered in AgentRegistry),
+  they won't be started again. Used by WorkspaceServer to recover team state
+  after app restart when the ETS table is recreated.
+  """
+  def ensure_nervous_system(team_id) do
+    start_nervous_system(team_id)
   end
 
   defp start_nervous_system(team_id) do

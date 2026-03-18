@@ -95,13 +95,13 @@ defmodule LoomkinWeb.ChatComponent do
       <%!-- Context Usage Bar --%>
       <div
         :if={@has_messages && Map.has_key?(assigns, :context_info)}
-        class="flex-shrink-0 flex items-center gap-2 px-4 py-1.5 border-b border-gray-800/50 bg-gray-900/30"
+        class="flex-shrink-0 flex items-center gap-2.5 px-5 py-1.5 border-b border-subtle/30"
       >
-        <span class="text-[10px] text-gray-500 whitespace-nowrap">
+        <span class="text-[10px] text-muted/60 whitespace-nowrap font-medium">
           Context: {@context_info.usage_pct}%
         </span>
         <div
-          class="flex-1 h-1 bg-gray-800 rounded-full overflow-hidden"
+          class="flex-1 h-1 bg-surface-3 rounded-full overflow-hidden"
           role="progressbar"
           aria-valuenow={@context_info.usage_pct}
           aria-valuemin="0"
@@ -109,12 +109,12 @@ defmodule LoomkinWeb.ChatComponent do
           aria-label="Context window usage"
         >
           <div
-            class={"h-full rounded-full transition-all duration-300 #{context_bar_color(@context_info)}"}
+            class={"h-full rounded-full transition-all duration-500 #{context_bar_color(@context_info)}"}
             style={"width: #{min(@context_info.usage_pct, 100)}%"}
           >
           </div>
         </div>
-        <span class="text-[10px] text-gray-600 whitespace-nowrap">
+        <span class="text-[10px] text-muted/40 tabular-nums whitespace-nowrap font-mono">
           {format_tokens(@context_info.used_tokens)} / {format_tokens(@context_info.total_tokens)}
         </span>
       </div>
@@ -129,21 +129,21 @@ defmodule LoomkinWeb.ChatComponent do
       >
         <div class="flex flex-col gap-4 p-4">
           <%!-- Empty State --%>
-          <div :if={!@has_messages} class="flex items-center justify-center h-64">
-            <div class="text-center space-y-4">
-              <div class="w-12 h-12 mx-auto rounded-2xl bg-violet-600/20 flex items-center justify-center shadow-lg shadow-violet-500/10">
-                <span class="text-xl font-bold text-violet-400">L</span>
+          <div :if={!@has_messages} class="flex items-center justify-center h-72">
+            <div class="text-center space-y-5">
+              <div class="w-14 h-14 mx-auto rounded-2xl bg-violet-500/10 flex items-center justify-center ring-1 ring-violet-500/10">
+                <span class="text-2xl font-bold text-violet-400/80">L</span>
               </div>
               <div>
-                <p class="text-lg font-medium text-gray-300">What shall we build today?</p>
-                <p class="text-sm text-gray-500 mt-1">Send a message to start your coding session.</p>
+                <p class="text-lg font-medium text-primary">What shall we build today?</p>
+                <p class="text-sm text-muted mt-1.5">Send a message to start your coding session.</p>
               </div>
-              <div class="flex flex-wrap gap-2 justify-center pt-2">
+              <div class="flex flex-wrap gap-2 justify-center pt-1">
                 <button
                   phx-click="select_prompt"
                   phx-value-prompt="Explore this codebase"
                   phx-target={@myself}
-                  class="px-3 py-1.5 text-xs bg-gray-800/80 text-gray-400 rounded-full border border-gray-700/50 hover:border-violet-500/30 hover:text-gray-300 transition-all duration-200 cursor-pointer"
+                  class="px-3.5 py-1.5 text-xs bg-surface-2/60 text-secondary rounded-full border border-subtle hover:border-brand/30 hover:text-primary hover:bg-surface-2 transition-all duration-200 cursor-pointer"
                 >
                   Explore this codebase
                 </button>
@@ -151,7 +151,7 @@ defmodule LoomkinWeb.ChatComponent do
                   phx-click="select_prompt"
                   phx-value-prompt="Fix a bug"
                   phx-target={@myself}
-                  class="px-3 py-1.5 text-xs bg-gray-800/80 text-gray-400 rounded-full border border-gray-700/50 hover:border-violet-500/30 hover:text-gray-300 transition-all duration-200 cursor-pointer"
+                  class="px-3.5 py-1.5 text-xs bg-surface-2/60 text-secondary rounded-full border border-subtle hover:border-brand/30 hover:text-primary hover:bg-surface-2 transition-all duration-200 cursor-pointer"
                 >
                   Fix a bug
                 </button>
@@ -159,7 +159,7 @@ defmodule LoomkinWeb.ChatComponent do
                   phx-click="select_prompt"
                   phx-value-prompt="Add a feature"
                   phx-target={@myself}
-                  class="px-3 py-1.5 text-xs bg-gray-800/80 text-gray-400 rounded-full border border-gray-700/50 hover:border-violet-500/30 hover:text-gray-300 transition-all duration-200 cursor-pointer"
+                  class="px-3.5 py-1.5 text-xs bg-surface-2/60 text-secondary rounded-full border border-subtle hover:border-brand/30 hover:text-primary hover:bg-surface-2 transition-all duration-200 cursor-pointer"
                 >
                   Add a feature
                 </button>
@@ -173,7 +173,10 @@ defmodule LoomkinWeb.ChatComponent do
               <%= case msg.role do %>
                 <% :user -> %>
                   <div class="flex items-start gap-3 justify-end max-w-[80%] ml-auto">
-                    <div class={"bg-gray-700/80 rounded-2xl px-4 py-2.5 text-sm shadow-sm #{if msg[:failed], do: "border border-red-500/40", else: ""}"}>
+                    <div class={[
+                      "bg-surface-3/80 rounded-2xl px-4 py-2.5 text-sm shadow-sm",
+                      msg[:failed] && "border border-red-500/40"
+                    ]}>
                       <p class="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                       <%= if msg[:failed] do %>
                         <div class="flex items-center justify-between mt-2 pt-2 border-t border-red-500/20">
@@ -189,7 +192,7 @@ defmodule LoomkinWeb.ChatComponent do
                         </div>
                       <% end %>
                     </div>
-                    <div class="w-7 h-7 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+                    <div class="w-7 h-7 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0 shadow-md shadow-amber-500/20">
                       <span class="text-xs font-bold text-white">U</span>
                     </div>
                   </div>

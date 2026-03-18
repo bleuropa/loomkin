@@ -331,11 +331,13 @@ defmodule LoomkinWeb.AgentCommsComponent do
     ~H"""
     <div id={@id} class="flex flex-col h-full relative">
       <%!-- Section header --%>
-      <div class="px-3 py-2 flex items-center gap-2">
-        <span class="text-[10px] font-semibold text-muted uppercase tracking-widest">
+      <div class="px-4 py-2.5 flex items-center gap-2">
+        <span class="text-[10px] font-semibold text-muted/70 uppercase tracking-[0.15em]">
           Kin Comms
         </span>
-        <span class="badge text-[10px] tabular-nums">{@event_count}</span>
+        <span class="text-[10px] tabular-nums px-1.5 py-0.5 rounded-full bg-surface-2/60 text-muted font-medium">
+          {@event_count}
+        </span>
       </div>
 
       <%!-- Scrollable feed --%>
@@ -345,11 +347,11 @@ defmodule LoomkinWeb.AgentCommsComponent do
         phx-update="stream"
         role="log"
         aria-label="Agent communications feed"
-        class="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5"
+        class="flex-1 overflow-y-auto px-3 pb-3 space-y-0.5"
       >
         <div
           id="comms-empty-state"
-          class="hidden only:flex items-center justify-center py-12 text-muted text-xs"
+          class="hidden only:flex items-center justify-center py-16 text-muted/60 text-xs"
         >
           No inter-agent communication yet
         </div>
@@ -362,7 +364,7 @@ defmodule LoomkinWeb.AgentCommsComponent do
       <%!-- New messages indicator --%>
       <div
         data-new-messages
-        class="hidden absolute bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-indigo-600/90 text-white text-[10px] font-medium cursor-pointer backdrop-blur-sm z-10"
+        class="hidden absolute bottom-3 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded-full bg-brand/90 text-white text-[10px] font-semibold cursor-pointer backdrop-blur-sm shadow-lg z-10 hover:bg-brand transition-colors"
         phx-click={JS.dispatch("scroll-to-bottom", to: "#comms-feed-scroll")}
       >
       </div>
@@ -382,7 +384,7 @@ defmodule LoomkinWeb.AgentCommsComponent do
     <details
       id={"comms-event-#{@event.id}"}
       class={[
-        "group flex-col px-2 py-1.5 rounded-md cursor-pointer transition-colors duration-100 animate-fade-in",
+        "group flex-col px-2.5 py-2 rounded-lg cursor-pointer transition-colors duration-150 animate-fade-in hover:bg-surface-2/30",
         "border-l-2"
       ]}
       style={"border-left-color: #{@config.accent_border};"}
@@ -434,7 +436,7 @@ defmodule LoomkinWeb.AgentCommsComponent do
 
       <%!-- Expanded content --%>
       <div
-        class="mt-1 ml-5 text-xs text-zinc-300 rounded px-2 py-1.5"
+        class="mt-1.5 ml-5 text-xs text-zinc-300 rounded-md px-2.5 py-2"
         style={"background: #{@config.accent_bg};"}
       >
         <.assignment_reasoning

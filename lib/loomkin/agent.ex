@@ -24,6 +24,6 @@ defmodule Loomkin.Agent do
       Loomkin.Tools.SubAgent
     ],
     system_prompt: "You are Loomkin, an AI coding assistant.",
-    max_iterations: 25,
+    max_iterations: 100,
     tool_timeout_ms: 60_000
 end

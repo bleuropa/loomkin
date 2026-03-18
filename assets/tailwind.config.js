@@ -14,31 +14,44 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        brand: "#7C3AED",
-        // Surface layers for depth (darkest to lightest)
+        brand: "#b4a0e8",
+        // Surface layers — warm coffee-noir
         surface: {
-          0: '#09090b',   // deepest background
-          1: '#0f0f13',   // primary panels
-          2: '#16161d',   // raised cards
-          3: '#1e1e28',   // elevated elements / hover states
+          0: '#161416',
+          1: '#1e1c1e',
+          2: '#272527',
+          3: '#312e31',
         },
-        // Accent palette complementing brand violet
+        // Soft catppuccin-inspired pastels
         accent: {
-          cyan: '#22d3ee',
-          amber: '#f59e0b',
-          emerald: '#10b981',
-          rose: '#f43f5e',
+          cyan: '#89dceb',
+          amber: '#f9e2af',
+          emerald: '#a6e3a1',
+          rose: '#f38ba8',
+          peach: '#fab387',
+          mauve: '#cba6f7',
         },
-        // Refined border colors
+        // Warm subtle borders
         border: {
-          subtle: 'rgba(255, 255, 255, 0.06)',
-          default: 'rgba(255, 255, 255, 0.10)',
-          hover: 'rgba(255, 255, 255, 0.15)',
+          subtle: 'rgba(255, 245, 235, 0.04)',
+          default: 'rgba(255, 245, 235, 0.06)',
+          hover: 'rgba(255, 245, 235, 0.10)',
         },
       },
       fontFamily: {
-        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
+        sans: ['Outfit', 'ui-sans-serif', 'system-ui', 'sans-serif'],
         mono: ['JetBrains Mono', 'SF Mono', 'Fira Code', 'ui-monospace', 'monospace'],
+      },
+      borderRadius: {
+        'none': '0',
+        'sm': '0.5rem',
+        'DEFAULT': '0.75rem',
+        'md': '0.75rem',
+        'lg': '1rem',
+        'xl': '1.25rem',
+        '2xl': '1.5rem',
+        '3xl': '2rem',
+        'full': '9999px',
       },
       animation: {
         'fade-in': 'fadeIn 0.2s ease-out',

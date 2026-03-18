@@ -8,9 +8,6 @@ defmodule LoomkinWeb.ComposerComponentTest do
     input_text: "",
     reply_target: nil,
     cached_agents: [],
-    cached_budget: %{spent: 0.0, limit: 5.0},
-    budget_pct: 0,
-    budget_bar_color_class: "bg-emerald-500",
     last_user_message: nil,
     queue_drawer: nil,
     scheduled_messages: [],
@@ -33,11 +30,6 @@ defmodule LoomkinWeb.ComposerComponentTest do
     html = render_component(LoomkinWeb.ComposerComponent, assigns)
     assert html =~ "alice"
     assert html =~ "Replying"
-  end
-
-  test "renders budget bar" do
-    html = render_component(LoomkinWeb.ComposerComponent, @base_assigns)
-    assert html =~ "Budget"
   end
 
   test "renders last user message when present" do

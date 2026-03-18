@@ -22,12 +22,12 @@ defmodule LoomkinWeb.SidebarPanelComponent do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="h-[20rem] w-full flex flex-col xl:h-auto xl:w-80 bg-surface-1 border-t border-subtle">
+    <div class="h-[20rem] w-full flex flex-col xl:h-auto xl:w-80 bg-surface-1/80 backdrop-blur-sm">
       <%!-- Sidebar tab bar --%>
       <div
         role="tablist"
         aria-label="Inspector tabs"
-        class="flex items-center gap-0.5 px-1.5 py-1 overflow-x-auto flex-shrink-0 border-b border-subtle"
+        class="flex items-center gap-0.5 px-2 py-1.5 overflow-x-auto flex-shrink-0 bg-surface-1/40"
       >
         <button
           :for={tab <- [:files, :diff, :graph, :context]}

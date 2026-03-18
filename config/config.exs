@@ -82,8 +82,8 @@ config :req_llm,
     pools: %{
       :default => [
         protocols: [:http1],
-        size: 1,
-        count: 8,
+        size: 10,
+        count: 4,
         conn_opts: [transport_opts: [timeout: 120_000]]
       ]
     }

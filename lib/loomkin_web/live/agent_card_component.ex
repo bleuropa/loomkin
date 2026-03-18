@@ -114,10 +114,10 @@ defmodule LoomkinWeb.AgentCardComponent do
       phx-key="Enter"
       phx-value-agent={@card.name}
       class={[
-        "group relative animate-fade-in flex flex-row overflow-hidden kin-card",
+        "group relative animate-fade-in overflow-hidden kin-card",
         if(@focused,
-          do: "card-brand card-focused-glow h-full rounded-lg",
-          else: "min-h-[140px] cursor-pointer kin-card-idle rounded-lg"
+          do: "card-brand card-focused-glow h-full rounded-xl",
+          else: "cursor-pointer kin-card-idle rounded-xl"
         ),
         card_state_class(@card.content_type, @card.status),
         !@focused && status_ring_class(@card.status),
@@ -126,124 +126,94 @@ defmodule LoomkinWeb.AgentCardComponent do
       ]}
       style={card_style(@card.content_type, @card.last_tool, @agent_color, @focused)}
     >
-      <%!-- Left accent bar — agent identity --%>
-      <div
-        :if={!@focused}
-        class="w-[3px] flex-shrink-0 kin-accent-bar"
-        style={"background: #{@agent_color};"}
-      />
+      <div class="relative flex flex-col min-h-0 min-w-0 p-4">
+        <%!-- Header: Avatar + Name + Status + Actions --%>
+        <div class="flex items-center gap-3 mb-3">
+          <%!-- Agent avatar — colored rounded square with initial --%>
+          <div
+            class="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-sm font-bold relative"
+            style={"background: #{@agent_color}18; color: #{@agent_color};"}
+          >
+            {String.first(@card.name) |> String.upcase()}
+            <%!-- Status dot overlaid on avatar --%>
+            <span
+              class={[
+                "absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-surface-2",
+                status_dot_class(@card.status)
+              ]}
+              aria-hidden="true"
+            />
+          </div>
 
-      <%!-- Ambient color wash --%>
-      <div
-        class="absolute inset-0 pointer-events-none"
-        style={"background: radial-gradient(ellipse at 0% 0%, #{@agent_color}08 0%, transparent 60%);"}
-      />
-
-      <div class="relative flex flex-col flex-1 min-h-0 min-w-0 p-4">
-        <%!-- Corner notch decoration --%>
-        <div
-          :if={!@focused}
-          class="absolute top-0 right-0 w-3 h-3"
-          style="background: linear-gradient(225deg, var(--surface-0) 50%, transparent 50%); opacity: 0.6;"
-        />
-
-        <%!-- Header --%>
-        <div class="flex items-start gap-2.5">
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-1.5">
+          <%!-- Name + role --%>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2">
               <span
-                class={[
-                  "w-1.5 h-1.5 rounded-full flex-shrink-0 status-dot-transition",
-                  status_dot_class(@card.status)
-                ]}
-                aria-hidden="true"
-              />
-              <span class="sr-only">{status_label(@card.status)}</span>
-              <span class={[
-                "text-[9px] font-medium px-1.5 py-0.5 rounded-full",
-                status_pill_class(@card.status)
-              ]}>
-                {status_label(@card.status)}
-              </span>
-              <span
-                class="text-[13px] font-semibold truncate tracking-tight"
+                class="text-sm font-semibold truncate"
                 style={"color: #{@agent_color};"}
               >
                 {@card.name}
               </span>
+              <%!-- Warning badges --%>
               <span
                 :if={@card[:crash_count] && @card[:crash_count] > 0}
-                class="ml-1 px-1 py-0.5 text-[8px] font-mono bg-red-900/50 text-red-300 rounded"
+                class="px-1.5 py-0.5 text-[8px] font-mono bg-red-500/10 text-red-400 rounded"
               >
-                {"#{@card[:crash_count]}x crashed"}
+                {"#{@card[:crash_count]}x"}
               </span>
               <span
                 :if={@card[:stuck_warning]}
-                class="ml-1 px-1 py-0.5 text-[8px] font-mono bg-amber-900/50 text-amber-300 rounded animate-pulse"
+                class="px-1.5 py-0.5 text-[8px] font-mono bg-amber-500/10 text-amber-400 rounded animate-pulse"
                 title={stuck_tooltip(@card)}
               >
                 {stuck_label(@card)}
               </span>
               <span
                 :if={@card[:conflict]}
-                class="ml-1 px-1 py-0.5 text-[8px] font-mono bg-red-900/50 text-red-300 rounded animate-pulse"
+                class="px-1.5 py-0.5 text-[8px] font-mono bg-red-500/10 text-red-400 rounded animate-pulse"
                 title={conflict_tooltip(@card)}
               >
                 {conflict_label(@card)}
               </span>
-              <span
-                :if={@card[:pause_queued]}
-                class="ml-1 px-1 py-0.5 text-[8px] font-mono bg-blue-900/50 text-blue-300 rounded animate-pulse"
-              >
-                pause queued
-              </span>
-              <span :if={@card[:previous_status]} class="text-[8px] text-muted ml-1">
-                from: {@card[:previous_status]}
-              </span>
             </div>
-            <div class="flex items-center gap-1.5 mt-0.5">
+            <div class="flex items-center gap-2 mt-0.5">
+              <span class={[
+                "text-[10px] font-medium",
+                status_pill_text_class(@card.status)
+              ]}>
+                {status_label(@card.status)}
+              </span>
               <span
                 :if={!role_matches_name?(@card.role, @card.name)}
-                class="text-[9px] font-mono uppercase tracking-widest"
-                style={"color: #{@agent_color}60;"}
+                class="text-[10px] text-muted font-mono"
               >
                 {format_role(@card.role)}
               </span>
               <span
                 :if={@model}
-                class="text-[9px] font-mono text-muted opacity-40 truncate max-w-[80px]"
+                class="text-[9px] font-mono text-muted/40 truncate max-w-[80px]"
               >
                 {format_model(@model)}
               </span>
               <span
                 :if={@card[:team_id] && @team_id && @card[:team_id] != @team_id}
-                class="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700/50"
+                class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-surface-3 text-muted"
               >
                 {short_team_label(@card[:team_id])}
               </span>
             </div>
           </div>
 
-          <%!-- Action buttons --%>
-          <div
-            class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-            style="transition: opacity var(--transition-base);"
-          >
+          <%!-- Action buttons — always subtly visible --%>
+          <div class="flex items-center gap-0.5 opacity-30 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
             <button
               phx-click="reply_to_card_agent"
               phx-value-agent={@card.name}
               phx-value-team-id={@team_id}
               aria-label={"Reply to #{@card.name}"}
-              class="text-muted hover:text-brand p-1 rounded hover:bg-surface-3 flex-shrink-0"
-              style="transition: color var(--transition-base), background var(--transition-base);"
+              class="text-muted hover:text-brand p-1.5 rounded-lg hover:bg-surface-3 flex-shrink-0 transition-colors"
             >
-              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path
-                  fill-rule="evenodd"
-                  d="M7.707 3.293a1 1 0 010 1.414L5.414 7H11a7 7 0 017 7v2a1 1 0 11-2 0v-2a5 5 0 00-5-5H5.414l2.293 2.293a1 1 0 11-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"
-                  clip-rule="evenodd"
-                />
-              </svg>
+              <.icon name="hero-chat-bubble-left-mini" class="w-3.5 h-3.5" />
             </button>
             <button
               :if={@card.status == :working}
@@ -251,43 +221,21 @@ defmodule LoomkinWeb.AgentCardComponent do
               phx-value-agent={@card.name}
               phx-value-team-id={@team_id}
               aria-label={"Pause #{@card.name}"}
-              class="text-muted hover:text-amber-400 p-1 rounded hover:bg-surface-3 flex-shrink-0"
-              style="transition: color var(--transition-base), background var(--transition-base);"
+              class="text-muted hover:text-amber-400 p-1.5 rounded-lg hover:bg-surface-3 flex-shrink-0 transition-colors"
             >
-              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path
-                  fill-rule="evenodd"
-                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z"
-                  clip-rule="evenodd"
-                />
-              </svg>
+              <.icon name="hero-pause-circle-mini" class="w-3.5 h-3.5" />
             </button>
-            <div :if={@card.status == :waiting_permission} class="flex items-center gap-1">
-              <span
-                class="text-[9px] text-amber-300/70 truncate max-w-[6rem]"
-                title={@card[:pending_tool]}
-              >
-                {@card[:pending_tool] || "permission"}
-              </span>
-            </div>
             <button
               :if={@card.status == :waiting_permission}
               phx-click="force_pause_card_agent"
               phx-value-agent={@card.name}
               phx-value-team-id={@team_id}
-              aria-label={"Force pause #{@card.name} (cancels pending permission)"}
-              title="Force pause (cancels pending permission)"
-              class="text-muted hover:text-red-400 p-1 rounded hover:bg-surface-3 flex-shrink-0"
-              style="transition: color var(--transition-base), background var(--transition-base);"
-              data-confirm="This will cancel the pending permission request. Continue?"
+              aria-label={"Force pause #{@card.name}"}
+              title="Force pause"
+              class="text-muted hover:text-red-400 p-1.5 rounded-lg hover:bg-surface-3 flex-shrink-0 transition-colors"
+              data-confirm="Cancel pending permission?"
             >
-              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path
-                  fill-rule="evenodd"
-                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z"
-                  clip-rule="evenodd"
-                />
-              </svg>
+              <.icon name="hero-pause-circle-mini" class="w-3.5 h-3.5" />
             </button>
             <button
               :if={@card.status == :paused}
@@ -295,12 +243,9 @@ defmodule LoomkinWeb.AgentCardComponent do
               phx-value-agent={@card.name}
               phx-value-team-id={@team_id}
               aria-label={"Steer #{@card.name}"}
-              class="text-muted hover:text-brand p-1 rounded hover:bg-surface-3 flex-shrink-0"
-              style="transition: color var(--transition-base), background var(--transition-base);"
+              class="text-muted hover:text-brand p-1.5 rounded-lg hover:bg-surface-3 flex-shrink-0 transition-colors"
             >
-              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-              </svg>
+              <.icon name="hero-pencil-mini" class="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
@@ -312,32 +257,32 @@ defmodule LoomkinWeb.AgentCardComponent do
         />
 
         <%!-- Content area --%>
-        <div class={["mt-3 flex-1 min-h-0", @focused && "overflow-auto"]}>
+        <div class={["flex-1 min-h-0", @focused && "overflow-auto"]}>
           <%= case @card.content_type do %>
             <% :thinking -> %>
               <div
                 class={[
-                  "text-xs leading-relaxed agent-card-content kin-thought-well",
+                  "text-[13px] leading-relaxed agent-card-content rounded-lg px-3 py-2",
                   !@focused && "line-clamp-4"
                 ]}
-                style={"color: var(--text-secondary); --kin-color: #{@agent_color};"}
+                style={"color: var(--text-secondary); background: #{@agent_color}06; border-left: 2px solid #{@agent_color}30;"}
               >
                 {@rendered_content}
               </div>
             <% :last_thinking -> %>
               <div
                 class={[
-                  "text-xs leading-relaxed opacity-60 agent-card-content pl-2",
+                  "text-[13px] leading-relaxed opacity-50 agent-card-content pl-3",
                   !@focused && "line-clamp-3"
                 ]}
-                style={"color: var(--text-secondary); border-left: 1px solid #{@agent_color}30;"}
+                style={"color: var(--text-secondary); border-left: 2px solid #{@agent_color}15;"}
               >
                 {@rendered_content}
               </div>
             <% :message -> %>
               <div
                 class={[
-                  "text-xs leading-relaxed agent-card-content",
+                  "text-[13px] leading-relaxed agent-card-content",
                   !@focused && "line-clamp-4"
                 ]}
                 style="color: var(--text-secondary);"
@@ -349,7 +294,7 @@ defmodule LoomkinWeb.AgentCardComponent do
                 <% @rendered_last_response -> %>
                   <div
                     class={[
-                      "text-xs leading-relaxed opacity-60 agent-card-content",
+                      "text-[13px] leading-relaxed opacity-50 agent-card-content",
                       !@focused && "line-clamp-3"
                     ]}
                     style="color: var(--text-secondary);"
@@ -357,31 +302,31 @@ defmodule LoomkinWeb.AgentCardComponent do
                     {@rendered_last_response}
                   </div>
                 <% @card.status == :complete -> %>
-                  <div class="flex items-center gap-2 text-xs">
-                    <div class="h-px flex-1" style={"background: #{@agent_color}15;"} />
-                    <span style={"color: #{@agent_color}80;"}>complete</span>
-                    <div class="h-px flex-1" style={"background: #{@agent_color}15;"} />
+                  <div class="flex items-center gap-3 py-2">
+                    <div class="h-px flex-1 bg-surface-3" />
+                    <span class="text-xs font-medium" style={"color: #{@agent_color}60;"}>done</span>
+                    <div class="h-px flex-1 bg-surface-3" />
                   </div>
                 <% true -> %>
-                  <div class="flex items-center gap-2 text-[10px] text-muted font-mono">
-                    <span class="kin-idle-blink" style={"color: #{@agent_color}40;"}>_</span>
-                    <span class="opacity-40">standby</span>
+                  <div class="flex items-center gap-2 text-[11px] text-muted/40 font-mono py-1">
+                    <span class="kin-idle-blink" style={"color: #{@agent_color}30;"}>_</span>
+                    <span>standby</span>
                   </div>
               <% end %>
           <% end %>
 
-          <%!-- Last tool readout --%>
+          <%!-- Last tool readout — console-style --%>
           <div
             :if={@card.last_tool}
-            class="mt-2 flex items-center gap-1.5 font-mono"
+            class="mt-3 flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-surface-0/50 font-mono"
           >
             <span
-              class="text-[9px] flex-shrink-0"
+              class="text-[10px] flex-shrink-0"
               style={"color: #{tool_config(@card.last_tool.name).color};"}
             >
               {tool_config(@card.last_tool.name).icon}
             </span>
-            <span class="text-[9px] truncate text-muted opacity-50">
+            <span class="text-[10px] truncate text-muted/60">
               {@card.last_tool.target || @card.last_tool.name}
             </span>
           </div>
@@ -390,15 +335,15 @@ defmodule LoomkinWeb.AgentCardComponent do
         <%!-- Footer: task readout --%>
         <div
           :if={@card.current_task}
-          class="mt-auto pt-2 flex items-center gap-2 font-mono"
+          class="mt-auto pt-3 flex items-center gap-2 font-mono"
         >
           <span
-            class="text-[8px] uppercase tracking-[0.15em] flex-shrink-0 font-semibold"
-            style={"color: #{@agent_color}50;"}
+            class="text-[9px] uppercase tracking-widest flex-shrink-0 font-semibold"
+            style={"color: #{@agent_color}40;"}
           >
-            tsk
+            task
           </span>
-          <span class="text-[10px] truncate flex-1 text-muted">
+          <span class="text-[10px] truncate flex-1 text-muted/60">
             {@card.current_task}
           </span>
         </div>
@@ -410,7 +355,7 @@ defmodule LoomkinWeb.AgentCardComponent do
           @card.status == :approval_pending && @card[:pending_approval] &&
             @card[:pending_approval][:type] != :spawn_gate
         }
-        class="border-t border-violet-500/30 bg-violet-950/20 px-4 py-3 flex flex-col gap-2"
+        class="border-t border-violet-500/20 bg-violet-950/15 px-4 py-3.5 flex flex-col gap-2.5"
       >
         <div class="flex items-center justify-between gap-2">
           <span class="text-[11px] font-semibold text-violet-400">Approval required</span>
@@ -443,21 +388,21 @@ defmodule LoomkinWeb.AgentCardComponent do
             phx-value-agent={@card.name}
             phx-value-context=""
             phx-disable-with="Approving..."
-            class="px-3 py-1.5 text-[11px] font-medium rounded bg-violet-600/80 hover:bg-violet-600 text-white border border-violet-500/50 transition-colors cursor-pointer"
+            class="px-3 py-1.5 text-[11px] font-medium rounded-md bg-violet-600/80 hover:bg-violet-600 text-white border border-violet-500/50 transition-colors cursor-pointer"
           >
             Approve
           </button>
           <button
             phx-click={JS.toggle(to: "#approve-ctx-#{@card.name}")}
             type="button"
-            class="px-3 py-1.5 text-[11px] font-medium rounded bg-violet-800/60 hover:bg-violet-700/60 text-violet-200 border border-violet-600/30 transition-colors cursor-pointer"
+            class="px-3 py-1.5 text-[11px] font-medium rounded-md bg-violet-800/60 hover:bg-violet-700/60 text-violet-200 border border-violet-600/30 transition-colors cursor-pointer"
           >
             Approve w/ Context
           </button>
           <button
             phx-click={JS.toggle(to: "#deny-ctx-#{@card.name}")}
             type="button"
-            class="px-3 py-1.5 text-[11px] font-medium rounded bg-rose-900/40 hover:bg-rose-800/50 text-rose-300 border border-rose-700/30 transition-colors cursor-pointer"
+            class="px-3 py-1.5 text-[11px] font-medium rounded-md bg-rose-900/40 hover:bg-rose-800/50 text-rose-300 border border-rose-700/30 transition-colors cursor-pointer"
           >
             Deny
           </button>
@@ -480,7 +425,7 @@ defmodule LoomkinWeb.AgentCardComponent do
           <button
             type="submit"
             phx-disable-with="Approving..."
-            class="self-start px-3 py-1 text-[11px] font-medium rounded bg-violet-600/80 hover:bg-violet-600 text-white border border-violet-500/50 transition-colors cursor-pointer"
+            class="self-start px-3 py-1 text-[11px] font-medium rounded-md bg-violet-600/80 hover:bg-violet-600 text-white border border-violet-500/50 transition-colors cursor-pointer"
           >
             Send Approval
           </button>
@@ -516,7 +461,7 @@ defmodule LoomkinWeb.AgentCardComponent do
           @card.status == :approval_pending && @card[:pending_approval] &&
             @card[:pending_approval][:type] == :spawn_gate
         }
-        class="border-t border-violet-500/30 bg-violet-950/20 px-4 py-3 flex flex-col gap-2"
+        class="border-t border-violet-500/20 bg-violet-950/15 px-4 py-3.5 flex flex-col gap-2.5"
       >
         <%!-- Header row: label + countdown --%>
         <div class="flex items-center justify-between gap-2">
@@ -604,21 +549,21 @@ defmodule LoomkinWeb.AgentCardComponent do
             phx-value-agent={@card.name}
             phx-value-context=""
             phx-disable-with="Approving..."
-            class="px-3 py-1.5 text-[11px] font-medium rounded bg-violet-600/80 hover:bg-violet-600 text-white border border-violet-500/50 transition-colors cursor-pointer"
+            class="px-3 py-1.5 text-[11px] font-medium rounded-md bg-violet-600/80 hover:bg-violet-600 text-white border border-violet-500/50 transition-colors cursor-pointer"
           >
             Approve
           </button>
           <button
             phx-click={JS.toggle(to: "#spawn-approve-ctx-#{@card.name}")}
             type="button"
-            class="px-3 py-1.5 text-[11px] font-medium rounded bg-violet-800/60 hover:bg-violet-700/60 text-violet-200 border border-violet-600/30 transition-colors cursor-pointer"
+            class="px-3 py-1.5 text-[11px] font-medium rounded-md bg-violet-800/60 hover:bg-violet-700/60 text-violet-200 border border-violet-600/30 transition-colors cursor-pointer"
           >
             Approve w/ Context
           </button>
           <button
             phx-click={JS.toggle(to: "#spawn-deny-ctx-#{@card.name}")}
             type="button"
-            class="px-3 py-1.5 text-[11px] font-medium rounded bg-rose-900/40 hover:bg-rose-800/50 text-rose-300 border border-rose-700/30 transition-colors cursor-pointer"
+            class="px-3 py-1.5 text-[11px] font-medium rounded-md bg-rose-900/40 hover:bg-rose-800/50 text-rose-300 border border-rose-700/30 transition-colors cursor-pointer"
           >
             Deny
           </button>
@@ -641,7 +586,7 @@ defmodule LoomkinWeb.AgentCardComponent do
           <button
             type="submit"
             phx-disable-with="Approving..."
-            class="self-start px-3 py-1 text-[11px] font-medium rounded bg-violet-600/80 hover:bg-violet-600 text-white border border-violet-500/50 transition-colors cursor-pointer"
+            class="self-start px-3 py-1 text-[11px] font-medium rounded-md bg-violet-600/80 hover:bg-violet-600 text-white border border-violet-500/50 transition-colors cursor-pointer"
           >
             Send Approval
           </button>
@@ -678,7 +623,7 @@ defmodule LoomkinWeb.AgentCardComponent do
             @card[:pending_questions] != nil &&
             @card[:pending_questions] != []
         }
-        class="border-t border-cyan-500/30 bg-cyan-950/20 px-4 py-3 flex flex-col gap-3"
+        class="border-t border-cyan-500/20 bg-cyan-950/15 px-4 py-3.5 flex flex-col gap-3"
       >
         <span class="text-[11px] font-semibold text-cyan-400">Question for you</span>
 
@@ -718,7 +663,7 @@ defmodule LoomkinWeb.AgentCardComponent do
       <%!-- Healing indicator panel — visible when status is :suspended_healing --%>
       <div
         :if={@card.status == :suspended_healing}
-        class="border-t border-amber-500/30 bg-amber-950/20 px-4 py-3 flex flex-col gap-1.5"
+        class="border-t border-amber-500/20 bg-amber-950/15 px-4 py-3.5 flex flex-col gap-1.5"
       >
         <div class="flex items-center gap-2">
           <span class="text-[11px] font-semibold text-amber-400">Self-healing</span>
@@ -759,14 +704,11 @@ defmodule LoomkinWeb.AgentCardComponent do
 
   defp card_style(:tool_call, %{name: name}, _agent_color, _focused) when is_binary(name) do
     color = tool_config(name).color
-    "border-color: #{color}; box-shadow: 0 0 10px #{hex_to_rgba(color, 0.1)};"
+    "box-shadow: 0 0 12px #{hex_to_rgba(color, 0.08)};"
   end
 
   defp card_style(_content_type, _last_tool, _agent_color, true = _focused), do: nil
-
-  defp card_style(_content_type, _last_tool, agent_color, _focused) do
-    "background: linear-gradient(145deg, var(--surface-2), var(--surface-3)); border-color: #{agent_color}15;"
-  end
+  defp card_style(_content_type, _last_tool, _agent_color, _focused), do: nil
 
   # --- Status helpers ---
 
@@ -802,31 +744,27 @@ defmodule LoomkinWeb.AgentCardComponent do
   defp status_label(:permanently_failed), do: "Failed (max restarts)"
   defp status_label(_), do: "Unknown"
 
-  defp status_pill_class(:working), do: "bg-green-500/20 text-green-400"
-  defp status_pill_class(:idle), do: "bg-zinc-500/20 text-zinc-400"
-  defp status_pill_class(:paused), do: "bg-blue-500/20 text-blue-400"
-  defp status_pill_class(:error), do: "bg-red-500/20 text-red-400"
-  defp status_pill_class(:crashed), do: "bg-red-500/20 text-red-400"
-  defp status_pill_class(:approval_pending), do: "bg-amber-500/20 text-amber-400"
-  defp status_pill_class(:ask_user_pending), do: "bg-amber-500/20 text-amber-400"
-  defp status_pill_class(:awaiting_synthesis), do: "bg-indigo-500/20 text-indigo-400"
-  defp status_pill_class(:waiting_permission), do: "bg-yellow-500/20 text-yellow-400"
-  defp status_pill_class(:recovering), do: "bg-amber-500/20 text-amber-400"
-  defp status_pill_class(:permanently_failed), do: "bg-red-500/20 text-red-400"
-  defp status_pill_class(:suspended_healing), do: "bg-amber-500/20 text-amber-400"
-  defp status_pill_class(:complete), do: "bg-emerald-500/20 text-emerald-400"
-  defp status_pill_class(_), do: "bg-zinc-500/20 text-zinc-400"
+  # Inline status text color — no background, just warm color
+  defp status_pill_text_class(:working), do: "text-green-400"
+  defp status_pill_text_class(:idle), do: "text-muted"
+  defp status_pill_text_class(:paused), do: "text-blue-400"
+  defp status_pill_text_class(:error), do: "text-red-400"
+  defp status_pill_text_class(:crashed), do: "text-red-400"
+  defp status_pill_text_class(:approval_pending), do: "text-amber-400"
+  defp status_pill_text_class(:ask_user_pending), do: "text-amber-400"
+  defp status_pill_text_class(:awaiting_synthesis), do: "text-indigo-400"
+  defp status_pill_text_class(:waiting_permission), do: "text-yellow-400"
+  defp status_pill_text_class(:recovering), do: "text-amber-400"
+  defp status_pill_text_class(:permanently_failed), do: "text-red-400"
+  defp status_pill_text_class(:suspended_healing), do: "text-amber-400"
+  defp status_pill_text_class(:complete), do: "text-emerald-400"
+  defp status_pill_text_class(_), do: "text-muted"
 
-  defp status_ring_class(:working), do: "ring-1 ring-green-500/40"
-  defp status_ring_class(:error), do: "ring-2 ring-red-500 animate-pulse"
-  defp status_ring_class(:crashed), do: "ring-2 ring-red-500 animate-pulse"
-  defp status_ring_class(:ask_user_pending), do: "ring-2 ring-amber-400 animate-pulse"
-  defp status_ring_class(:approval_pending), do: "ring-2 ring-violet-500/50 animate-pulse"
-  defp status_ring_class(:waiting_permission), do: "ring-1 ring-yellow-500/50"
-  defp status_ring_class(:awaiting_synthesis), do: "ring-1 ring-indigo-400/40"
-  defp status_ring_class(:paused), do: "ring-1 ring-blue-500/30"
-  defp status_ring_class(:permanently_failed), do: "ring-2 ring-red-600 animate-pulse"
-  defp status_ring_class(:suspended_healing), do: "ring-2 ring-amber-400/50 animate-pulse"
+  defp status_ring_class(:error), do: "ring-1 ring-red-500/30"
+  defp status_ring_class(:crashed), do: "ring-1 ring-red-500/30"
+  defp status_ring_class(:ask_user_pending), do: "ring-1 ring-amber-400/30"
+  defp status_ring_class(:approval_pending), do: "ring-1 ring-violet-500/25"
+  defp status_ring_class(:permanently_failed), do: "ring-1 ring-red-600/30"
   defp status_ring_class(_), do: nil
 
   # --- Healing phase helpers ---

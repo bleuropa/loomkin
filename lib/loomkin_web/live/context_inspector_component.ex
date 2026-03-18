@@ -88,8 +88,8 @@ defmodule LoomkinWeb.ContextInspectorComponent do
 
     ~H"""
     <div
-      class="flex items-center gap-2 px-3 py-2 flex-shrink-0 border-b"
-      style={"border-color: #{@color}30; background: linear-gradient(135deg, #{@color}08, transparent 60%);"}
+      class="flex items-center gap-2 px-3 py-2.5 flex-shrink-0"
+      style={"background: linear-gradient(135deg, #{@color}06, transparent 60%);"}
     >
       <span class="w-2 h-2 rounded-full flex-shrink-0" style={"background: #{@color};"} />
       <span class="text-xs font-semibold truncate" style={"color: #{@color};"}>
@@ -120,20 +120,20 @@ defmodule LoomkinWeb.ContextInspectorComponent do
 
   defp empty_state(assigns) do
     ~H"""
-    <div class="flex-1 flex flex-col items-center justify-center p-6 bg-surface-0">
-      <div class="w-10 h-10 rounded-xl bg-violet-500/10 flex items-center justify-center mb-3">
-        <.icon name="hero-eye-mini" class="w-5 h-5 text-violet-400" />
+    <div class="flex-1 flex flex-col items-center justify-center p-8 bg-surface-0">
+      <div class="w-10 h-10 rounded-xl bg-surface-2 flex items-center justify-center mb-4">
+        <.icon name="hero-eye-mini" class="w-5 h-5 text-muted" />
       </div>
-      <p class="text-xs font-medium text-secondary mb-1">No agent focused</p>
-      <p class="text-[10px] text-muted text-center leading-relaxed max-w-[180px]">
-        Click an agent card to see their activity, decisions, and tools
+      <p class="text-sm font-medium text-secondary mb-1">Agent inspector</p>
+      <p class="text-xs text-muted text-center leading-relaxed max-w-[200px] mb-6">
+        Click any agent card on the left to inspect their work here
       </p>
       <button
         phx-click="toggle_collapse"
         phx-target={@myself}
-        class="mt-4 text-[10px] px-3 py-1 rounded-full text-muted border border-subtle interactive hover:text-secondary hover:border-zinc-600"
+        class="text-[11px] px-3 py-1.5 rounded-lg text-muted bg-surface-2 hover:text-secondary transition-colors"
       >
-        Collapse
+        Collapse panel
       </button>
     </div>
     """
@@ -148,7 +148,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
       id="inspector-resize-handle"
       class="hidden xl:flex absolute left-0 top-0 bottom-0 w-1 cursor-col-resize z-10 items-center justify-center group hover:bg-violet-500/20 active:bg-violet-500/30 transition-[background] duration-150"
     >
-      <div class="w-0.5 h-8 rounded-full bg-zinc-600 group-hover:bg-violet-400 group-active:bg-violet-400 transition-[background] duration-150">
+      <div class="w-0.5 h-8 rounded-full bg-zinc-700/40 group-hover:bg-violet-400 group-active:bg-violet-400 transition-[background] duration-150">
       </div>
     </div>
     """
@@ -184,7 +184,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
 
   defp tab_bar(assigns) do
     ~H"""
-    <div class="flex items-center gap-0.5 overflow-x-auto px-1.5 py-1 flex-shrink-0 bg-surface-1 border-b border-subtle">
+    <div class="flex items-center gap-0.5 overflow-x-auto px-2 py-1.5 flex-shrink-0 bg-surface-1/60">
       <button
         :for={tab <- @tabs}
         phx-click="switch_tab"
@@ -224,7 +224,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
       <%!-- Current tool indicator --%>
       <div
         :if={@focused_card[:last_tool]}
-        class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-1 border border-subtle"
+        class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-1/80 "
       >
         <span class="text-xs">{tool_emoji(@focused_card.last_tool.name)}</span>
         <span class="text-[11px] font-mono truncate text-secondary">
@@ -235,7 +235,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
       <%!-- Agent's current thinking/message content --%>
       <%= case @focused_card.content_type do %>
         <% :thinking -> %>
-          <div class="rounded-lg bg-surface-1 border border-subtle p-3">
+          <div class="rounded-xl bg-surface-1/80  p-3.5">
             <div class="flex items-center gap-1.5 mb-2">
               <span class="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
               <span class="text-[10px] font-medium text-violet-400 uppercase tracking-wider">
@@ -247,7 +247,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
             </div>
           </div>
         <% :last_thinking -> %>
-          <div class="rounded-lg bg-surface-1 border border-subtle p-3 opacity-60">
+          <div class="rounded-xl bg-surface-1/80  p-3.5 opacity-60">
             <div class="flex items-center gap-1.5 mb-2">
               <span class="text-[10px] font-medium text-muted uppercase tracking-wider">
                 Last thought
@@ -258,7 +258,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
             </div>
           </div>
         <% :message -> %>
-          <div class="rounded-lg bg-surface-1 border border-subtle p-3">
+          <div class="rounded-xl bg-surface-1/80  p-3.5">
             <div class="flex items-center gap-1.5 mb-2">
               <span class="text-[10px] font-medium text-emerald-400 uppercase tracking-wider">
                 Response
@@ -270,7 +270,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
           </div>
         <% _ -> %>
           <%= if @focused_card[:last_response] do %>
-            <div class="rounded-lg bg-surface-1 border border-subtle p-3 opacity-60">
+            <div class="rounded-xl bg-surface-1/80  p-3.5 opacity-60">
               <div class="flex items-center gap-1.5 mb-2">
                 <span class="text-[10px] font-medium text-muted uppercase tracking-wider">
                   Last response
@@ -281,7 +281,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
               </div>
             </div>
           <% else %>
-            <div class="rounded-lg border border-dashed border-subtle py-6 text-center">
+            <div class="rounded-xl  py-8 text-center">
               <p class="text-xs text-muted italic">
                 <%= if @focused_card.status == :complete do %>
                   Agent has completed its work
@@ -318,7 +318,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
       </div>
 
       <%= if @focused_card[:last_tool] do %>
-        <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-1 border border-subtle animate-fade-in">
+        <div class="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-surface-1/80  animate-fade-in">
           <span class="text-sm flex-shrink-0">{tool_emoji(@focused_card.last_tool.name)}</span>
           <div class="min-w-0 flex-1">
             <span class="text-[11px] font-mono font-medium text-secondary">
@@ -339,7 +339,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
           </div>
         </div>
       <% else %>
-        <div class="rounded-lg border border-dashed border-subtle py-6 text-center">
+        <div class="rounded-xl  py-8 text-center">
           <p class="text-xs text-muted italic">No tool calls yet</p>
         </div>
       <% end %>
@@ -355,7 +355,7 @@ defmodule LoomkinWeb.ContextInspectorComponent do
 
   defp panel_class(false = _collapsed),
     do:
-      "inspector-panel relative w-full h-[20rem] xl:w-80 xl:h-full flex-shrink-0 flex flex-col bg-surface-1 transition-colors duration-300 ease-in-out"
+      "inspector-panel relative w-full h-[20rem] xl:w-80 xl:h-full flex-shrink-0 flex flex-col bg-surface-1/80 backdrop-blur-sm transition-colors duration-300 ease-in-out"
 
   defp tab_button_class(active, tab, accent_color) do
     base =
