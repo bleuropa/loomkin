@@ -1,7 +1,21 @@
 defmodule Loomkin.Teams.TableRegistry do
-  @moduledoc "Maps team IDs to unnamed ETS table references, avoiding atom leaks."
+  @moduledoc """
+  Maps team IDs to unnamed ETS table references, avoiding atom leaks.
+
+  Uses a named ETS meta-table (`:loomkin_table_registry`) to persist the
+  team_id → ETS ref mapping. Both the meta-table and individual team tables
+  use `{:heir, supervisor_pid}` so they survive GenServer restarts — the
+  supervisor inherits ownership when this process dies and we reclaim it
+  on init.
+
+  All tables are `:public`, so reads work regardless of ownership.
+  """
 
   use GenServer
+
+  require Logger
+
+  @meta_table :loomkin_table_registry
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -14,9 +28,22 @@ defmodule Loomkin.Teams.TableRegistry do
 
   @doc "Get the ETS table reference for a team. Returns {:ok, ref} or {:error, :not_found}."
   def get_table(team_id) do
-    case GenServer.call(__MODULE__, {:get, team_id}) do
-      {:ok, ref} -> {:ok, ref}
-      :error -> {:error, :not_found}
+    # Direct ETS lookup — no GenServer call needed for reads.
+    # This is safe because both the meta-table and team tables are :public.
+    try do
+      case :ets.lookup(@meta_table, team_id) do
+        [{^team_id, ref}] ->
+          # Verify the team table still exists
+          case :ets.info(ref, :size) do
+            :undefined -> {:error, :not_found}
+            _ -> {:ok, ref}
+          end
+
+        [] ->
+          {:error, :not_found}
+      end
+    rescue
+      ArgumentError -> {:error, :not_found}
     end
   end
 
@@ -33,40 +60,90 @@ defmodule Loomkin.Teams.TableRegistry do
     GenServer.call(__MODULE__, {:delete, team_id})
   end
 
+  @doc "List all registered team IDs."
+  def list_teams do
+    try do
+      :ets.tab2list(@meta_table) |> Enum.map(fn {team_id, _ref} -> team_id end)
+    rescue
+      ArgumentError -> []
+    end
+  end
+
   # Callbacks
 
   @impl true
   def init(_opts) do
-    {:ok, %{tables: %{}}}
+    heir = heir_spec()
+
+    case :ets.whereis(@meta_table) do
+      :undefined ->
+        opts = [:named_table, :public, :set, {:read_concurrency, true}] ++ heir
+        :ets.new(@meta_table, opts)
+
+        Logger.debug("[TableRegistry] Created meta-table")
+
+      _ref ->
+        # Meta-table survived restart (heir kept it alive).
+        # Prune any team entries whose ETS tables no longer exist.
+        prune_dead_tables()
+        Logger.info("[TableRegistry] Reclaimed meta-table after restart")
+    end
+
+    {:ok, %{}}
   end
 
   @impl true
   def handle_call({:create, team_id}, _from, state) do
-    ref = :ets.new(:loomkin_team, [:public, :set, read_concurrency: true])
-    tables = Map.put(state.tables, team_id, ref)
-    {:reply, {:ok, ref}, %{state | tables: tables}}
-  end
+    opts = [:public, :set, {:read_concurrency, true}] ++ heir_spec()
+    ref = :ets.new(:loomkin_team, opts)
 
-  def handle_call({:get, team_id}, _from, state) do
-    case Map.fetch(state.tables, team_id) do
-      {:ok, ref} -> {:reply, {:ok, ref}, state}
-      :error -> {:reply, :error, state}
-    end
+    :ets.insert(@meta_table, {team_id, ref})
+    {:reply, {:ok, ref}, state}
   end
 
   def handle_call({:delete, team_id}, _from, state) do
-    case Map.pop(state.tables, team_id) do
-      {nil, _tables} ->
-        {:reply, :ok, state}
+    case :ets.lookup(@meta_table, team_id) do
+      [{^team_id, ref}] ->
+        :ets.delete(@meta_table, team_id)
 
-      {ref, remaining} ->
         try do
           :ets.delete(ref)
         rescue
           ArgumentError -> :ok
         end
 
-        {:reply, :ok, %{state | tables: remaining}}
+      [] ->
+        :ok
+    end
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_info({:"ETS-TRANSFER", _table, _from_pid, _data}, state) do
+    # Received ownership of an ETS table from a dying process (heir callback).
+    {:noreply, state}
+  end
+
+  # Build heir spec pointing to our supervisor so tables survive our restart.
+  defp heir_spec do
+    case Process.whereis(Loomkin.Teams.Supervisor) do
+      nil -> []
+      pid -> [{:heir, pid, :table_registry}]
+    end
+  end
+
+  # Remove entries from the meta-table where the team ETS table no longer exists.
+  defp prune_dead_tables do
+    for {team_id, ref} <- :ets.tab2list(@meta_table) do
+      case :ets.info(ref, :size) do
+        :undefined ->
+          Logger.warning("[TableRegistry] Pruning dead table for team=#{team_id}")
+          :ets.delete(@meta_table, team_id)
+
+        _ ->
+          :ok
+      end
     end
   end
 end
