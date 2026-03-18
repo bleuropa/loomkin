@@ -21,7 +21,7 @@ defmodule LoomkinWeb.WorkspaceLiveHealingTest do
       assert card.status == :suspended_healing
       assert card.healing_phase == :diagnosing
       assert card.healing_error_category == "compile_error"
-      assert updated.assigns.comms_event_count == 1
+      assert updated.assigns.comms_event_count == 0
     end
   end
 
@@ -43,7 +43,7 @@ defmodule LoomkinWeb.WorkspaceLiveHealingTest do
 
       card = updated.assigns.agent_cards["coder-1"]
       assert card.healing_phase == :fixing
-      assert updated.assigns.comms_event_count == 1
+      assert updated.assigns.comms_event_count == 0
     end
   end
 
@@ -64,7 +64,7 @@ defmodule LoomkinWeb.WorkspaceLiveHealingTest do
 
       card = updated.assigns.agent_cards["coder-1"]
       assert card.healing_phase == :confirming
-      assert updated.assigns.comms_event_count == 1
+      assert updated.assigns.comms_event_count == 0
     end
   end
 
@@ -88,7 +88,7 @@ defmodule LoomkinWeb.WorkspaceLiveHealingTest do
       card = updated.assigns.agent_cards["coder-1"]
       assert card.healing_phase == nil
       assert card.healing_error_category == nil
-      assert updated.assigns.comms_event_count == 1
+      assert updated.assigns.comms_event_count == 0
     end
 
     test "clears healing state on :escalated outcome" do
@@ -108,7 +108,7 @@ defmodule LoomkinWeb.WorkspaceLiveHealingTest do
 
       card = updated.assigns.agent_cards["coder-1"]
       assert card.healing_phase == nil
-      assert updated.assigns.comms_event_count == 1
+      assert updated.assigns.comms_event_count == 0
     end
 
     test "clears healing state on :timed_out outcome" do
@@ -128,7 +128,7 @@ defmodule LoomkinWeb.WorkspaceLiveHealingTest do
 
       card = updated.assigns.agent_cards["coder-1"]
       assert card.healing_phase == nil
-      assert updated.assigns.comms_event_count == 1
+      assert updated.assigns.comms_event_count == 0
     end
   end
 

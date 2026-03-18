@@ -547,7 +547,7 @@ defmodule LoomkinWeb.WorkspaceLive do
 
       nil ->
         if socket.assigns.broadcast_mode do
-          team_id = socket.assigns.team_id
+          team_id = socket.assigns[:active_team_id] || socket.assigns.team_id
           agents = Loomkin.Teams.Manager.list_agents(team_id)
           session_id = socket.assigns.session_id
 
