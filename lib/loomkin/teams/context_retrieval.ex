@@ -6,6 +6,7 @@ defmodule Loomkin.Teams.ContextRetrieval do
   import Ecto.Query
 
   alias Loomkin.Teams.ContextKeeper
+  alias Loomkin.Telemetry, as: LoomkinTelemetry
 
   @doc """
   List all keepers for a team.
@@ -278,7 +279,11 @@ defmodule Loomkin.Teams.ContextRetrieval do
   end
 
   defp call_llm(model, messages) do
-    Loomkin.LLM.generate_text(model, messages, [])
+    meta = %{model: model, caller: __MODULE__, function: :call_llm}
+
+    LoomkinTelemetry.span_llm_request(meta, fn ->
+      Loomkin.LLM.generate_text(model, messages, [])
+    end)
   rescue
     e -> {:error, Exception.message(e)}
   end

@@ -4,6 +4,7 @@ defmodule Loomkin.Teams.ContextOffload do
   alias Loomkin.Teams.ContextKeeper
   alias Loomkin.Teams.Manager
   alias Loomkin.Session.ContextWindow
+  alias Loomkin.Telemetry, as: LoomkinTelemetry
 
   @offload_threshold 0.60
   @chars_per_token 4
@@ -138,8 +139,12 @@ defmodule Loomkin.Teams.ContextOffload do
       ]
 
       # Single attempt only — topic generation is best-effort, not worth retrying
+      meta = %{model: model, caller: __MODULE__, function: :generate_topic}
+
       case Loomkin.LLMRetry.with_retry([max_retries: 0], fn ->
-             Loomkin.LLM.generate_text(model, llm_messages, [])
+             LoomkinTelemetry.span_llm_request(meta, fn ->
+               Loomkin.LLM.generate_text(model, llm_messages, [])
+             end)
            end) do
         {:ok, response} ->
           topic = ReqLLM.Response.classify(response).text

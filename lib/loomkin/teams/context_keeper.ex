@@ -17,6 +17,7 @@ defmodule Loomkin.Teams.ContextKeeper do
 
   alias Loomkin.Repo
   alias Loomkin.Schemas.ContextKeeper, as: KeeperSchema
+  alias Loomkin.Telemetry, as: LoomkinTelemetry
 
   @chars_per_token 4
   @keyword_match_budget 10_000
@@ -660,7 +661,11 @@ defmodule Loomkin.Teams.ContextKeeper do
   end
 
   defp call_llm(model, messages) do
-    Loomkin.LLM.generate_text(model, messages, [])
+    meta = %{model: model, caller: __MODULE__, function: :call_llm}
+
+    LoomkinTelemetry.span_llm_request(meta, fn ->
+      Loomkin.LLM.generate_text(model, messages, [])
+    end)
   rescue
     e -> {:error, Exception.message(e)}
   end

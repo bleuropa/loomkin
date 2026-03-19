@@ -13,6 +13,7 @@ defmodule Loomkin.Conversations.Weaver do
   require Logger
 
   alias Loomkin.Conversations.Server
+  alias Loomkin.Telemetry, as: LoomkinTelemetry
 
   defstruct [
     :conversation_id,
@@ -124,7 +125,11 @@ defmodule Loomkin.Conversations.Weaver do
   end
 
   defp safe_generate(model, messages) do
-    Loomkin.LLM.generate_text(model, messages)
+    meta = %{model: model, caller: __MODULE__, function: :safe_generate}
+
+    LoomkinTelemetry.span_llm_request(meta, fn ->
+      Loomkin.LLM.generate_text(model, messages)
+    end)
   rescue
     error ->
       Logger.warning("[Weaver] LLM raised: #{inspect(error)}")

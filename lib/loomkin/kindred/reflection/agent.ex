@@ -10,6 +10,7 @@ defmodule Loomkin.Kindred.Reflection.Agent do
   require Logger
 
   alias Loomkin.Kindred.Reflection.Prompts
+  alias Loomkin.Telemetry, as: LoomkinTelemetry
 
   @default_budget_usd 0.25
   @default_model "anthropic:claude-sonnet-4-6"
@@ -54,7 +55,11 @@ defmodule Loomkin.Kindred.Reflection.Agent do
       %{role: "user", content: user_message}
     ]
 
-    case Loomkin.LLM.generate_text(model, messages, []) do
+    meta = %{model: model, caller: __MODULE__, function: :call_llm}
+
+    case LoomkinTelemetry.span_llm_request(meta, fn ->
+           Loomkin.LLM.generate_text(model, messages, [])
+         end) do
       {:ok, %{text: text}} ->
         {:ok, text}
 
