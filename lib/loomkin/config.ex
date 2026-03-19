@@ -44,7 +44,7 @@ defmodule Loomkin.Config do
         ~w(mix elixir iex git cat head tail ls find grep rg sed awk echo mkdir cp mv touch node npm npx yarn bun cargo rustc go python python3 pip ruby gem)
     },
     agents: %{
-      max_iterations: 100,
+      max_iterations: 30,
       max_rate_limit_retries: 3,
       llm_max_retries: 3,
       llm_base_backoff_ms: 1_000,
@@ -56,8 +56,8 @@ defmodule Loomkin.Config do
     },
     healing: %{
       budget_usd: 0.50,
-      max_iterations: 15,
-      max_attempts: 2,
+      max_iterations: 10,
+      max_attempts: 1,
       timeout_ms: 300_000,
       rebalancer_check_interval_ms: 60_000,
       stuck_threshold_ms: 300_000,

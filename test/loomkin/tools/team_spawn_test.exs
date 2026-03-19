@@ -81,30 +81,6 @@ defmodule Loomkin.Tools.TeamSpawnTest do
   end
 
   describe "role resolution" do
-    test "resolve_role handles exact 'weaver' string" do
-      # We test via TeamSpawn.run which calls resolve_role internally
-      {:ok, parent_team_id} = Manager.create_team(name: "role-res-weaver")
-
-      params = %{
-        team_name: "weaver-role-test",
-        roles: [%{name: "w1", role: "weaver"}],
-        purpose: "test weaver resolution"
-      }
-
-      context = %{
-        parent_team_id: parent_team_id,
-        project_path: nil,
-        session_id: nil,
-        model: nil,
-        agent_name: "test-agent"
-      }
-
-      {:ok, result} = TeamSpawn.run(params, context)
-      assert result.result =~ "w1 (weaver): spawned"
-
-      on_exit(fn -> Manager.dissolve_team(parent_team_id) end)
-    end
-
     test "resolve_role maps 'coordinator' to lead via fuzzy match" do
       {:ok, parent_team_id} = Manager.create_team(name: "role-res-coord")
 
@@ -127,29 +103,6 @@ defmodule Loomkin.Tools.TeamSpawnTest do
 
       on_exit(fn -> Manager.dissolve_team(parent_team_id) end)
     end
-
-    test "resolve_role maps 'glue' to weaver" do
-      {:ok, parent_team_id} = Manager.create_team(name: "role-res-glue")
-
-      params = %{
-        team_name: "glue-role-test",
-        roles: [%{name: "g1", role: "glue agent"}],
-        purpose: "test glue resolution"
-      }
-
-      context = %{
-        parent_team_id: parent_team_id,
-        project_path: nil,
-        session_id: nil,
-        model: nil,
-        agent_name: "test-agent"
-      }
-
-      {:ok, result} = TeamSpawn.run(params, context)
-      assert result.result =~ "g1 (weaver): spawned"
-
-      on_exit(fn -> Manager.dissolve_team(parent_team_id) end)
-    end
   end
 
   describe "team manifest" do
@@ -161,7 +114,7 @@ defmodule Loomkin.Tools.TeamSpawnTest do
         roles: [
           %{name: "r1", role: "researcher"},
           %{name: "c1", role: "coder"},
-          %{name: "w1", role: "weaver"}
+          %{name: "w1", role: "reviewer"}
         ],
         purpose: "test manifest delivery"
       }
@@ -250,45 +203,6 @@ defmodule Loomkin.Tools.TeamSpawnTest do
       assert bob_manifest.content =~ "researcher"
       assert bob_manifest.content =~ "You are bob"
       refute bob_manifest.content =~ "- **bob**"
-
-      on_exit(fn -> Manager.dissolve_team(parent_team_id) end)
-    end
-
-    test "manifest includes weaver communication hint" do
-      {:ok, parent_team_id} = Manager.create_team(name: "manifest-hint-parent")
-
-      params = %{
-        team_name: "manifest-hint-test",
-        roles: [
-          %{name: "r1", role: "researcher"},
-          %{name: "w1", role: "weaver"}
-        ],
-        purpose: "test weaver hint"
-      }
-
-      context = %{
-        parent_team_id: parent_team_id,
-        project_path: nil,
-        session_id: nil,
-        model: nil,
-        agent_name: "test-agent"
-      }
-
-      {:ok, result} = TeamSpawn.run(params, context)
-      team_id = result.team_id
-
-      Process.sleep(200)
-
-      # Researcher's manifest should have the weaver communication hint
-      {:ok, r1_pid} = Manager.find_agent(team_id, "r1")
-      r1_state = :sys.get_state(r1_pid)
-
-      r1_manifest =
-        Enum.find(r1_state.messages, fn msg ->
-          msg.role == :user and String.contains?(msg.content, "[Team Briefing]")
-        end)
-
-      assert r1_manifest.content =~ "knowledge coordinator"
 
       on_exit(fn -> Manager.dissolve_team(parent_team_id) end)
     end

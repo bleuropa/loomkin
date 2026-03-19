@@ -177,31 +177,15 @@ defmodule Loomkin.Healing.OrchestratorTest do
   # -- fix_failed/2 ------------------------------------------------------------
 
   describe "fix_failed/2" do
-    test "retries when under max_attempts" do
-      team_id = unique_team_id()
-      {:ok, session_id} = Orchestrator.request_healing(team_id, :coder, healing_context())
-      :ok = Orchestrator.report_diagnosis(session_id, %{root_cause: "Bug"})
-
-      # First fix fails — should retry (attempt 1 < max 2)
-      assert :ok = Orchestrator.fix_failed(session_id, "Fix didn't work")
-
-      session = Orchestrator.get_session(session_id)
-      assert session.status == :diagnosing
-    end
-
-    test "escalates when max_attempts reached" do
+    test "escalates immediately with max_attempts=1" do
       %{pid: pid, team_id: team_id, name: name} = start_agent()
       suspend_agent(pid)
 
       {:ok, session_id} = Orchestrator.request_healing(team_id, name, healing_context())
 
-      # First attempt
+      # Single attempt — first fix failure escalates immediately (max_attempts=1)
       :ok = Orchestrator.report_diagnosis(session_id, %{root_cause: "Bug"})
       :ok = Orchestrator.fix_failed(session_id, "Attempt 1 failed")
-
-      # Second attempt
-      :ok = Orchestrator.report_diagnosis(session_id, %{root_cause: "Bug v2"})
-      :ok = Orchestrator.fix_failed(session_id, "Attempt 2 failed")
 
       # Session should be removed after max attempts
       assert Orchestrator.get_session(session_id) == nil

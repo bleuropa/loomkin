@@ -15,7 +15,7 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
   Parent-provided assigns:
     - agent_cards               map of agent_name => card struct
     - concierge_card_names      list of agent names with concierge role
-    - system_card_names         list of agent names with system/infrastructure roles (weaver)
+    - system_card_names         list of agent names with system/infrastructure roles
     - worker_card_names         list of agent names with worker roles
     - comms_event_count         integer
     - focused_agent             binary | nil
@@ -271,7 +271,7 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
         </div>
 
         <%= if @active_tab == :kin do %>
-          <%!-- System agents (weaver etc.) — compact status with role identity --%>
+          <%!-- System agents — compact status with role identity --%>
           <div :if={system_card_names(assigns) != []} class="px-3 pb-2">
             <div
               :for={name <- system_card_names(assigns)}
@@ -746,8 +746,7 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
     "researcher" => "🔬",
     "coder" => "⚡",
     "reviewer" => "🔍",
-    "tester" => "🧪",
-    "weaver" => "🕸"
+    "tester" => "🧪"
   }
 
   @role_accents %{
@@ -756,8 +755,7 @@ defmodule LoomkinWeb.MissionControlPanelComponent do
     "researcher" => "#89dceb",
     "coder" => "#a6e3a1",
     "reviewer" => "#fab387",
-    "tester" => "#f38ba8",
-    "weaver" => "#94e2d5"
+    "tester" => "#f38ba8"
   }
 
   @default_accent "#a1a1aa"

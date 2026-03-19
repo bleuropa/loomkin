@@ -11,9 +11,12 @@ defmodule Loomkin.Tools.SubAgent do
       scope: [type: :string, doc: "Directory to scope the search to (default: project root)"]
     ]
 
+  alias Loomkin.Telemetry, as: LoomkinTelemetry
+
   import Loomkin.Tool, only: [param!: 2, param: 3]
 
-  @max_iterations 10
+  @max_iterations 5
+  @max_concurrent_sub_agents 3
 
   @read_only_tools [
     Loomkin.Tools.FileRead,
@@ -24,6 +27,22 @@ defmodule Loomkin.Tools.SubAgent do
 
   @impl true
   def run(params, context) do
+    count = Process.get(:sub_agent_count, 0)
+
+    if count >= @max_concurrent_sub_agents do
+      {:error, "Maximum concurrent sub-agents (#{@max_concurrent_sub_agents}) reached"}
+    else
+      Process.put(:sub_agent_count, count + 1)
+
+      try do
+        do_run(params, context)
+      after
+        Process.put(:sub_agent_count, Process.get(:sub_agent_count, 1) - 1)
+      end
+    end
+  end
+
+  defp do_run(params, context) do
     task = param!(params, :task)
     project_path = param!(context, :project_path)
     scope = param(params, :scope, project_path)
@@ -161,8 +180,12 @@ defmodule Loomkin.Tools.SubAgent do
   defp call_llm(model, messages, tool_defs) do
     opts = if tool_defs != [], do: [tools: tool_defs], else: []
 
+    meta = %{model: model, caller: __MODULE__, function: :call_llm}
+
     try do
-      Loomkin.LLM.generate_text(model, messages, opts)
+      LoomkinTelemetry.span_llm_request(meta, fn ->
+        Loomkin.LLM.generate_text(model, messages, opts)
+      end)
     rescue
       e -> {:error, Exception.message(e)}
     end

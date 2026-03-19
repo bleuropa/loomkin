@@ -142,17 +142,13 @@ defmodule Loomkin.Teams.Rebalancer do
     now = System.monotonic_time(:millisecond)
 
     Enum.reduce(state.working_since, state, fn {agent_name, working_since}, acc ->
-      if coordination_role?(state.team_id, agent_name) do
-        acc
-      else
-        last_activity = Map.get(acc.last_activity, agent_name, working_since)
-        idle_ms = now - last_activity
+      last_activity = Map.get(acc.last_activity, agent_name, working_since)
+      idle_ms = now - last_activity
 
-        if idle_ms > config_stuck_threshold() do
-          handle_stuck_agent(acc, agent_name, idle_ms)
-        else
-          acc
-        end
+      if idle_ms > config_stuck_threshold() do
+        handle_stuck_agent(acc, agent_name, idle_ms)
+      else
+        acc
       end
     end)
   end
@@ -246,13 +242,6 @@ defmodule Loomkin.Teams.Rebalancer do
 
   defp schedule_check(interval) do
     Process.send_after(self(), :check_stuck, interval)
-  end
-
-  defp coordination_role?(team_id, agent_name) do
-    case Context.get_agent(team_id, agent_name) do
-      {:ok, %{role: role}} -> role in [:weaver, "weaver"]
-      _ -> false
-    end
   end
 
   defp signal_for_team?(sig, team_id) do

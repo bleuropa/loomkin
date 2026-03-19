@@ -78,7 +78,7 @@ defmodule Loomkin.Session.Manager do
   # backing team under the workspace. The workspace owns team lifetime —
   # agents persist across session disconnects.
   #
-  # Bootstrap agents (Concierge + Weaver) are spawned lazily on first user message
+  # Bootstrap agents (Concierge) are spawned lazily on first user message
   # so the user has time to select the correct project path first.
   # This is best-effort — if it fails, the session still works without teams.
   defp maybe_attach_to_workspace(session_id, opts) do

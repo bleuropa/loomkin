@@ -9,7 +9,7 @@ defmodule Loomkin.Tools.TeamSpawn do
       "Create a new agent team and spawn agents with specified roles. " <>
         "Standard roles: researcher (read-only exploration), coder (implementation), " <>
         "reviewer (code review), tester (run tests), lead (coordination), " <>
-        "weaver (knowledge routing and context coordination). " <>
+        "concierge (user-facing orchestration). " <>
         "You can also specify custom specialist roles by description (e.g. 'database-migration-specialist'). " <>
         "You MUST provide a roles list with name and role for each agent. " <>
         "Returns a team status summary with team_id and agent list.",
@@ -248,7 +248,6 @@ defmodule Loomkin.Tools.TeamSpawn do
     """
   end
 
-  defp communication_hint(:weaver), do: " — your knowledge coordinator, keep them updated"
   defp communication_hint(:lead), do: " — your team lead"
   defp communication_hint(_), do: ""
 
@@ -291,9 +290,6 @@ defmodule Loomkin.Tools.TeamSpawn do
         String.contains?(downcased, "audit") or String.contains?(downcased, "explor") or
         String.contains?(downcased, "investigat") or String.contains?(downcased, "document") ->
         :researcher
-
-      String.contains?(downcased, "weav") or String.contains?(downcased, "glue") ->
-        :weaver
 
       String.contains?(downcased, "lead") or String.contains?(downcased, "coordinat") ->
         :lead

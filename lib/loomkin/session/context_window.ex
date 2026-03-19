@@ -3,6 +3,12 @@ defmodule Loomkin.Session.ContextWindow do
 
   require Logger
 
+  @cache_table :context_window_cache
+  # Repo map TTL: 60 seconds before regenerating
+  @repo_map_ttl_ms 60_000
+
+  alias Loomkin.Telemetry, as: LoomkinTelemetry
+
   @default_context_limit 128_000
   @default_reserved_output 4096
   @default_repo_map_tokens 2048
@@ -86,16 +92,9 @@ defmodule Loomkin.Session.ContextWindow do
   def inject_repo_map(system_parts, project_path, opts) do
     if Code.ensure_loaded?(Loomkin.RepoIntel.RepoMap) &&
          function_exported?(Loomkin.RepoIntel.RepoMap, :generate, 2) do
-      try do
-        case Loomkin.RepoIntel.RepoMap.generate(project_path, opts) do
-          {:ok, repo_map} when is_binary(repo_map) and repo_map != "" ->
-            system_parts ++ [repo_map]
-
-          _ ->
-            system_parts
-        end
-      catch
-        :exit, _ -> system_parts
+      case cached_repo_map(project_path, opts) do
+        nil -> system_parts
+        repo_map -> system_parts ++ [repo_map]
       end
     else
       system_parts
@@ -114,34 +113,9 @@ defmodule Loomkin.Session.ContextWindow do
   def inject_project_rules(system_parts, project_path) do
     if Code.ensure_loaded?(Loomkin.ProjectRules) &&
          function_exported?(Loomkin.ProjectRules, :load, 1) do
-      # Load structured LOOMKIN.md rules
-      system_parts =
-        case Loomkin.ProjectRules.load(project_path) do
-          {:ok, rules} ->
-            formatted = Loomkin.ProjectRules.format_for_prompt(rules)
-
-            if formatted != "" do
-              system_parts ++ [formatted]
-            else
-              system_parts
-            end
-
-          _ ->
-            system_parts
-        end
-
-      # Load convention files (AGENTS.md, CLAUDE.md, CONTRIBUTING.md, etc.)
-      if function_exported?(Loomkin.ProjectRules, :load_convention_files, 1) do
-        convention_files = Loomkin.ProjectRules.load_convention_files(project_path)
-        formatted = Loomkin.ProjectRules.format_convention_files(convention_files)
-
-        if formatted != "" do
-          system_parts ++ [formatted]
-        else
-          system_parts
-        end
-      else
-        system_parts
+      case cached_project_rules(project_path) do
+        nil -> system_parts
+        parts -> system_parts ++ parts
       end
     else
       system_parts
@@ -386,10 +360,14 @@ defmodule Loomkin.Session.ContextWindow do
     #{content}
     """
 
-    case Loomkin.LLM.generate_text(model, [
-           ReqLLM.Context.system("You are a concise summarizer. Preserve technical details."),
-           ReqLLM.Context.user(prompt)
-         ]) do
+    meta = %{model: model, caller: __MODULE__, function: :summarize_old_messages}
+
+    case LoomkinTelemetry.span_llm_request(meta, fn ->
+           Loomkin.LLM.generate_text(model, [
+             ReqLLM.Context.system("You are a concise summarizer. Preserve technical details."),
+             ReqLLM.Context.user(prompt)
+           ])
+         end) do
       {:ok, response} ->
         text = ReqLLM.Response.classify(response).text
         "[Summary of #{count} earlier messages]\n#{text}"
@@ -536,5 +514,83 @@ defmodule Loomkin.Session.ContextWindow do
 
   defp config_headroom_ceiling_pct do
     Loomkin.Config.get(:context, :headroom_ceiling_pct) || @default_headroom_ceiling_pct
+  end
+
+  # --- Caching helpers ---
+
+  defp ensure_cache_table do
+    if :ets.whereis(@cache_table) == :undefined do
+      :ets.new(@cache_table, [:set, :public, :named_table])
+    end
+
+    :ok
+  end
+
+  defp cached_project_rules(project_path) do
+    ensure_cache_table()
+    key = {:project_rules, project_path}
+
+    case :ets.lookup(@cache_table, key) do
+      [{^key, parts}] ->
+        parts
+
+      [] ->
+        parts = load_project_rules(project_path)
+        :ets.insert(@cache_table, {key, parts})
+        parts
+    end
+  end
+
+  defp load_project_rules(project_path) do
+    parts = []
+
+    parts =
+      case Loomkin.ProjectRules.load(project_path) do
+        {:ok, rules} ->
+          formatted = Loomkin.ProjectRules.format_for_prompt(rules)
+          if formatted != "", do: parts ++ [formatted], else: parts
+
+        _ ->
+          parts
+      end
+
+    if function_exported?(Loomkin.ProjectRules, :load_convention_files, 1) do
+      convention_files = Loomkin.ProjectRules.load_convention_files(project_path)
+      formatted = Loomkin.ProjectRules.format_convention_files(convention_files)
+      if formatted != "", do: parts ++ [formatted], else: parts
+    else
+      parts
+    end
+    |> case do
+      [] -> nil
+      parts -> parts
+    end
+  end
+
+  defp cached_repo_map(project_path, opts) do
+    ensure_cache_table()
+    key = {:repo_map, project_path}
+    now = System.monotonic_time(:millisecond)
+
+    case :ets.lookup(@cache_table, key) do
+      [{^key, repo_map, cached_at}] when now - cached_at < @repo_map_ttl_ms ->
+        repo_map
+
+      _ ->
+        repo_map = generate_repo_map(project_path, opts)
+        :ets.insert(@cache_table, {key, repo_map, now})
+        repo_map
+    end
+  end
+
+  defp generate_repo_map(project_path, opts) do
+    try do
+      case Loomkin.RepoIntel.RepoMap.generate(project_path, opts) do
+        {:ok, repo_map} when is_binary(repo_map) and repo_map != "" -> repo_map
+        _ -> nil
+      end
+    catch
+      :exit, _ -> nil
+    end
   end
 end

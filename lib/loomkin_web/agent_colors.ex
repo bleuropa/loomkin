@@ -22,8 +22,7 @@ defmodule LoomkinWeb.AgentColors do
     "researcher" => "🔬",
     "coder" => "⚡",
     "reviewer" => "🔍",
-    "tester" => "🧪",
-    "weaver" => "🕸"
+    "tester" => "🧪"
   }
 
   @doc "Return a deterministic hex color for the given agent name."

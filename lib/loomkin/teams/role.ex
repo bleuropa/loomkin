@@ -10,6 +10,8 @@ defmodule Loomkin.Teams.Role do
 
   require Logger
 
+  alias Loomkin.Telemetry, as: LoomkinTelemetry
+
   defstruct [
     :name,
     :model_tier,
@@ -93,15 +95,6 @@ defmodule Loomkin.Teams.Role do
       timeout_ms: 0
     },
     lead: %{
-      enabled: false,
-      categories: [],
-      min_severity: :critical,
-      failure_threshold: 3,
-      budget_usd: 0.0,
-      max_attempts: 0,
-      timeout_ms: 0
-    },
-    weaver: %{
       enabled: false,
       categories: [],
       min_severity: :critical,
@@ -200,35 +193,6 @@ defmodule Loomkin.Teams.Role do
     Loomkin.Tools.IntrospectFailurePatterns,
     Loomkin.Tools.AskUser,
     Loomkin.Tools.SpawnConversation
-  ]
-
-  @weaver_tools [
-    # Peer communication (full suite)
-    Loomkin.Tools.PeerMessage,
-    Loomkin.Tools.PeerDiscovery,
-    Loomkin.Tools.PeerAskQuestion,
-    Loomkin.Tools.PeerAnswerQuestion,
-    Loomkin.Tools.PeerForwardQuestion,
-    Loomkin.Tools.PeerCreateTask,
-    Loomkin.Tools.PeerCompleteTask,
-    # Context mesh
-    Loomkin.Tools.ContextRetrieve,
-    Loomkin.Tools.SearchKeepers,
-    Loomkin.Tools.ContextOffload,
-    # Decision graph
-    Loomkin.Tools.DecisionLog,
-    Loomkin.Tools.DecisionQuery,
-    Loomkin.Tools.MergeGraph,
-    Loomkin.Tools.GenerateWriteup,
-    # Team coordination
-    Loomkin.Tools.TeamProgress,
-    Loomkin.Tools.TeamComms,
-    Loomkin.Tools.ListTeams,
-    Loomkin.Tools.CrossTeamQuery,
-    # Consensus
-    Loomkin.Tools.CollectiveDecision,
-    # User escalation
-    Loomkin.Tools.AskUser
   ]
 
   @lead_tools [
@@ -383,7 +347,7 @@ defmodule Loomkin.Teams.Role do
   ## Duplicate Work Prevention
   Before starting any substantial work:
   1. Call search_keepers with a query describing what you're about to do
-  2. Check if a teammate has already claimed this region (peer_ask_question to the weaver if one exists)
+  2. Check if a teammate has already claimed this region (peer_ask_question to broadcast)
   3. If prior work exists, build on it — don't start from scratch
 
   If you discover during your work that another agent has already covered this ground:
@@ -505,12 +469,6 @@ defmodule Loomkin.Teams.Role do
     - After receiving agent results, offload the synthesis to a keeper for future sessions
     - Monitor the team's context health and direct agents to keepers when needed
     - Use decision_query and search_keepers to build context when needed
-    """,
-    weaver: """
-    - You ARE the context mesh coordinator — constantly search and retrieve keepers
-    - Before routing knowledge, always check keepers first — don't relay stale info
-    - Offload your own coordination summaries periodically for team reference
-    - When you synthesize cross-keeper insights, offload the synthesis as a new keeper
     """
   }
 
@@ -566,60 +524,46 @@ defmodule Loomkin.Teams.Role do
     - If tests reveal issues, use peer_message to the coder with specific failure details
     """,
     concierge: """
-    - If a weaver exists, let them handle context routing between specialists
-    - Use peer_message to relay context only when no weaver is present
-    - For teams of 3+ agents, spawn a weaver alongside specialists
-    """,
-    weaver: """
-    - Route findings from researcher to coder, not just to lead
+    - Route context between specialists using peer_message
+    - Relay findings from researchers to coders proactively
     - Follow up on unanswered peer_ask_question messages
-    - When you detect a communication gap, bridge it with a targeted peer_message
-    - Use cross_team_query to pull relevant context from sibling teams
     """
   }
 
   @communication_graph %{
     researcher: %{
-      primary: [:coder, :weaver],
-      secondary: [:lead, :concierge],
+      primary: [:coder, :lead],
+      secondary: [:concierge],
       directive:
-        "Share findings immediately with the coder (they're waiting on you) and the weaver (they route context team-wide)"
+        "Share findings immediately with the coder (they're waiting on you) and the lead for coordination."
     },
     coder: %{
       primary: [:researcher, :reviewer],
-      secondary: [:tester, :weaver],
+      secondary: [:tester, :lead],
       directive:
         "Pull context from the researcher before implementing. Notify reviewer and tester when done."
     },
     reviewer: %{
       primary: [:coder, :lead],
-      secondary: [:tester, :weaver],
+      secondary: [:tester],
       directive:
         "Send review feedback directly to the coder. Escalate quality concerns to the lead."
     },
     tester: %{
-      primary: [:coder, :weaver],
-      secondary: [:lead],
-      directive:
-        "Send test results to the coder immediately. Alert the weaver about coverage gaps."
+      primary: [:coder, :lead],
+      secondary: [:concierge],
+      directive: "Send test results to the coder immediately. Alert the lead about coverage gaps."
     },
     lead: %{
-      primary: [:concierge, :weaver],
-      secondary: [],
-      directive:
-        "Coordinate with the weaver on knowledge routing. Report synthesis to the concierge."
-    },
-    weaver: %{
-      primary: [:researcher, :coder],
-      secondary: [:reviewer, :tester, :lead],
-      directive:
-        "Monitor all agents. Prioritize routing researcher findings to the coder and ensuring reviewer gets implementation context."
+      primary: [:concierge],
+      secondary: [:researcher, :coder],
+      directive: "Route context between specialists. Report synthesis to the concierge."
     },
     concierge: %{
-      primary: [:weaver, :lead],
-      secondary: [],
+      primary: [:lead],
+      secondary: [:researcher, :coder],
       directive:
-        "The weaver handles knowledge routing so you can focus on user interaction and strategic delegation."
+        "Coordinate with the lead on knowledge routing. Focus on user interaction and strategic delegation."
     }
   }
 
@@ -987,7 +931,6 @@ defmodule Loomkin.Teams.Role do
       ### Multi-Agent Coordination
       - For research → implementation flows: spawn researcher first, wait for findings,
         then spawn coder with the research results as context
-      - For 3+ agents: include a weaver to route context between them
       - Create tasks with peer_create_task so progress is tracked
 
       ## Anti-Pattern: Doing Work Yourself
@@ -1019,12 +962,6 @@ defmodule Loomkin.Teams.Role do
         assign to agents/teams, or add results when work completes.
       At session start, check the backlog with query_backlog to orient yourself on planned work.
 
-      ## Weaver Delegation
-      If a Weaver agent exists in the team, delegate knowledge routing to them:
-      - Don't manually relay findings between agents — the Weaver handles that
-      - When you spawn a team, consider including a weaver for teams of 3+ agents
-      - The Weaver monitors context health, so you can focus on user interaction
-
       ## Available Kin Specialists
 
       The following pre-configured specialists are available to spawn. The user has defined
@@ -1033,81 +970,6 @@ defmodule Loomkin.Teams.Role do
       these fit.
 
       {kin_roster}
-      """
-    },
-    weaver: %{
-      model_tier: :fast,
-      reasoning_strategy: :cot,
-      tools: @weaver_tools,
-      system_prompt: """
-      You are the Weaver — the team's knowledge coordinator and communication backbone.
-      You run cheaply and continuously, stitching context between specialists so they
-      never work in isolation or duplicate effort.
-
-      ## Core Identity
-      You are proactive and opinionated. Evaluate every situation critically. Voice
-      concerns before they become problems — even when no one asked. If two agents are
-      about to duplicate work, say so. If a keeper already has the answer someone is
-      researching, intervene. Push back with reasoning rather than silently watching.
-
-      ## Primary Responsibilities
-
-      ### 1. Knowledge Routing
-      - Monitor peer_discovery broadcasts and route them to the RIGHT agent, not just broadcast
-      - When an agent starts work, proactively retrieve relevant keeper context and send it to them
-      - When a researcher completes findings, immediately relay key insights to the coder
-      - Use search_keepers and context_retrieve constantly — you are the team's memory
-
-      ### 2. Context Mesh Health
-      - Monitor team context pressure — when agents are getting long conversations, nudge them to offload
-      - After major milestones, synthesize cross-keeper context into a team summary
-      - When new agents join, brief them with relevant keeper context
-      - Track which keepers exist and what they cover — be the team's librarian
-
-      ### 3. Decision Graph Coherence
-      - Watch for coverage gaps (goals with no actions, decisions with no outcomes)
-      - When confidence drops on a node, alert the responsible agent
-      - Use decision_query with type "pulse" periodically to check graph health
-      - Log coordination decisions to the graph so the team's reasoning is captured
-
-      ### 4. Duplicate Work Prevention
-      - Track what each agent is working on via team_progress
-      - If two agents are exploring the same area, alert them immediately
-      - Before an agent starts research, check if keepers already have the answer
-      - If someone is about to create something that already exists, intervene
-
-      ### 5. Communication Gap Detection
-      - If an agent hasn't communicated in a while, check on them via peer_ask_question
-      - If a discovery was broadcast but the relevant agent didn't acknowledge, follow up
-      - Ensure findings flow: researcher → coder → reviewer → tester (not just to lead)
-
-      ### 6. Speculative Validation (when applicable)
-      - When tasks proceed on tentative assumptions, track those assumptions
-      - When the blocking task completes, compare actual vs. assumed results
-      - If assumptions hold: use merge_graph to consolidate speculative work
-      - If assumptions violated: alert dependent agents immediately
-
-      ## Capability Gap Protocol
-      If you identify a gap in team capabilities (e.g., no coder for implementation, no researcher
-      for investigation), proactively alert the lead or the concierge via `peer_message`. Include:
-      1. What capability is missing
-      2. Which agent needs it and why
-      3. What context the new specialist would need
-      You are the team's nervous system — detect capability gaps before they block progress.
-
-      The concierge is always available as the escalation point for capability gaps. If you detect
-      a gap and the lead isn't responding, message the concierge — they will spawn the right
-      specialist and connect them with the team.
-
-      ## Team Manifest
-      {team_manifest}
-
-      ## Operating Style
-      - Be concise — you use a fast model, so keep messages short and actionable
-      - Lead with the action, not the reasoning: "Coder: keeper K-abc has the auth flow you need" not "I noticed that..."
-      - Use peer_message for targeted routing, peer_discovery for team-wide alerts
-      - Check team_progress at the start and periodically to stay aware of agent states
-      - You are NOT a lead — don't assign tasks or make strategic decisions. Route information.
       """
     }
   }
@@ -1343,9 +1205,13 @@ defmodule Loomkin.Teams.Role do
 
     messages = [system_msg, user_msg]
 
+    meta = %{model: model, caller: __MODULE__, function: :generate}
+
     try do
       case Loomkin.LLMRetry.with_retry([max_retries: 2], fn ->
-             ReqLLM.generate_text(model, messages, [])
+             LoomkinTelemetry.span_llm_request(meta, fn ->
+               Loomkin.LLM.generate_text(model, messages, [])
+             end)
            end) do
         {:ok, response} ->
           text = ReqLLM.Response.classify(response).text

@@ -92,14 +92,6 @@ defmodule Loomkin.Teams.RoleHealingPolicyTest do
       assert policy.categories == []
     end
 
-    test "weaver: disabled" do
-      {:ok, role} = Role.get(:weaver)
-      policy = role.healing_policy
-
-      assert policy.enabled == false
-      assert policy.categories == []
-    end
-
     test "concierge: disabled" do
       {:ok, role} = Role.get(:concierge)
       policy = role.healing_policy
@@ -233,7 +225,7 @@ defmodule Loomkin.Teams.RoleHealingPolicyTest do
 
   describe "disabling healing per-role" do
     test "disabled roles have empty categories and zero budget" do
-      for role_name <- [:reviewer, :lead, :weaver, :concierge] do
+      for role_name <- [:reviewer, :lead, :concierge] do
         {:ok, role} = Role.get(role_name)
         policy = role.healing_policy
 

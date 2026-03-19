@@ -167,8 +167,7 @@ defmodule Loomkin.Tools.ToolFilter do
       :graph_merge,
       :consensus,
       :backlog
-    ],
-    weaver: [:peer, :decision, :coordination, :cross_team, :consensus, :graph_merge]
+    ]
   }
 
   # -- Public API --

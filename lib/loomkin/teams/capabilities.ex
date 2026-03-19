@@ -53,10 +53,6 @@ defmodule Loomkin.Teams.Capabilities do
   end
 
   @doc "Return agents ranked by capability score for a given task type."
-  @coordination_roles Loomkin.Teams.Role.built_in_roles()
-                      |> Enum.filter(&(&1 == :weaver))
-                      |> MapSet.new(&Atom.to_string/1)
-
   def best_agent_for(team_id, task_type) do
     task_type = normalize_type(task_type)
 
@@ -64,7 +60,6 @@ defmodule Loomkin.Teams.Capabilities do
     |> Enum.map(fn {{:capability, agent_name, _type}, stats} ->
       %{agent: agent_name, score: score(stats), stats: stats}
     end)
-    |> Enum.reject(fn %{agent: name} -> MapSet.member?(@coordination_roles, name) end)
     |> Enum.sort_by(& &1.score, :desc)
   rescue
     ArgumentError -> []

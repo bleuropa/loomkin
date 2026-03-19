@@ -79,7 +79,7 @@ defmodule Loomkin.Healing.EphemeralAgent do
   defp run(role, opts) do
     team_id = Keyword.fetch!(opts, :team_id)
     session_id = Keyword.fetch!(opts, :session_id)
-    max_iterations = Keyword.get(opts, :max_iterations, 7)
+    max_iterations = Keyword.get(opts, :max_iterations, 5)
 
     system_prompt = build_prompt(role, opts)
     tools = tools_for(role)

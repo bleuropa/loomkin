@@ -17,7 +17,7 @@ defmodule Loomkin.Healing.Orchestrator do
 
   @default_budget_usd 0.50
   @default_max_iterations 15
-  @default_max_attempts 2
+  @default_max_attempts 1
   @default_timeout_ms :timer.minutes(5)
 
   # State: %{sessions: %{session_id => {session, timer_ref}}, monitors: %{monitor_ref => session_id}}

@@ -132,16 +132,16 @@ defmodule Loomkin.Healing.IntegrationTest do
     end
   end
 
-  # -- Retry path: diagnose → fix fails → re-diagnose → fix → wake ---------
+  # -- Escalation path: diagnose → fix fails → escalate (max_attempts=1) ----
 
   describe "retry path" do
-    test "retries diagnosis after first fix failure" do
+    test "escalates after first fix failure with max_attempts=1" do
       %{pid: pid, team_id: team_id, name: name} = start_agent()
       suspend_agent(pid)
 
       {:ok, session_id} = Orchestrator.request_healing(team_id, name, healing_context())
 
-      # First diagnosis
+      # Diagnosis
       :ok =
         Orchestrator.report_diagnosis(session_id, %{
           root_cause: "Wrong import",
@@ -152,53 +152,10 @@ defmodule Loomkin.Healing.IntegrationTest do
       assert session.status == :fixing
       assert session.attempts == 1
 
-      # First fix fails
+      # Fix fails — with max_attempts=1, escalates immediately
       :ok = Orchestrator.fix_failed(session_id, "Import change caused new error")
 
-      session = Orchestrator.get_session(session_id)
-      assert session.status == :diagnosing
-      assert session.attempts == 1
-
-      # Second diagnosis with revised understanding
-      :ok =
-        Orchestrator.report_diagnosis(session_id, %{
-          root_cause: "Missing alias, not import",
-          suggested_fix: "Add alias statement"
-        })
-
-      session = Orchestrator.get_session(session_id)
-      assert session.status == :fixing
-      assert session.attempts == 2
-
-      # Second fix succeeds
-      :ok =
-        Orchestrator.confirm_fix(session_id, %{
-          description: "Added correct alias",
-          files_changed: ["lib/foo.ex"]
-        })
-
-      assert Orchestrator.get_session(session_id) == nil
-
-      _ = :sys.get_state(pid)
-      state = :sys.get_state(pid)
-      assert state.status == :idle
-    end
-
-    test "escalates after max attempts exhausted" do
-      %{pid: pid, team_id: team_id, name: name} = start_agent()
-      suspend_agent(pid)
-
-      {:ok, session_id} = Orchestrator.request_healing(team_id, name, healing_context())
-
-      # Attempt 1: diagnose then fail
-      :ok = Orchestrator.report_diagnosis(session_id, %{root_cause: "Bug A"})
-      :ok = Orchestrator.fix_failed(session_id, "Fix A didn't work")
-
-      # Attempt 2: diagnose then fail
-      :ok = Orchestrator.report_diagnosis(session_id, %{root_cause: "Bug B"})
-      :ok = Orchestrator.fix_failed(session_id, "Fix B didn't work either")
-
-      # Session should be removed (max_attempts=2 reached)
+      # Session should be removed (max_attempts=1 reached)
       assert Orchestrator.get_session(session_id) == nil
 
       # Agent should be woken with failure summary

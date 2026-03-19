@@ -9,8 +9,7 @@ defmodule Loomkin.Schemas.KinAgent do
     field :name, :string
     field :display_name, :string
 
-    field :role, Ecto.Enum,
-      values: [:lead, :researcher, :coder, :reviewer, :tester, :concierge, :weaver]
+    field :role, Ecto.Enum, values: [:lead, :researcher, :coder, :reviewer, :tester, :concierge]
 
     field :auto_spawn, :boolean, default: false
     field :potency, :integer, default: 50

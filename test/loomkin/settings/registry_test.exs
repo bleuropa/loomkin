@@ -82,7 +82,7 @@ defmodule Loomkin.Settings.RegistryTest do
       setting = Registry.by_key("agents.max_iterations")
       assert %Setting{} = setting
       assert setting.label == "Max loop iterations"
-      assert setting.default == 100
+      assert setting.default == 30
     end
 
     test "returns nil for unknown key" do

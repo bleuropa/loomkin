@@ -17,7 +17,7 @@ defmodule Loomkin.AgentLoop do
   require Logger
 
   @default_max_rate_limit_retries 3
-  @default_max_iterations 100
+  @default_max_iterations 30
 
   @type on_event :: (atom(), map() -> :ok)
 

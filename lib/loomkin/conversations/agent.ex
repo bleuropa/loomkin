@@ -16,6 +16,7 @@ defmodule Loomkin.Conversations.Agent do
   alias Loomkin.Conversations.Tools.React
   alias Loomkin.Conversations.Tools.Speak
   alias Loomkin.Conversations.Tools.Yield
+  alias Loomkin.Telemetry, as: LoomkinTelemetry
 
   @conversation_tools [Speak, React, Yield, EndConversation]
 
@@ -139,7 +140,11 @@ defmodule Loomkin.Conversations.Agent do
       team_id: state.team_id
     }
 
-    case Loomkin.LLM.generate_text(state.model, messages, tools: tool_defs) do
+    meta = %{model: state.model, caller: __MODULE__, function: :run_turn}
+
+    case LoomkinTelemetry.span_llm_request(meta, fn ->
+           Loomkin.LLM.generate_text(state.model, messages, tools: tool_defs)
+         end) do
       {:ok, response} ->
         tokens = extract_token_count(response)
         execute_tool_calls(response, exec_context)

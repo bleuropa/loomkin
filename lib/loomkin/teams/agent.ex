@@ -266,11 +266,6 @@ defmodule Loomkin.Teams.Agent do
         broadcast_team(state, {:agent_status, state.name, :idle})
         Logger.info("[Kin:agent] registered name=#{name} role=#{role} — broadcasting :idle")
 
-        if role == :weaver do
-          # Stagger weaver start to avoid rate-limiting other bootstrap agents
-          Process.send_after(self(), :weaver_cycle, 3_000)
-        end
-
         {:ok, state}
 
       {:error, :unknown_role} ->
@@ -300,52 +295,6 @@ defmodule Loomkin.Teams.Agent do
     end
 
     Comms.unsubscribe(state.subscription_ids)
-  end
-
-  @impl true
-  def handle_continue(:auto_weave, state) do
-    Logger.info("[Kin:agent] weaver auto-weave starting team=#{state.team_id}")
-    state = set_status_and_broadcast(state, :working)
-
-    task_id = "weave_cycle_#{state.team_id}_#{System.monotonic_time()}"
-
-    Context.cache_task(state.team_id, task_id, %{
-      title: "coordination cycle",
-      status: :in_progress,
-      owner: state.name
-    })
-
-    state = %{state | task: %{id: task_id, title: "coordination cycle"}}
-
-    prompt = """
-    Begin your coordination cycle. Follow this protocol:
-
-    1. Use team_progress to see what all agents are working on
-    2. Use decision_query with type "pulse" to check decision graph health
-    3. Use search_keepers to build your picture of available knowledge
-    4. Identify any communication gaps, duplicate work risks, or knowledge routing needs
-    5. Take action: route knowledge, nudge silent agents, flag duplicates, bridge gaps
-    6. When you've addressed immediate needs, summarize what you did via peer_discovery
-
-    After each cycle, if agents are still active, continue monitoring.
-    You are the team's nervous system — stay aware and keep information flowing.
-    """
-
-    # Reset messages each cycle to prevent unbounded context growth
-    messages = [%{role: :user, content: prompt}]
-    state = %{state | messages: messages}
-
-    loop_opts = build_loop_opts(state)
-    snapshot = build_snapshot(state)
-
-    task =
-      Task.Supervisor.async_nolink(Loomkin.Teams.TaskSupervisor, fn ->
-        run_loop_with_escalation(messages, loop_opts, snapshot)
-      end)
-
-    Logger.debug("[Kin:loop] spawned agent=#{state.name} ref=#{inspect(task.ref)}")
-
-    {:noreply, %{state | loop_task: {task, nil}, messages: messages}}
   end
 
   # --- handle_call ---
@@ -1220,14 +1169,7 @@ defmodule Loomkin.Teams.Agent do
     state = %{state | messages: msgs, failure_count: 0, loop_task: nil, task: nil}
     state = track_usage(state, meta)
 
-    # Weaver stays idle and schedules next cycle
-    state =
-      if state.role == :weaver and is_nil(from) do
-        maybe_schedule_weaver_cycle(state)
-        set_status_and_broadcast(state, :idle)
-      else
-        set_status_and_broadcast(state, :idle)
-      end
+    state = set_status_and_broadcast(state, :idle)
 
     if from do
       GenServer.reply(from, {:ok, text})
@@ -1262,14 +1204,7 @@ defmodule Loomkin.Teams.Agent do
 
     state = track_usage(state, meta)
 
-    # Weaver stays idle and schedules next cycle
-    state =
-      if state.role == :weaver and is_nil(from) do
-        maybe_schedule_weaver_cycle(state)
-        set_status_and_broadcast(state, :idle)
-      else
-        set_status_and_broadcast(state, :idle)
-      end
+    state = set_status_and_broadcast(state, :idle)
 
     if from do
       GenServer.reply(from, {:ok, text})
@@ -1383,21 +1318,7 @@ defmodule Loomkin.Teams.Agent do
     end
 
     state = %{state | messages: msgs, loop_task: nil, pending_permission: nil}
-
-    state =
-      if state.role == :weaver do
-        failure_count = state.failure_count + 1
-        state = %{state | failure_count: failure_count}
-
-        if failure_count <= 3 and team_still_active?(state) do
-          delay = min(30_000 * failure_count, 120_000)
-          Process.send_after(self(), :weaver_cycle, delay)
-        end
-
-        set_status_and_broadcast(state, :idle)
-      else
-        set_status_and_broadcast(state, :idle)
-      end
+    state = set_status_and_broadcast(state, :idle)
 
     if from do
       GenServer.reply(from, {:error, reason})
@@ -1462,17 +1383,6 @@ defmodule Loomkin.Teams.Agent do
   end
 
   @impl true
-  def handle_info(:weaver_cycle, %{role: :weaver, loop_task: nil} = state) do
-    {:noreply, state, {:continue, :auto_weave}}
-  end
-
-  @impl true
-  def handle_info(:weaver_cycle, state) do
-    # Already running or not a weaver, skip
-    {:noreply, state}
-  end
-
-  @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) when is_reference(ref) do
     case state.loop_task do
       {%Task{ref: ^ref}, from} ->
@@ -1509,20 +1419,7 @@ defmodule Loomkin.Teams.Agent do
           if task_id, do: Loomkin.Teams.Tasks.fail_task(task_id, "crashed: #{inspect(reason)}")
         end
 
-        # Re-trigger weaver cycling after task crash (same backoff as loop_error)
-        if state.role == :weaver and is_nil(from) do
-          failure_count = state.failure_count + 1
-          state = %{state | failure_count: failure_count}
-
-          if failure_count <= 3 and team_still_active?(state) do
-            delay = min(30_000 * failure_count, 120_000)
-            Process.send_after(self(), :weaver_cycle, delay)
-          end
-
-          {:noreply, drain_queues(state)}
-        else
-          {:noreply, drain_queues(state)}
-        end
+        {:noreply, drain_queues(state)}
 
       _ ->
         {:noreply, state}
@@ -1622,10 +1519,10 @@ defmodule Loomkin.Teams.Agent do
   end
 
   def handle_info(%Jido.Signal{type: "collaboration.peer.message"} = sig, state) do
-    # Skip messages targeted at a different agent
+    # Skip messages targeted at a different agent (unless lead/concierge for oversight)
     target = sig.data[:target]
 
-    if target && target != to_string(state.name) do
+    if target && target != to_string(state.name) && state.role not in [:lead, :concierge] do
       {:noreply, state}
     else
       handle_peer_message_signal(sig, state)
@@ -2236,7 +2133,6 @@ defmodule Loomkin.Teams.Agent do
     }
 
     state = track_usage(state, metadata)
-    maybe_schedule_weaver_cycle(state)
     state = set_status_and_broadcast(state, :idle)
 
     # If there's an active task, complete it with the response
@@ -2250,7 +2146,6 @@ defmodule Loomkin.Teams.Agent do
   @impl true
   def handle_info({:loop_resumed, {:error, _reason, messages}}, state) do
     state = %{state | messages: messages, loop_task: nil, task: nil, pending_permission: nil}
-    maybe_schedule_weaver_cycle(state)
     state = set_status_and_broadcast(state, :idle)
     {:noreply, drain_queues(state)}
   end
@@ -3957,28 +3852,6 @@ defmodule Loomkin.Teams.Agent do
   # Sets status and broadcasts only when the status actually changed.
   # This prevents duplicate `:agent_status` signals when multiple code paths
   # set the same status (e.g., :working broadcast from both send_message and execute_task).
-  defp maybe_schedule_weaver_cycle(state) do
-    if state.role == :weaver and team_still_active?(state) do
-      # Adaptive interval: immediate if queued messages exist, 30s otherwise
-      delay =
-        if state.priority_queue != [] or state.pending_updates != [] do
-          0
-        else
-          30_000
-        end
-
-      Process.send_after(self(), :weaver_cycle, delay)
-    end
-  end
-
-  defp team_still_active?(state) do
-    agents = Context.list_agents(state.team_id)
-
-    Enum.any?(agents, fn %{role: role, status: status} ->
-      role != :weaver and status in [:idle, :working]
-    end)
-  end
-
   defp set_status_and_broadcast(state, new_status) do
     if state.status == new_status do
       state
@@ -4076,9 +3949,15 @@ defmodule Loomkin.Teams.Agent do
         handle_info(tuple, state)
 
       _ ->
-        from = sig.data[:from] || "unknown"
-        content = if is_binary(msg), do: msg, else: inspect(msg)
-        handle_info({:peer_message, from, content}, state)
+        # Only inject unrecognized broadcast messages into lead/concierge agents
+        # to avoid redundant context copies across all team members
+        if state.role in [:lead, :concierge] do
+          from = sig.data[:from] || "unknown"
+          content = if is_binary(msg), do: msg, else: inspect(msg)
+          handle_info({:peer_message, from, content}, state)
+        else
+          {:noreply, state}
+        end
     end
   end
 

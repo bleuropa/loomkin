@@ -116,7 +116,7 @@ defmodule Loomkin.Settings.Registry do
       why_change:
         "Increase for complex multi-step refactors. Decrease for cost control on simple tasks.",
       type: :number,
-      default: 100,
+      default: 30,
       range: {1, 200},
       step: 1,
       tab: "Agents",
@@ -333,7 +333,7 @@ defmodule Loomkin.Settings.Registry do
       why_change:
         "Increase for stubborn failures that need iterative debugging. Decrease to fail fast and escalate.",
       type: :number,
-      default: 15,
+      default: 10,
       range: {1, 50},
       step: 1,
       tab: "Healing",
@@ -347,7 +347,7 @@ defmodule Loomkin.Settings.Registry do
       why_change:
         "Increase if initial healing attempts often partially fix issues. Decrease to escalate sooner.",
       type: :number,
-      default: 2,
+      default: 1,
       range: {1, 5},
       step: 1,
       tab: "Healing",

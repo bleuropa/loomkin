@@ -99,24 +99,6 @@ defmodule Loomkin.Tools.ToolFilterTest do
       assert Loomkin.Tools.SubAgent in tools
     end
 
-    test "returns tools for weaver role" do
-      {:ok, tools} = ToolFilter.tools_for_role(:weaver)
-
-      # Coordination tools present
-      assert Loomkin.Tools.PeerMessage in tools
-      assert Loomkin.Tools.ContextRetrieve in tools
-      assert Loomkin.Tools.DecisionLog in tools
-      assert Loomkin.Tools.TeamProgress in tools
-      assert Loomkin.Tools.CollectiveDecision in tools
-      assert Loomkin.Tools.MergeGraph in tools
-
-      # No read/write/exec tools
-      refute Loomkin.Tools.FileRead in tools
-      refute Loomkin.Tools.FileWrite in tools
-      refute Loomkin.Tools.Shell in tools
-      refute Loomkin.Tools.SubAgent in tools
-    end
-
     test "returns tools for concierge role" do
       {:ok, tools} = ToolFilter.tools_for_role(:concierge)
 
@@ -191,18 +173,6 @@ defmodule Loomkin.Tools.ToolFilterTest do
 
     test "reviewer can use shell for linters" do
       assert ToolFilter.allowed?(:reviewer, Loomkin.Tools.Shell)
-    end
-
-    test "weaver cannot use file tools" do
-      refute ToolFilter.allowed?(:weaver, Loomkin.Tools.FileRead)
-      refute ToolFilter.allowed?(:weaver, Loomkin.Tools.FileWrite)
-      refute ToolFilter.allowed?(:weaver, Loomkin.Tools.Shell)
-    end
-
-    test "weaver can use coordination tools" do
-      assert ToolFilter.allowed?(:weaver, Loomkin.Tools.TeamProgress)
-      assert ToolFilter.allowed?(:weaver, Loomkin.Tools.PeerMessage)
-      assert ToolFilter.allowed?(:weaver, Loomkin.Tools.DecisionLog)
     end
 
     test "unknown role returns true (permissive for custom roles)" do
@@ -368,15 +338,6 @@ defmodule Loomkin.Tools.ToolFilterTest do
 
       refute ToolFilter.allowed?(:reviewer, Loomkin.Tools.FileWrite)
       refute ToolFilter.allowed?(:reviewer, Loomkin.Tools.FileEdit)
-    end
-
-    test "weaver role tools from Role.get match ToolFilter expectations" do
-      {:ok, role} = Loomkin.Teams.Role.get(:weaver)
-
-      for tool <- role.tools do
-        assert ToolFilter.allowed?(:weaver, tool),
-               "Weaver role has tool #{inspect(tool)} which ToolFilter disallows"
-      end
     end
   end
 end

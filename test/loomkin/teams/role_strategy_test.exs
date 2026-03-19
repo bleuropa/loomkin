@@ -45,8 +45,8 @@ defmodule Loomkin.Teams.RoleStrategyTest do
     end
 
     test "from_config uses built-in default when not overridden" do
-      role = Role.from_config(:weaver, %{})
-      assert role.reasoning_strategy == :cot
+      role = Role.from_config(:researcher, %{})
+      assert role.reasoning_strategy == :react
     end
 
     test "from_config for unknown role defaults to :react" do

@@ -383,7 +383,7 @@ defmodule LoomkinWeb.SnippetLive do
   # ---------------------------------------------------------------------------
 
   defp safe_to_role(role_str)
-       when role_str in ~w(lead coder researcher reviewer tester concierge weaver architect expert),
+       when role_str in ~w(lead coder researcher reviewer tester concierge architect expert),
        do: String.to_existing_atom(role_str)
 
   defp safe_to_role(_), do: :coder
@@ -863,7 +863,6 @@ defmodule LoomkinWeb.SnippetLive do
             {"Reviewer", "reviewer"},
             {"Tester", "tester"},
             {"Concierge", "concierge"},
-            {"Weaver", "weaver"}
           ] do %>
             <option value={value} selected={value == to_string(@kin_role)}>{label}</option>
           <% end %>

@@ -852,15 +852,6 @@ defmodule Loomkin.Session do
       kin_agents: kin_agents
     )
 
-    # Spawn Weaver (fast model) — continuous coordination
-    fast_model = state.fast_model || state.model
-
-    Loomkin.Teams.Manager.spawn_agent(team_id, "weaver", :weaver,
-      model: fast_model,
-      project_path: project_path,
-      session_id: state.id
-    )
-
     # Spawn auto-spawn kin agents
     kin_agents
     |> Enum.filter(& &1.auto_spawn)
