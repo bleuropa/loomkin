@@ -32,6 +32,45 @@ defmodule Loomkin.Decisions.NarrativeTest do
     test "returns empty list for session with no nodes" do
       assert Narrative.for_session(Ecto.UUID.generate()) == []
     end
+
+    test "excludes auto-logged nodes by default" do
+      session = create_session()
+
+      {:ok, manual} = Graph.add_node(node_attrs(%{title: "Manual", session_id: session.id}))
+
+      {:ok, _auto} =
+        Graph.add_node(
+          node_attrs(%{
+            title: "Auto tool action",
+            node_type: :action,
+            session_id: session.id,
+            metadata: %{"auto_logged" => true}
+          })
+        )
+
+      result = Narrative.for_session(session.id)
+      assert length(result) == 1
+      assert hd(result).id == manual.id
+    end
+
+    test "includes auto-logged nodes when exclude_auto_logged: false" do
+      session = create_session()
+
+      {:ok, _} = Graph.add_node(node_attrs(%{title: "Manual", session_id: session.id}))
+
+      {:ok, _} =
+        Graph.add_node(
+          node_attrs(%{
+            title: "Auto",
+            node_type: :action,
+            session_id: session.id,
+            metadata: %{"auto_logged" => true}
+          })
+        )
+
+      result = Narrative.for_session(session.id, exclude_auto_logged: false)
+      assert length(result) == 2
+    end
   end
 
   describe "for_goal/1" do

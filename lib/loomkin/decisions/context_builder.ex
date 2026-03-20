@@ -5,6 +5,7 @@ defmodule Loomkin.Decisions.ContextBuilder do
   alias Loomkin.Decisions.Narrative
 
   @default_max_tokens 1024
+  @section_max_chars 1024
 
   def build(session_id, opts \\ []) do
     max_tokens = Keyword.get(opts, :max_tokens, @default_max_tokens)
@@ -101,7 +102,7 @@ defmodule Loomkin.Decisions.ContextBuilder do
       "## Session Context\nNo decisions recorded in this session."
     else
       timeline = Narrative.format_timeline(entries)
-      "## Session Context\n#{timeline}"
+      "## Session Context\n#{truncate(timeline, @section_max_chars)}"
     end
   end
 

@@ -206,7 +206,124 @@ defmodule Loomkin.Decisions.AutoLoggerTest do
     end
   end
 
+  describe "tool event filtering" do
+    test "low-value tools are completely skipped", %{team_id: team_id, logger_pid: pid} do
+      send_tool_executing(pid, "alice", "directory_list", team_id)
+      Process.sleep(50)
+      send_tool_complete(pid, "alice", "directory_list", team_id)
+      Process.sleep(200)
+
+      assert Graph.list_nodes(node_type: :action) == []
+      assert Graph.list_nodes(node_type: :outcome) == []
+    end
+
+    test "multiple low-value tools produce zero nodes", %{team_id: team_id, logger_pid: pid} do
+      for tool <- ~w(file_read content_search query_backlog decision_query search_keepers) do
+        send_tool_executing(pid, "alice", tool, team_id)
+        send_tool_complete(pid, "alice", tool, team_id)
+      end
+
+      Process.sleep(200)
+
+      assert Graph.list_nodes() == []
+    end
+
+    test "meaningful tools still produce nodes", %{team_id: team_id, logger_pid: pid} do
+      send_tool_executing(pid, "alice", "file_write", team_id)
+      Process.sleep(50)
+      send_tool_complete(pid, "alice", "file_write", team_id)
+      Process.sleep(200)
+
+      # Fast completion — should produce a single combined action node
+      actions = Graph.list_nodes(node_type: :action)
+      assert length(actions) == 1
+      assert hd(actions).title =~ "file_write"
+      assert hd(actions).metadata["tool_name"] == "file_write"
+    end
+  end
+
+  describe "fast tool collapse" do
+    test "fast tool produces single combined action node", %{
+      team_id: team_id,
+      logger_pid: pid
+    } do
+      send_tool_executing(pid, "bob", "file_edit", team_id)
+      # No sleep — completes immediately (< 1s)
+      send_tool_complete(pid, "bob", "file_edit", team_id)
+      Process.sleep(200)
+
+      actions = Graph.list_nodes(node_type: :action)
+      assert length(actions) == 1
+      action = hd(actions)
+      assert action.title =~ "[done]"
+      assert action.metadata["elapsed_ms"] != nil
+
+      # No separate outcome node
+      assert Graph.list_nodes(node_type: :outcome) == []
+    end
+
+    test "slow tool produces action + outcome with edge", %{
+      team_id: team_id,
+      logger_pid: pid
+    } do
+      send_tool_executing(pid, "carol", "team_spawn", team_id)
+      # Simulate slow tool by waiting over the threshold
+      Process.sleep(1100)
+      send_tool_complete(pid, "carol", "team_spawn", team_id)
+      Process.sleep(200)
+
+      actions = Graph.list_nodes(node_type: :action)
+      assert length(actions) == 1
+      action = hd(actions)
+      assert action.title == "Tool: team_spawn (carol)"
+
+      outcomes = Graph.list_nodes(node_type: :outcome)
+      assert length(outcomes) == 1
+      outcome = hd(outcomes)
+      assert outcome.title == "Tool done: team_spawn (carol)"
+
+      edges = Graph.list_edges(edge_type: :leads_to, to_node_id: outcome.id)
+      assert Enum.any?(edges, &(&1.from_node_id == action.id))
+    end
+  end
+
   # --- Helpers ---
+
+  defp send_tool_executing(pid, agent_name, tool_name, team_id) do
+    sig =
+      Loomkin.Signals.Agent.ToolExecuting.new!(
+        %{agent_name: agent_name, team_id: team_id},
+        subject: "payload"
+      )
+      |> Map.put(
+        :data,
+        %{
+          agent_name: agent_name,
+          team_id: team_id,
+          payload: %{tool_name: tool_name}
+        }
+      )
+
+    send(pid, {:signal, sig})
+  end
+
+  defp send_tool_complete(pid, agent_name, tool_name, team_id) do
+    sig =
+      Loomkin.Signals.Agent.ToolComplete.new!(
+        %{agent_name: agent_name, team_id: team_id},
+        subject: "payload"
+      )
+      |> Map.put(
+        :data,
+        %{
+          agent_name: agent_name,
+          team_id: team_id,
+          payload: %{tool_name: tool_name}
+        }
+      )
+
+    send(pid, {:signal, sig})
+  end
 
   defp create_task(team_id, title) do
     %Loomkin.Schemas.TeamTask{}

@@ -8,6 +8,31 @@ defmodule Loomkin.Decisions.AutoLogger do
   alias Loomkin.Decisions.Graph
   alias Loomkin.Teams.Tasks
 
+  # Read-only reconnaissance tools that don't represent meaningful decisions.
+  # These are completely skipped to reduce decision graph noise.
+  @low_value_tools ~w(
+    directory_list
+    file_read
+    file_search
+    content_search
+    decision_query
+    query_backlog
+    search_keepers
+    list_teams
+    cross_team_query
+    introspect_decision_history
+    introspect_failure_patterns
+    team_progress
+    lsp_diagnostics
+    context_retrieve
+    load_skill
+    peer_discovery
+  )
+
+  # Tools completing under this threshold get a single combined node
+  # instead of separate action + outcome nodes.
+  @fast_tool_threshold_ms 1_000
+
   # --- Public API ---
 
   def start_link(opts) do
@@ -39,7 +64,8 @@ defmodule Loomkin.Decisions.AutoLogger do
     state = %{
       team_id: team_id,
       seen_agents: MapSet.new(),
-      task_nodes: %{}
+      task_nodes: %{},
+      pending_tools: %{}
     }
 
     {:ok, state}
@@ -174,40 +200,82 @@ defmodule Loomkin.Decisions.AutoLogger do
     {:noreply, state}
   end
 
-  # Tool executing
+  # Tool executing — skip low-value tools, defer action node for others
   def handle_info(
         %Jido.Signal{type: "agent.tool.executing", data: data},
         state
       ) do
-    agent_name = to_string(data.agent_name)
     tool_name = get_in(data, [:payload, :tool_name]) || "unknown"
 
-    log_node(state, %{
-      node_type: :action,
-      title: "Tool: #{tool_name} (#{agent_name})",
-      agent_name: agent_name,
-      metadata: base_metadata(state, %{"tool_name" => tool_name})
-    })
+    if tool_name in @low_value_tools do
+      {:noreply, state}
+    else
+      agent_name = to_string(data.agent_name)
+      tool_key = {agent_name, tool_name}
 
-    {:noreply, state}
+      state =
+        put_in(
+          state.pending_tools[tool_key],
+          System.monotonic_time(:millisecond)
+        )
+
+      {:noreply, state}
+    end
   end
 
-  # Tool complete
+  # Tool complete — skip low-value tools, collapse fast tools into single node
   def handle_info(
         %Jido.Signal{type: "agent.tool.complete", data: data},
         state
       ) do
-    agent_name = to_string(data.agent_name)
     tool_name = get_in(data, [:payload, :tool_name]) || "unknown"
 
-    log_node(state, %{
-      node_type: :outcome,
-      title: "Tool done: #{tool_name} (#{agent_name})",
-      agent_name: agent_name,
-      metadata: base_metadata(state, %{"tool_name" => tool_name})
-    })
+    if tool_name in @low_value_tools do
+      {:noreply, state}
+    else
+      agent_name = to_string(data.agent_name)
+      tool_key = {agent_name, tool_name}
 
-    {:noreply, state}
+      {started_at, state} = pop_in(state.pending_tools[tool_key])
+      elapsed = if started_at, do: System.monotonic_time(:millisecond) - started_at, else: nil
+
+      if elapsed && elapsed < @fast_tool_threshold_ms do
+        # Fast tool — single combined node
+        log_node(state, %{
+          node_type: :action,
+          title: "Tool: #{tool_name} (#{agent_name}) [done]",
+          agent_name: agent_name,
+          metadata: base_metadata(state, %{"tool_name" => tool_name, "elapsed_ms" => elapsed})
+        })
+      else
+        # Slow tool — retroactive action + outcome with edge
+        case log_node(state, %{
+               node_type: :action,
+               title: "Tool: #{tool_name} (#{agent_name})",
+               agent_name: agent_name,
+               metadata: base_metadata(state, %{"tool_name" => tool_name})
+             }) do
+          {:ok, action_node} ->
+            case log_node(state, %{
+                   node_type: :outcome,
+                   title: "Tool done: #{tool_name} (#{agent_name})",
+                   agent_name: agent_name,
+                   metadata: base_metadata(state, %{"tool_name" => tool_name})
+                 }) do
+              {:ok, outcome_node} ->
+                safe_add_edge(action_node.id, outcome_node.id, :leads_to)
+
+              _ ->
+                :ok
+            end
+
+          _ ->
+            :ok
+        end
+      end
+
+      {:noreply, state}
+    end
   end
 
   # Agent error

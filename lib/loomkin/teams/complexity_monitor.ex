@@ -19,6 +19,7 @@ defmodule Loomkin.Teams.ComplexityMonitor do
   alias Loomkin.Teams.CollaborationMetrics
   alias Loomkin.Teams.Comms
   alias Loomkin.Teams.Context
+  alias Loomkin.Teams.Manager
 
   @default_check_interval_ms 60_000
   @default_threshold 60
@@ -137,7 +138,7 @@ defmodule Loomkin.Teams.ComplexityMonitor do
     # Reset pending event counters after check
     state = %{state | pending_events: %{conflicts: 0, debates: 0, tasks_created: 0}}
 
-    schedule_check(state.check_interval_override || config_check_interval())
+    schedule_check(state.check_interval_override || interval_for_team(state.team_id))
     {:noreply, state}
   end
 
@@ -358,6 +359,17 @@ defmodule Loomkin.Teams.ComplexityMonitor do
         }
       })
     end)
+  end
+
+  defp interval_for_team(team_id) do
+    base = config_check_interval()
+    agent_count = length(Manager.list_agents(team_id))
+
+    cond do
+      agent_count <= 1 -> base * 5
+      agent_count <= 3 -> base * 2
+      true -> base
+    end
   end
 
   # --- Config helpers ---

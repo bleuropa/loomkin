@@ -147,6 +147,54 @@ defmodule Loomkin.Decisions.ContextBuilderTest do
     end
   end
 
+  describe "session section filtering" do
+    test "excludes auto-logged nodes from session context" do
+      session = create_session()
+
+      {:ok, _} =
+        Graph.add_node(
+          node_attrs(%{
+            title: "Manual decision",
+            node_type: :decision,
+            session_id: session.id
+          })
+        )
+
+      {:ok, _} =
+        Graph.add_node(
+          node_attrs(%{
+            title: "Auto tool action",
+            node_type: :action,
+            session_id: session.id,
+            metadata: %{"auto_logged" => true}
+          })
+        )
+
+      assert {:ok, result} = ContextBuilder.build(session.id)
+      assert result =~ "Manual decision"
+      refute result =~ "Auto tool action"
+    end
+
+    test "session section is truncated when it exceeds per-section limit" do
+      session = create_session()
+
+      for i <- 1..100 do
+        Graph.add_node(
+          node_attrs(%{
+            title: "Decision #{i} with enough text to fill the section budget",
+            node_type: :decision,
+            session_id: session.id
+          })
+        )
+      end
+
+      assert {:ok, result} = ContextBuilder.build(session.id, max_tokens: 8192)
+      # The session section should be internally truncated even if total budget is large
+      session_section = result |> String.split("## Session Context\n") |> List.last()
+      assert byte_size(session_section) <= 1024 + 50
+    end
+  end
+
   describe "cross-session goals" do
     test "cross_session: false only shows goals for the current session" do
       session = create_session()

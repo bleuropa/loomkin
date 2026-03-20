@@ -8,17 +8,26 @@ defmodule Loomkin.Decisions.Narrative do
 
   def for_session(nil), do: []
 
-  def for_session(session_id) do
+  def for_session(session_id, opts \\ []) do
+    exclude_auto_logged = Keyword.get(opts, :exclude_auto_logged, true)
+
     case Ecto.UUID.dump(session_id) do
       {:ok, _bin} ->
         DecisionNode
         |> where([n], n.session_id == ^session_id)
+        |> maybe_exclude_auto_logged(exclude_auto_logged)
         |> order_by([n], asc: n.inserted_at)
         |> Repo.all()
 
       :error ->
         []
     end
+  end
+
+  defp maybe_exclude_auto_logged(query, false), do: query
+
+  defp maybe_exclude_auto_logged(query, true) do
+    where(query, [n], fragment("(?->>'auto_logged')::boolean IS NOT TRUE", n.metadata))
   end
 
   def for_goal(goal_id) do

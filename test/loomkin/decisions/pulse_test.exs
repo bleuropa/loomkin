@@ -3,6 +3,12 @@ defmodule Loomkin.Decisions.PulseTest do
 
   alias Loomkin.Decisions.{Graph, Pulse}
 
+  setup do
+    Pulse.ensure_cache_table()
+    Pulse.invalidate_cache()
+    :ok
+  end
+
   defp node_attrs(overrides) do
     Map.merge(%{node_type: :goal, title: "Test goal"}, overrides)
   end
@@ -68,6 +74,100 @@ defmodule Loomkin.Decisions.PulseTest do
 
       assert length(report_default.low_confidence) == 0
       assert length(report_high.low_confidence) == 1
+    end
+  end
+
+  describe "compute_health/1" do
+    test "returns 100 for empty graph" do
+      assert Pulse.compute_health() == 100
+    end
+
+    test "penalizes coverage gaps" do
+      {:ok, _} = Graph.add_node(node_attrs(%{node_type: :goal, status: :active}))
+      Pulse.invalidate_cache()
+      score = Pulse.compute_health()
+      assert score < 100
+    end
+
+    test "penalizes orphan nodes" do
+      {:ok, _} =
+        Graph.add_node(node_attrs(%{node_type: :observation, title: "Orphan", status: :active}))
+
+      Pulse.invalidate_cache()
+      score = Pulse.compute_health()
+      assert score < 100
+    end
+
+    test "penalizes low-confidence nodes" do
+      {:ok, _} = Graph.add_node(node_attrs(%{confidence: 10, title: "LowConf", status: :active}))
+      Pulse.invalidate_cache()
+      score = Pulse.compute_health()
+      assert score < 100
+    end
+
+    test "scopes by team_id" do
+      team_a = Ecto.UUID.generate()
+      team_b = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Graph.add_node(
+          node_attrs(%{node_type: :goal, status: :active, metadata: %{"team_id" => team_a}})
+        )
+
+      {:ok, _} =
+        Graph.add_node(
+          node_attrs(%{
+            node_type: :observation,
+            title: "Orphan B",
+            status: :active,
+            metadata: %{"team_id" => team_b}
+          })
+        )
+
+      score_a = Pulse.compute_health(team_id: team_a)
+      score_b = Pulse.compute_health(team_id: team_b)
+
+      # Both should be < 100 but for different reasons
+      assert score_a < 100
+      assert score_b < 100
+    end
+  end
+
+  describe "caching" do
+    test "returns cached value on second call" do
+      {:ok, _} = Graph.add_node(node_attrs(%{node_type: :goal, status: :active}))
+      score1 = Pulse.compute_health()
+
+      # Add another node — cache should still return old value
+      {:ok, _} = Graph.add_node(node_attrs(%{node_type: :goal, title: "Goal 2", status: :active}))
+      score2 = Pulse.compute_health()
+
+      assert score1 == score2
+    end
+
+    test "invalidate_cache forces recomputation" do
+      {:ok, _} = Graph.add_node(node_attrs(%{node_type: :goal, status: :active}))
+      score1 = Pulse.compute_health()
+
+      {:ok, _} = Graph.add_node(node_attrs(%{node_type: :goal, title: "Goal 2", status: :active}))
+      Pulse.invalidate_cache()
+      score2 = Pulse.compute_health()
+
+      # With two gap goals, score should be lower
+      assert score2 < score1
+    end
+
+    test "cache expires after TTL" do
+      {:ok, _} = Graph.add_node(node_attrs(%{node_type: :goal, status: :active}))
+      # Use a very short TTL
+      score1 = Pulse.compute_health(cache_ttl_ms: 1)
+
+      Process.sleep(5)
+
+      {:ok, _} = Graph.add_node(node_attrs(%{node_type: :goal, title: "Goal 2", status: :active}))
+      score2 = Pulse.compute_health(cache_ttl_ms: 1)
+
+      assert score2 < score1
     end
   end
 end
