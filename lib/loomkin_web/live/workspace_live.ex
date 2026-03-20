@@ -1305,6 +1305,40 @@ defmodule LoomkinWeb.WorkspaceLive do
     handle_info({:usage, name, payload}, socket)
   end
 
+  def handle_info(%Jido.Signal{type: "agent.scope_gate"} = sig, socket) do
+    data = sig.data
+
+    event = %{
+      id: Ecto.UUID.generate(),
+      type: :scope_gate,
+      agent: data.agent_name,
+      content:
+        "Paused: #{data.trigger} exceeded #{data.tier} tier envelope " <>
+          "(#{data.current}/#{data.limit})",
+      timestamp: DateTime.utc_now(),
+      expanded: false,
+      metadata: %{
+        tier: data.tier,
+        trigger: data.trigger,
+        current: data.current,
+        limit: data.limit,
+        team_id: data.team_id
+      }
+    }
+
+    socket =
+      socket
+      |> stream_insert(:comms_events, event)
+      |> update(:comms_event_count, &(&1 + 1))
+      |> put_flash(
+        :warning,
+        "Agent #{data.agent_name} paused: #{data.trigger} exceeded " <>
+          "#{data.tier} tier envelope (#{data.current}/#{data.limit})"
+      )
+
+    {:noreply, socket}
+  end
+
   def handle_info(%Jido.Signal{type: "agent.error"} = sig, socket) do
     %{agent_name: name, payload: payload} = sig.data
     handle_info({:agent_error, name, payload}, socket)

@@ -532,11 +532,8 @@ defmodule Loomkin.Teams.Manager do
 
         :ets.insert(ref, {:meta, meta})
 
-        # Re-start nervous system processes for the recovered team
+        # Re-start nervous system processes and rehydrate keepers for the recovered team
         ensure_nervous_system(team_id)
-
-        # Rehydrate context keepers from DB so offloaded context is available again
-        Loomkin.Teams.ContextKeeper.rehydrate_from_db(team_id)
 
         {:ok, meta}
     end
@@ -573,14 +570,18 @@ defmodule Loomkin.Teams.Manager do
   end
 
   @doc """
-  Ensure nervous system processes are running for a team.
+  Ensure nervous system processes and context keepers are running for a team.
 
   Idempotent — if processes are already running (registered in AgentRegistry),
   they won't be started again. Used by WorkspaceServer to recover team state
   after app restart when the ETS table is recreated.
+
+  Also rehydrates context keepers from the database so offloaded context
+  survives WorkspaceServer crashes and app restarts.
   """
   def ensure_nervous_system(team_id) do
     start_nervous_system(team_id)
+    Loomkin.Teams.ContextKeeper.rehydrate_from_db(team_id)
   end
 
   defp start_nervous_system(team_id) do

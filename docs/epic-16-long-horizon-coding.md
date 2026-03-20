@@ -21,6 +21,42 @@ every line.
 
 ---
 
+## Current State Assessment (2026-03-19)
+
+A codebase audit against this plan reveals **~60% of the infrastructure already exists**.
+The gaps are implementation, not architectural conflicts.
+
+### What's Shipped Since This Doc Was Written
+
+| Epic | Impact on This Plan |
+|------|-------------------|
+| **Epic 13: Conversation Agents** (PR #189) | Scout/surgeon deliberation (2.3), adversarial debate (4.3) can use conversation agents directly |
+| **Epic 18: Closing the Loop** (PR #198) | Keeper metadata + staleness detection + Context Library UI. Phase 1.4 is now ~85% done |
+| **Epic 6.5: Speculative Execution** (in progress) | `PeerStartSpeculative`, `PeerConfirmTentative`, `PeerDiscardTentative` tools + `:speculative` task state. Ghost fleet (4.2) builds on this directly |
+| **Epic 6.2: Priority Message Router** | Agent message prioritization (`:urgent`/`:high`/`:normal`/`:ignore`) — feeds scope gate urgency |
+| **Cost/Budget Infrastructure** | `CostTracker` (ETS-backed per-agent/team), `RateLimiter` (token bucket + budget caps), `Learning` (velocity by task type + model) |
+
+### Phase Readiness Summary
+
+| Phase | Readiness | Bottleneck |
+|-------|-----------|------------|
+| **1: Immortal Agents** | 55% | AgentCheckpoint schema (no Postgres persistence of agent state) |
+| **2: Compound Intelligence** | 15-20% | Codebase Cartography (0%) blocks predictive test failure + hypothesis scoring |
+| **3: Radical Transparency** | 15-20% | Decision graph + narrative engine exist; morning briefing is ~2 weeks out |
+| **4: Process Mitosis** | 80% | BEAM primitives all present. Agent state is serializable. ~50 lines of glue for forking |
+| **5: Collaboration** | 10% | Multi-user LiveView is trivial; handoff/consensus need Phase 1+3 |
+| **6: Self-Improving Loop** | 0% | Requires everything above |
+
+### Critical Path
+
+```
+AgentCheckpoint schema (1.1) → Progress Journal (1.3) → Codebase Cartography (2.1)
+```
+
+Everything else is either already done, easy to add, or blocked on these three.
+
+---
+
 ## Design Principles
 
 1. **The BEAM is the moat.** Every major feature should exploit OTP primitives that
@@ -44,6 +80,20 @@ don't activate the heavier machinery. The system progressively escalates its own
 infrastructure as a task grows.
 
 ### How It Works: Automatic Scope Detection
+
+> **Status: Scope detection not implemented, but budget/cost infrastructure is mature**
+>
+> Existing primitives that feed scope detection:
+> - `CostTracker` — per-agent/team ETS-backed cost tracking (microdollar precision)
+> - `RateLimiter` — token bucket per provider + per-team/agent budget caps
+> - `AgentLoop` — iteration caps (default 30), budget check before each LLM call
+> - `ComplexityMonitor` — per-team composite complexity score (0-100) every 60s
+> - `Learning` — velocity data by task type + model (cost, tokens, duration, success rate)
+> - `AgentLoop.Checkpoint` — post_llm/post_tool hooks, returns `:continue` or `{:pause, reason}`
+> - Rich PubSub signals (agent, team, session) — extensible for scope/budget events
+>
+> Missing: scope tier classification, file-count estimation, spawn depth tracking,
+> file-change tracking across task lifetime, GitHub integration for issue-based scoping.
 
 When a user describes work, Loomkin's lead agent estimates scope before doing anything:
 
@@ -153,9 +203,19 @@ is a feature.
 
 #### Velocity Learning
 
+> **Status: ~60% — `Loomkin.Teams.Learning` already tracks velocity per task type + model**
+>
+> What exists: `Learning.record_task_result/1` stores success, cost_usd, tokens_used,
+> duration_ms, task_type. Queries: `success_rate/2`, `avg_cost/1`, `recommend_model/1`,
+> `recommend_team/1`, `top_performers/1`. Per-agent metrics in `AgentMetric` schema.
+>
+> What's missing: extend `AgentMetric` with `scope_tier`, `file_count`, `escalations`
+> fields (~200 lines + 1 migration). Then velocity learning by scope tier is a query.
+
 Loomkin should learn its own pace on each codebase over time:
 
-- Track actual cost and scope for completed tasks, grouped by category
+- ~~Track actual cost and scope for completed tasks, grouped by category~~
+  **PARTIAL** — cost/tokens/duration tracked via `Learning` module; scope tier + file count not yet
 - After 10+ completed tasks, Loomkin has empirical data: "auth module changes on
   this codebase typically cost $1.20 and touch 4 files"
 - Future estimates come from Loomkin's own history on THIS codebase, not from
@@ -268,6 +328,9 @@ Loomkin:
 
 #### Flow 4: The Continuation ("pick up where we left off")
 
+> **Note:** Epic 18 (PR #198) added persistent workspaces with teams and session switching.
+> This flow should account for workspace-level persistence, not just session-level.
+
 User returns after a break — hours or days later. Loomkin reconnects seamlessly.
 
 ```
@@ -372,6 +435,16 @@ The foundation. Without this, nothing else works.
 
 ### 1.1 Checkpoint Hibernation
 
+> **Status: 40% — checkpoint callbacks exist, Postgres persistence missing**
+>
+> What exists: `AgentLoop.Checkpoint` struct (post_llm, post_tool), `paused_state`/`frozen_state`
+> tracking in Agent GenServer, pause/resume API (`request_pause/1`, `force_pause/1`, `resume/2`),
+> `Workspace.Server.hibernate/1`.
+>
+> What's missing: `AgentCheckpoint` schema, `term_to_binary` serialization of full agent state,
+> post-crash/deploy resumption flow. Agent struct has 2 non-serializable fields (`loop_task`,
+> `subscription_ids`) — these are transient and should be cleared on checkpoint, rebuilt on restore.
+
 Agents serialize their full state to Postgres and can be resurrected on-demand.
 
 **How it works:**
@@ -406,6 +479,14 @@ end
 
 ### 1.2 Three-Tier Memory
 
+> **Status: 65% — all three tiers exist, no managed migration between them**
+>
+> What exists: GenServer state (hot), per-team ETS via `TableRegistry` with heir ownership (warm),
+> Postgres `context_keepers` + `decision_nodes` + `task_journal_entries` (cold).
+>
+> What's missing: explicit warm→cold eviction policy, cold→warm hydration beyond keepers,
+> memory pressure management, token-based state size monitoring.
+
 A memory hierarchy that gives agents an effectively unlimited context window.
 
 **Tiers:**
@@ -428,6 +509,15 @@ not Redis round-trips (2ms). The 1000x difference compounds over thousands of
 coordination decisions per task.
 
 ### 1.3 Progress Journal
+
+> **Status: 40% — task-level journal exists, per-iteration agent log missing**
+>
+> What exists: `Workspace.TaskJournalEntry` schema (`task_id`, `status`, `result_summary`,
+> `checkpoint_json`), `checkpoint_tasks/1` in WorkspaceServer for hibernate snapshots.
+>
+> What's missing: `AgentJournalEntry` schema for per-iteration logging (LLM calls, tool
+> executions, decisions, errors), journal replay for agent reconstruction, integration with
+> morning briefing generation.
 
 Append-only log of actions taken — what the decision graph is to reasoning, the
 journal is to execution.
@@ -455,18 +545,41 @@ processed or re-run tests it already passed.
 
 ### 1.4 Keeper Persistence & Auto-Restore
 
+> **Status: 85% — shipped in Epic 18 (Closing the Loop, PR #198)**
+>
+> What exists: `ContextKeeper.rehydrate_from_db(team_id)` called during workspace init,
+> DynamicSupervisor-based GenServer spawning per keeper, write-through persistence with
+> debouncing, staleness detection (4-factor: time/access/relevance/confidence decay),
+> auto-archive at 75+ staleness score after 7+ days.
+>
+> What's missing: keeper rehydration is coupled to `WorkspaceServer.get_or_create_team_id` —
+> should be decoupled to Team startup for crash resilience. Keeper metadata not fully synced
+> in all fields.
+
 Context keepers already have a Postgres schema — wire up boot-time hydration.
 
-- On app start: query `context_keepers` table, spawn GenServers for each active keeper
-- On keeper update: write-through to Postgres
-- Keepers now survive deploys, crashes, and restarts
-- Cross-session knowledge becomes durable
+- ~~On app start: query `context_keepers` table, spawn GenServers for each active keeper~~
+  **DONE** — `rehydrate_from_db/1` queries active keepers and spawns GenServers
+- ~~On keeper update: write-through to Postgres~~
+  **DONE** — `store/2` with debounced persistence
+- ~~Keepers now survive deploys, crashes, and restarts~~
+  **DONE** — with caveat: depends on WorkspaceServer init completing
+- ~~Cross-session knowledge becomes durable~~
+  **DONE** — staleness scoring + auto-archive keeps knowledge sharp
 
 ---
 
 ## Phase 2: Compound Intelligence (get smarter over time)
 
 ### 2.1 Codebase Cartography
+
+> **Status: 0% — foundational, blocks 2.2 and 2.4**
+>
+> `RepoIntel` exists with `RepoMap` (file relevance ranking) and `Index` (file listing
+> with metadata), but these are read-only tooling — no persistent semantic map, no
+> coupling tracking, no risk/churn/ownership annotations. Needs 3 new schemas
+> (`CartographyNode`, `CartographyEdge`, `VelocityMetric`), a background cartographer
+> agent, and a query API.
 
 A persistent, evolving semantic map of the codebase — not just an AST, but a
 **mental model**.
@@ -509,6 +622,17 @@ agents proposing competing hypotheses for the same problem get run in parallel.
 
 ### 2.3 Cheap Scout / Expensive Surgeon
 
+> **Status: 30-40% — model router + conversation agents provide the foundation**
+>
+> What exists: `Teams.ModelRouter` with escalation chain (fast→standard→expert→architect),
+> dual model system (`:model` + `:fast_model` per session), per-agent success rate tracking
+> (ETS-backed). **Epic 13 conversation agents** (PR #189) can serve as the deliberation
+> layer — scouts explore independently, then a conversation agent session debates findings
+> before the surgeon acts.
+>
+> What's missing: `ScoutTeam` orchestrator, scout report aggregation, cost-benefit decision
+> on whether to spawn scouts (skip for simple issues).
+
 Multi-model ensemble for cost-effective exploration.
 
 **Pattern:**
@@ -523,9 +647,10 @@ Multi-model ensemble for cost-effective exploration.
 concurrently with preemptive scheduling — no one scout can starve others. Process
 isolation means a scout that hits an error doesn't affect siblings.
 
-**Cost math:** 5 Haiku scouts (~$0.01 each) + 1 Opus surgeon (~$0.10) = $0.15 total
-for work that would cost $0.50+ with a single Opus run, and produces better results
-because the surgeon sees 5 independent attempts.
+**Cost math (illustrative — adjust for current pricing):** 5 fast-model scouts +
+1 reasoning-model surgeon should cost significantly less than a single reasoning-model
+run exploring all paths serially, and produces better results because the surgeon sees
+5 independent attempts.
 
 ### 2.4 Predictive Test Failure
 
@@ -540,6 +665,15 @@ Before running tests, predict which will fail and why.
 - Feeds back into codebase cartography (coupling data)
 
 ### 2.5 The Forgetting Agent
+
+> **Status: ~30% — staleness scoring exists from Epic 18, needs orchestration wrapper**
+>
+> What exists: `ContextKeeper.compute_staleness/1` (4-factor decay model), 30-min sweep
+> timer, auto-archive at threshold. `success_count`/`miss_count` tracking per keeper.
+>
+> What's missing: periodic entropy review of ALL stored knowledge (not just keepers),
+> promotion pipeline (short-term → long-term), LLM-powered "should I forget this?"
+> decisions, integration with future cartography entries.
 
 Entropy-aware memory management — without this, every persistent system drowns in noise.
 
@@ -556,6 +690,16 @@ Entropy-aware memory management — without this, every persistent system drowns
 ## Phase 3: Radical Transparency (build trust)
 
 ### 3.1 The Morning Briefing
+
+> **Status: 20-30% — decision graph narrative engine exists, needs briefing generation + UI**
+>
+> What exists: `Decisions.Narrative` builds timelines from decision graph, `Decisions.Writeup`
+> exists (untested in templates), `TaskJournalEntry` with entry_type/summary/confidence,
+> sessions store `summary_message_id`.
+>
+> What's missing: briefing generation algorithm (aggregate journal + decisions into narrated
+> walkthrough), interactive UI (expand/collapse decisions), confidence heat map, scheduling
+> (detect overnight sessions, generate briefing on wake or 7 AM).
 
 When a developer opens Loomkin after an overnight session, they see a narrated
 walkthrough — not a wall of diffs.
@@ -636,6 +780,15 @@ Any session can be replayed as an accelerated, narrated timeline.
 
 ### 4.1 Agent Forking
 
+> **Status: 85% — agent state is serializable, spawn infrastructure ready, needs fork API**
+>
+> What exists: `Agent.get_state/1` exports full agent state, `Manager.spawn_agent/4` creates
+> agents via `Distributed.start_child` (~15μs), agent struct (27 fields) is almost entirely
+> serializable — only `loop_task` (Task.t()) and `subscription_ids` are transient.
+>
+> What's missing: `Agent.fork/2` API (~50 lines), fork monitoring + winner promotion logic,
+> child naming convention, Registry cleanup for losers.
+
 When facing ambiguous design decisions, agents fork themselves.
 
 **Mechanics:**
@@ -653,6 +806,17 @@ serialization, and manual cleanup.
 
 ### 4.2 The Ghost Fleet
 
+> **Status: 70% — speculative execution tools exist from Epic 6.5, needs ghost lifecycle**
+>
+> What exists: `PeerStartSpeculative` (start speculative task with assumed blocker output),
+> `PeerConfirmTentative` / `PeerDiscardTentative` (confirm/discard speculative results),
+> task schema has `:speculative` boolean and `:pending_speculative`/`:completed_tentative`
+> states, `Tasks.validate_speculative_dependents/1` auto-confirms/discards on blocker completion.
+>
+> What's missing: task DAG lookahead (detect "B depends on A, A is 70% done"), automatic
+> ghost spawning, `:erlang.process_flag(:priority, :low)` for ghost processes, ghost
+> lifecycle management (auto-kill on assumption invalidation).
+
 Speculative pre-computation with phantom agents.
 
 - Pool of lightweight "ghost" agents running at `:low` scheduler priority
@@ -666,6 +830,16 @@ overhead is literally free. You could maintain 500 ghost agents and the system
 wouldn't notice.
 
 ### 4.3 Adversarial Shadow Teams
+
+> **Status: 75% — team spawn, role system, conflict detector all ready**
+>
+> What exists: `Manager.create_sub_team/3` for team hierarchies, `Role` struct with
+> per-role tool lists, `ConflictDetector` GenServer (file-level + approach conflict
+> detection), conversation agents (Epic 13) for blue/red debate.
+>
+> What's missing: `:shadow` role variant (test-write-only permissions), shadow team
+> registration (`{:shadow_of, blue_team_id}`), ConflictDetector exemption for shadow
+> pairs (~20 lines), adversarial findings channel (struct + comms feed integration).
 
 Red team running alongside blue team for every significant change.
 
@@ -701,6 +875,13 @@ uses a different coordination pattern:
   fail and must fix them before the task can complete.
 
 ### 4.4 Hot-Swap Agent Cognition
+
+> **Status: 95% — this is native BEAM behavior, already works**
+>
+> Agent GenServers are stateless in terms of module code — all logic is in `:receive`
+> loop handlers. On module recompile, agents pick up new code on next message dispatch
+> automatically. `update_model/2` already hot-updates model on running agents via cast.
+> No code changes needed — just testing + documentation.
 
 Upgrade agent capabilities mid-flight without losing state.
 
@@ -804,16 +985,29 @@ For Loomkin to reliably improve itself:
 
 ## Implementation Priority
 
-| Phase | Sub-tasks | Impact | Dependencies |
-|-------|-----------|--------|--------------|
-| Phase 1: Immortal Agents | 4 (checkpoint, 3-tier mem, journal, keeper restore) | Critical | None |
-| Phase 2: Compound Intelligence | 5 (cartography, hypotheses, scout/surgeon, test predict, forgetting) | High | Phase 1 |
-| Phase 3: Radical Transparency | 5 (briefing, drift, confidence, bookmarks, replay) | High | Phase 1, partial Phase 2 |
-| Phase 4: Process Mitosis | 4 (forking, ghost fleet, adversarial, hot-swap) | Very High (moat) | Phase 1 |
-| Phase 5: Collaboration | 4 (handoff, merge resolution, multi-user, living docs) | Medium | Phase 1, Phase 3 |
-| Phase 6: Self-Improving Loop | Integration of above | Transformative | All above |
+| Phase | Sub-tasks | Readiness | Impact | Dependencies |
+|-------|-----------|-----------|--------|--------------|
+| Phase 1: Immortal Agents | 4 (checkpoint, 3-tier mem, journal, keeper restore) | **55%** — 1.4 done, 1.2 partial | Critical | None |
+| Phase 2: Compound Intelligence | 5 (cartography, hypotheses, scout/surgeon, test predict, forgetting) | **15-20%** — 2.3 partial, 2.5 partial | High | Phase 1 |
+| Phase 3: Radical Transparency | 5 (briefing, drift, confidence, bookmarks, replay) | **15-20%** — narrative engine exists | High | Phase 1, partial Phase 2 |
+| Phase 4: Process Mitosis | 4 (forking, ghost fleet, adversarial, hot-swap) | **80%** — BEAM primitives ready | Very High (moat) | Phase 1 |
+| Phase 5: Collaboration | 4 (handoff, merge resolution, multi-user, living docs) | **10%** — PubSub/LiveView ready | Medium | Phase 1, Phase 3 |
+| Phase 6: Self-Improving Loop | Integration of above | **0%** | Transformative | All above |
 
 **Start with Phase 1.** Everything else is built on immortal agents.
+
+### Quick Wins (No Phase 1 Dependency)
+
+These can be built now on existing infrastructure:
+
+| Feature | Effort | Foundation |
+|---------|--------|------------|
+| Scope tier detection (file count heuristics) | ~200 LOC | RepoIntel + file_search tools |
+| Budget envelope enforcement via checkpoint hooks | ~150 LOC | AgentLoop checkpoints + RateLimiter |
+| Scout/surgeon via conversation agents | ~1-2 weeks | Epic 13 + ModelRouter |
+| Forgetting agent wrapping staleness scoring | ~1 week | Epic 18 ContextKeeper staleness |
+| Morning briefing v1 from decision graph | ~1-2 weeks | Decisions.Narrative + TaskJournalEntry |
+| Velocity learning with scope tiers | ~200 LOC + migration | Learning module + AgentMetric |
 
 No time estimates are provided intentionally — Loomkin should complete each phase
 as fast as its capability allows, not fill an artificial timeline. Scope and

@@ -12,7 +12,8 @@ defmodule Loomkin.Teams.Agent do
   require Logger
 
   alias Loomkin.AgentLoop
-
+  alias Loomkin.Checkpoints
+  alias Loomkin.Teams.AgentState
   alias Loomkin.Teams.Comms
   alias Loomkin.Teams.Context
   alias Loomkin.Teams.ContextRetrieval
@@ -23,6 +24,9 @@ defmodule Loomkin.Teams.Agent do
   alias Loomkin.Teams.QueuedMessage
   alias Loomkin.Teams.RateLimiter
   alias Loomkin.Teams.Role
+  alias Loomkin.Teams.ScopeDetector
+
+  @type t :: %__MODULE__{}
 
   defstruct [
     :team_id,
@@ -57,7 +61,10 @@ defmodule Loomkin.Teams.Agent do
     pending_ask_user: nil,
     spawned_child_teams: [],
     auto_approve_spawns: false,
-    wake_ref: nil
+    wake_ref: nil,
+    scope_tier: nil,
+    files_touched: MapSet.new(),
+    task_cost_usd: 0.0
   ]
 
   # --- Public API ---
@@ -258,13 +265,19 @@ defmodule Loomkin.Teams.Agent do
           system_prompt_extra: system_prompt_extra
         }
 
+        # Attempt checkpoint restore before broadcasting
+        state = maybe_restore_from_checkpoint(state)
+
         # Monitor via AgentWatcher BEFORE init completes — guarantees no gap
         # where a crash could be missed (previously called after start_child returned)
         Loomkin.Teams.AgentWatcher.watch(Loomkin.Teams.AgentWatcher, self(), team_id, name)
 
-        Context.register_agent(team_id, name, %{role: role, status: :idle, model: model})
-        broadcast_team(state, {:agent_status, state.name, :idle})
-        Logger.info("[Kin:agent] registered name=#{name} role=#{role} — broadcasting :idle")
+        Context.register_agent(team_id, name, %{role: role, status: state.status, model: model})
+        broadcast_team(state, {:agent_status, state.name, state.status})
+
+        Logger.info(
+          "[Kin:agent] registered name=#{name} role=#{role} — broadcasting :#{state.status}"
+        )
 
         {:ok, state}
 
@@ -292,6 +305,11 @@ defmodule Loomkin.Teams.Agent do
             "[Kin:agent] failed to dissolve child team on terminate name=#{state.name} team=#{state.team_id} child_team=#{child_team_id} reason=#{inspect(reason)}"
           )
       end
+    end
+
+    # Save crash checkpoint synchronously (terminate must be fast but checkpoint is critical)
+    if reason != :normal and reason != :shutdown do
+      save_checkpoint_sync(state, :crashed, inspect(reason))
     end
 
     Comms.unsubscribe(state.subscription_ids)
@@ -482,7 +500,20 @@ defmodule Loomkin.Teams.Agent do
   end
 
   def handle_call({:checkpoint, _checkpoint}, _from, state) do
-    {:reply, :continue, state}
+    case check_scope_envelope(state) do
+      :ok ->
+        {:reply, :continue, state}
+
+      {:exceeded, trigger, details} ->
+        tier = state.scope_tier
+        broadcast_scope_gate(state, tier, trigger, details)
+
+        {:reply,
+         {:pause,
+          {:scope_gate,
+           %{tier: tier, trigger: trigger, current: details.current, limit: details.limit}}},
+         state}
+    end
   end
 
   @impl true
@@ -975,6 +1006,14 @@ defmodule Loomkin.Teams.Agent do
     # otherwise preserve the agent's current model (set at spawn from user's selection)
     model = if task[:model_hint], do: ModelRouter.select(state.role, task), else: state.model
     state = %{state | task: task, model: model}
+
+    # Detect scope tier from task description
+    description = task[:title] || task[:description] || ""
+
+    {:ok, tier, _estimate} =
+      ScopeDetector.detect_tier(%{task_description: description})
+
+    state = %{state | scope_tier: tier, files_touched: MapSet.new(), task_cost_usd: 0.0}
 
     # Cache the task so the rebalancer can track what this agent is working on
     if task[:id] do
@@ -1676,6 +1715,23 @@ defmodule Loomkin.Teams.Agent do
   # UI streaming signals — agents don't need these
   def handle_info(%Jido.Signal{type: "agent.stream." <> _}, state) do
     {:noreply, state}
+  end
+
+  # Track file writes/edits for scope gate enforcement
+  def handle_info(
+        %Jido.Signal{
+          type: "agent.tool.executing",
+          data: %{agent_name: agent_name, payload: %{tool_name: tool, tool_target: file_path}}
+        },
+        state
+      )
+      when tool in ["file_write", "file_edit"] do
+    if to_string(agent_name) == to_string(state.name) and is_binary(file_path) and
+         file_path != "*" do
+      {:noreply, %{state | files_touched: MapSet.put(state.files_touched, file_path)}}
+    else
+      {:noreply, state}
+    end
   end
 
   # Tool lifecycle signals — log starts and errors for visibility
@@ -3538,6 +3594,39 @@ defmodule Loomkin.Teams.Agent do
     end
   end
 
+  defp check_scope_envelope(%{scope_tier: nil}), do: :ok
+
+  defp check_scope_envelope(state) do
+    file_count = MapSet.size(state.files_touched)
+    ScopeDetector.exceeded?(state.scope_tier, %{files: file_count, cost: state.task_cost_usd})
+  end
+
+  defp broadcast_scope_gate(state, tier, trigger, details) do
+    agent_str = to_string(state.name)
+
+    try do
+      Loomkin.Signals.Agent.ScopeGate.new!(
+        %{agent_name: agent_str, team_id: state.team_id, tier: tier, trigger: trigger},
+        subject: "payload"
+      )
+      |> Map.put(:data, %{
+        agent_name: agent_str,
+        team_id: state.team_id,
+        tier: tier,
+        trigger: trigger,
+        current: details.current,
+        limit: details.limit
+      })
+      |> Loomkin.Signals.Extensions.Causality.attach(
+        team_id: state.team_id,
+        agent_name: agent_str
+      )
+      |> Loomkin.Signals.publish()
+    rescue
+      _ -> :ok
+    end
+  end
+
   defp maybe_prefetch_context(state, task) do
     task_description = task[:description] || task[:text] || to_string(task[:id] || "")
 
@@ -3833,6 +3922,7 @@ defmodule Loomkin.Teams.Agent do
     %{
       state
       | cost_usd: state.cost_usd + cost,
+        task_cost_usd: state.task_cost_usd + cost,
         tokens_used: state.tokens_used + total_tokens
     }
   end
@@ -3868,6 +3958,16 @@ defmodule Loomkin.Teams.Agent do
       # Emit agent ready signal when transitioning from working to idle
       if new_status == :idle and old_status in [:working, :waiting_permission] do
         maybe_broadcast_agent_ready(state)
+      end
+
+      # Save checkpoint when entering paused state
+      if new_status == :paused do
+        save_checkpoint_async(state, :paused)
+      end
+
+      # Delete all checkpoints on successful completion to prevent stale resurrection
+      if new_status == :idle and old_status in [:working, :thinking] do
+        delete_all_checkpoints_async(state)
       end
 
       state
@@ -4095,5 +4195,150 @@ defmodule Loomkin.Teams.Agent do
   defp format_summary_list(label, items) when is_list(items) do
     formatted = Enum.map_join(items, "\n", fn item -> "  - #{item}" end)
     ["#{label}:\n#{formatted}"]
+  end
+
+  # --- Checkpoint persistence ---
+
+  @stale_checkpoint_hours 24
+
+  defp maybe_restore_from_checkpoint(state) do
+    case Checkpoints.latest_checkpoint(state.team_id, to_string(state.name),
+           session_id: state.session_id
+         ) do
+      nil ->
+        state
+
+      checkpoint ->
+        case AgentState.deserialize(checkpoint.state_binary) do
+          {:ok, essential} ->
+            state = AgentState.restore_into_agent(state, essential)
+
+            # Determine restored status
+            state =
+              case checkpoint.status do
+                :paused -> %{state | status: :paused}
+                # Hibernated and crashed agents resume as idle
+                _ -> %{state | status: :idle}
+              end
+
+            # Inject resume guidance as a system message
+            staleness_warning = checkpoint_staleness_warning(checkpoint)
+
+            guidance_parts =
+              [
+                checkpoint.resume_guidance,
+                staleness_warning,
+                "Restored from checkpoint (status: #{checkpoint.status}, iteration: #{checkpoint.iteration})."
+              ]
+              |> Enum.reject(&is_nil/1)
+
+            guidance_msg = %{
+              role: :system,
+              content: "[Checkpoint Restore] " <> Enum.join(guidance_parts, " ")
+            }
+
+            state = %{state | messages: state.messages ++ [guidance_msg]}
+
+            Logger.info(
+              "[Kin:checkpoint] restored agent=#{state.name} team=#{state.team_id} " <>
+                "checkpoint_status=#{checkpoint.status} messages=#{length(state.messages)}"
+            )
+
+            state
+
+          {:error, reason} ->
+            Logger.warning(
+              "[Kin:checkpoint] failed to deserialize agent=#{state.name} " <>
+                "team=#{state.team_id} reason=#{inspect(reason)}"
+            )
+
+            state
+        end
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[Kin:checkpoint] restore failed agent=#{state.name} team=#{state.team_id} error=#{inspect(e)}"
+      )
+
+      state
+  end
+
+  defp checkpoint_staleness_warning(checkpoint) do
+    age_hours =
+      DateTime.diff(DateTime.utc_now(), checkpoint.inserted_at, :second) / 3600.0
+
+    if age_hours > @stale_checkpoint_hours do
+      "WARNING: This checkpoint is #{Float.round(age_hours, 1)} hours old and may be stale."
+    else
+      nil
+    end
+  end
+
+  defp save_checkpoint_async(state, checkpoint_status) do
+    attrs = build_checkpoint_attrs(state, checkpoint_status, nil)
+
+    Task.Supervisor.start_child(Loomkin.Teams.TaskSupervisor, fn ->
+      case Checkpoints.create_checkpoint(attrs) do
+        {:ok, _} ->
+          Logger.info(
+            "[Kin:checkpoint] saved status=#{checkpoint_status} agent=#{state.name} team=#{state.team_id}"
+          )
+
+        {:error, changeset} ->
+          Logger.warning(
+            "[Kin:checkpoint] failed to save agent=#{state.name} error=#{inspect(changeset.errors)}"
+          )
+      end
+    end)
+  end
+
+  defp save_checkpoint_sync(state, checkpoint_status, resume_guidance) do
+    attrs = build_checkpoint_attrs(state, checkpoint_status, resume_guidance)
+
+    case Checkpoints.create_checkpoint(attrs) do
+      {:ok, _} ->
+        Logger.info(
+          "[Kin:checkpoint] saved status=#{checkpoint_status} agent=#{state.name} team=#{state.team_id}"
+        )
+
+      {:error, changeset} ->
+        Logger.warning(
+          "[Kin:checkpoint] failed to save agent=#{state.name} error=#{inspect(changeset.errors)}"
+        )
+    end
+  end
+
+  defp build_checkpoint_attrs(state, checkpoint_status, resume_guidance) do
+    essential = AgentState.extract_essential_state(state)
+    state_binary = AgentState.serialize(essential)
+
+    iteration =
+      case state.paused_state do
+        %{iteration: i} when is_integer(i) -> i
+        _ -> 0
+      end
+
+    %{
+      team_id: state.team_id,
+      agent_name: to_string(state.name),
+      session_id: state.session_id,
+      iteration: iteration,
+      status: checkpoint_status,
+      state_binary: state_binary,
+      messages_snapshot: %{count: length(state.messages)},
+      task_context:
+        if(state.task, do: Map.take(state.task, [:id, :title, :description]), else: nil),
+      resume_guidance: resume_guidance
+    }
+  end
+
+  defp delete_all_checkpoints_async(state) do
+    team_id = state.team_id
+    agent_name = to_string(state.name)
+
+    Task.Supervisor.start_child(Loomkin.Teams.TaskSupervisor, fn ->
+      Checkpoints.delete_agent_checkpoints(team_id, agent_name)
+    end)
   end
 end

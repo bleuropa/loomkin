@@ -18,12 +18,14 @@ defmodule Loomkin.Schemas.AgentMetric do
     field :tokens_used, :integer
     field :duration_ms, :integer
     field :project_path, :string
+    field :scope_tier, :string
+    field :files_touched, :integer
 
     timestamps(type: :utc_datetime, updated_at: false)
   end
 
   @required_fields ~w(team_id agent_name model task_type success)a
-  @optional_fields ~w(role cost_usd tokens_used duration_ms project_path)a
+  @optional_fields ~w(role cost_usd tokens_used duration_ms project_path scope_tier files_touched)a
 
   def changeset(metric, attrs) do
     metric

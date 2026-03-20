@@ -174,4 +174,15 @@ defmodule Loomkin.Signals.Agent do
         healing_summary: [type: :map, required: true]
       ]
   end
+
+  defmodule ScopeGate do
+    use Jido.Signal,
+      type: "agent.scope_gate",
+      schema: [
+        agent_name: [type: :string, required: true],
+        team_id: [type: :string, required: true],
+        tier: [type: :atom, required: true],
+        trigger: [type: :atom, required: true]
+      ]
+  end
 end

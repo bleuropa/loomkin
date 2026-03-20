@@ -248,11 +248,8 @@ defmodule Loomkin.Workspace.Server do
                }}
             )
 
-            # Re-start nervous system processes for the recovered team
+            # Re-start nervous system processes and rehydrate keepers for the recovered team
             Loomkin.Teams.Manager.ensure_nervous_system(team_id)
-
-            # Rehydrate context keepers from DB
-            Loomkin.Teams.ContextKeeper.rehydrate_from_db(team_id)
 
             {:reply, {:ok, team_id}, state}
         end
@@ -276,6 +273,9 @@ defmodule Loomkin.Workspace.Server do
 
     # Checkpoint current task states
     checkpoint_tasks(state)
+
+    # Checkpoint all active agents before dissolving team
+    checkpoint_agents(state)
 
     # Persist status BEFORE dissolving team — if dissolve_team crashes,
     # the workspace is still correctly marked hibernated and won't hand
@@ -482,6 +482,65 @@ defmodule Loomkin.Workspace.Server do
         e ->
           Logger.warning(
             "[Workspace] checkpoint failed workspace=#{state.id} error=#{inspect(e)}"
+          )
+      end
+    end
+  end
+
+  defp checkpoint_agents(state) do
+    if state.team_id do
+      try do
+        agents = Loomkin.Teams.Manager.list_agents(state.team_id)
+
+        Enum.each(agents, fn %{name: name, pid: pid} ->
+          try do
+            agent_state = :sys.get_state(pid, 5_000)
+            essential = Loomkin.Teams.AgentState.extract_essential_state(agent_state)
+            state_binary = Loomkin.Teams.AgentState.serialize(essential)
+
+            iteration =
+              case agent_state.paused_state do
+                %{iteration: i} when is_integer(i) -> i
+                _ -> 0
+              end
+
+            attrs = %{
+              team_id: state.team_id,
+              agent_name: to_string(name),
+              session_id: agent_state.session_id,
+              iteration: iteration,
+              status: :hibernated,
+              state_binary: state_binary,
+              messages_snapshot: %{count: length(agent_state.messages)},
+              task_context:
+                if(agent_state.task,
+                  do: Map.take(agent_state.task, [:id, :title, :description]),
+                  else: nil
+                )
+            }
+
+            case Loomkin.Checkpoints.create_checkpoint(attrs) do
+              {:ok, _} ->
+                Logger.info(
+                  "[Workspace] agent checkpoint saved agent=#{name} workspace=#{state.id}"
+                )
+
+              {:error, changeset} ->
+                Logger.warning(
+                  "[Workspace] agent checkpoint failed agent=#{name} errors=#{inspect(changeset.errors)}"
+                )
+            end
+          catch
+            :exit, reason ->
+              Logger.warning(
+                "[Workspace] agent checkpoint skipped agent=#{name} reason=#{inspect(reason)}"
+              )
+          end
+        end)
+      rescue
+        e ->
+          Logger.warning(
+            "[Workspace] agent checkpoint failed workspace=#{state.id} error=#{inspect(e)}"
           )
       end
     end

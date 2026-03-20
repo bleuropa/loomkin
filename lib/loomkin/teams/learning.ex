@@ -47,6 +47,8 @@ defmodule Loomkin.Teams.Learning do
     * `:tokens_used` - total tokens consumed (integer)
     * `:duration_ms` - wall-clock duration in milliseconds
     * `:project_path` - project path for context
+    * `:scope_tier` - scope tier string (e.g. "surgical", "scoped", "broad", "transformative")
+    * `:files_touched` - number of files touched by the task
   """
   @spec record_task_result(map()) :: {:ok, AgentMetric.t()} | {:error, Ecto.Changeset.t()}
   def record_task_result(params) when is_map(params) do
@@ -205,5 +207,58 @@ defmodule Loomkin.Teams.Learning do
     end)
     |> Enum.sort_by(& &1.success_rate, :desc)
     |> Enum.take(limit)
+  end
+
+  @doc """
+  Average cost (USD) for tasks of a given scope tier.
+
+  Takes a scope tier as an atom or string. Returns `nil` if no data exists.
+  """
+  @spec avg_cost_by_scope(atom() | String.t()) :: float() | nil
+  def avg_cost_by_scope(scope_tier) do
+    tier = to_string(scope_tier)
+
+    query =
+      from m in AgentMetric,
+        where: m.scope_tier == ^tier and not is_nil(m.cost_usd),
+        select: avg(m.cost_usd)
+
+    Repo.one(query)
+  end
+
+  @doc """
+  Recommend a scope tier based on historical velocity data.
+
+  Takes a map with `:task_description` (string) and `:file_matches` (integer).
+  Infers a tier from file_matches, then checks historical data.
+
+  Returns:
+    * `{:learned, tier, avg_cost}` if 5+ historical records exist for the tier
+    * `{:default, tier}` if insufficient data
+  """
+  @spec recommend_tier(map()) :: {:learned, String.t(), float()} | {:default, String.t()}
+  def recommend_tier(%{file_matches: file_matches} = _params) do
+    tier = infer_tier(file_matches)
+
+    query =
+      from m in AgentMetric,
+        where: m.scope_tier == ^tier,
+        select: %{count: count(m.id), avg_cost: avg(m.cost_usd)}
+
+    case Repo.one(query) do
+      %{count: count, avg_cost: avg_cost} when count >= 5 and not is_nil(avg_cost) ->
+        {:learned, tier, avg_cost}
+
+      _ ->
+        {:default, tier}
+    end
+  end
+
+  defp infer_tier(file_matches) when is_integer(file_matches) do
+    cond do
+      file_matches <= 3 -> "quick"
+      file_matches <= 15 -> "session"
+      true -> "campaign"
+    end
   end
 end
