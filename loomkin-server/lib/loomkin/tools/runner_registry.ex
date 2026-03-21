@@ -178,16 +178,16 @@ defmodule Loomkin.Tools.RunnerRegistry do
   end
 
   defp do_release(counts, monitors, tool_type, pid) do
-    new_counts = decrement(counts, tool_type)
-
-    # Find and remove the monitor for this pid+tool_type (first match)
+    # Find and remove the monitor for this pid+tool_type (first match).
+    # Only decrement the count if a matching monitor is found, to prevent
+    # double-release from corrupting counts.
     case Enum.find(monitors, fn {_ref, {p, tt}} -> p == pid and tt == tool_type end) do
       {ref, _} ->
         Process.demonitor(ref, [:flush])
-        {new_counts, Map.delete(monitors, ref)}
+        {decrement(counts, tool_type), Map.delete(monitors, ref)}
 
       nil ->
-        {new_counts, monitors}
+        {counts, monitors}
     end
   end
 
