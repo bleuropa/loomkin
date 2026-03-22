@@ -1,6 +1,8 @@
 defmodule LoomkinWeb.Mobile.WorkspaceListLive do
   use LoomkinWeb, :live_view
 
+  require Logger
+
   alias Loomkin.Repo
   alias Loomkin.Relay.Server.Registry
   alias Loomkin.Workspace
@@ -40,18 +42,23 @@ defmodule LoomkinWeb.Mobile.WorkspaceListLive do
     Enum.map(workspaces, fn ws ->
       info = Map.get(online_map, ws.id)
 
-      ws
-      |> Map.put(:online, info != nil)
-      |> Map.put(:machine_name, info && info.machine_name)
-      |> Map.put(:agent_count, (info && info.agent_count) || 0)
+      %{
+        id: ws.id,
+        name: ws.name,
+        online: info != nil,
+        machine_name: info && info.machine_name,
+        agent_count: (info && info.agent_count) || 0
+      }
     end)
   end
 
   defp get_online_status(user_id) do
     Registry.list_workspaces(user_id)
-    |> Map.new(fn {ws_id, info} -> {ws_id, info} end)
+    |> Map.new()
   rescue
-    _ -> %{}
+    e ->
+      Logger.warning("[Mobile:workspaces] failed to get online status: #{inspect(e)}")
+      %{}
   end
 
   def render(assigns) do

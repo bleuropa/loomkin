@@ -5,18 +5,28 @@ defmodule LoomkinWeb.API.V1.ApprovalController do
   alias Loomkin.Relay.Server.DaemonChannel
   alias Loomkin.Session.Persistence
 
-  def approve(conn, %{"session_id" => session_id} = params) do
+  def approve(conn, %{"session_id" => session_id, "tool_name" => tool_name} = params)
+      when is_binary(tool_name) and tool_name != "" do
     relay_approval(conn, session_id, "approve_tool", %{
-      "tool_name" => params["tool_name"],
-      "tool_path" => params["tool_path"]
+      "tool_name" => tool_name,
+      "tool_path" => params["tool_path"] || ""
     })
   end
 
-  def deny(conn, %{"session_id" => session_id} = params) do
+  def approve(conn, _params) do
+    conn |> put_status(400) |> json(%{"ok" => false, "error" => "tool_name required"})
+  end
+
+  def deny(conn, %{"session_id" => session_id, "tool_name" => tool_name} = params)
+      when is_binary(tool_name) and tool_name != "" do
     relay_approval(conn, session_id, "deny_tool", %{
-      "tool_name" => params["tool_name"],
-      "reason" => params["reason"]
+      "tool_name" => tool_name,
+      "reason" => params["reason"] || "denied"
     })
+  end
+
+  def deny(conn, _params) do
+    conn |> put_status(400) |> json(%{"ok" => false, "error" => "tool_name required"})
   end
 
   defp relay_approval(conn, session_id, action, payload) do

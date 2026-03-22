@@ -35,7 +35,12 @@ defmodule Loomkin.Relay.Server.Registry do
   @doc "Remove all workspace entries owned by the given channel pid."
   @spec unregister_daemon(pid()) :: :ok
   def unregister_daemon(channel_pid) do
-    :ets.match_delete(@table, {:_, %{channel_pid: channel_pid}})
+    # ETS partial map matching doesn't work with match_delete.
+    # Use select_delete with a proper match spec instead.
+    :ets.select_delete(@table, [
+      {{:_, %{channel_pid: :"$1"}}, [{:==, :"$1", channel_pid}], [true]}
+    ])
+
     :ok
   end
 

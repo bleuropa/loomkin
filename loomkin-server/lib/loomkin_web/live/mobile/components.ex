@@ -51,7 +51,7 @@ defmodule LoomkinWeb.Mobile.Components do
       "flex items-center gap-2 px-3 py-1.5 text-xs",
       status_color(@status)
     ]}>
-      <span :if={@status in [:thinking, :streaming]} class="relative flex h-2 w-2">
+      <span :if={@status in [:thinking, :streaming, :tool_running]} class="relative flex h-2 w-2">
         <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-75" />
         <span class="relative inline-flex rounded-full h-2 w-2 bg-current" />
       </span>
@@ -96,6 +96,7 @@ defmodule LoomkinWeb.Mobile.Components do
       </p>
       <div class="flex gap-3">
         <button
+          id={"approve-#{perm.id}"}
           phx-click="approve_tool"
           phx-value-id={perm.id}
           class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-sm font-medium rounded-xl transition-colors"
@@ -103,6 +104,7 @@ defmodule LoomkinWeb.Mobile.Components do
           Approve
         </button>
         <button
+          id={"deny-#{perm.id}"}
           phx-click="deny_tool"
           phx-value-id={perm.id}
           class="flex-1 py-3 bg-gray-700 hover:bg-gray-600 active:bg-gray-800 text-white text-sm font-medium rounded-xl transition-colors"

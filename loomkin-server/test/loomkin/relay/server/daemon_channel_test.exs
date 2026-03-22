@@ -28,7 +28,7 @@ defmodule Loomkin.Relay.Server.DaemonChannelTest do
     user = Loomkin.AccountsFixtures.user_fixture()
     token = Loomkin.Accounts.generate_user_session_token(user)
 
-    {:ok, socket} = connect(Socket, %{"token" => token})
+    {:ok, socket} = connect(Socket, %{"token" => Base.url_encode64(token, padding: false)})
     {:ok, socket: socket, user: user}
   end
 
@@ -168,39 +168,36 @@ defmodule Loomkin.Relay.Server.DaemonChannelTest do
       assert entry.workspace_name == "loomkin-updated"
     end
 
-    test "workspace_update for new workspace adds to workspace_ids", %{socket: socket, user: user} do
+    test "workspace_update for unowned workspace is rejected", %{socket: socket, user: user} do
       {:ok, _reply, socket} = join(socket, DaemonChannel, "daemon:lobby", register_payload())
 
-      # First register the new workspace in the ETS table so update_workspace can find it
-      Registry.register_workspace(user.id, "ws-new", %{
+      # Pre-register an unrelated workspace
+      Registry.register_workspace(user.id, "ws-unowned", %{
         channel_pid: self(),
         machine_name: "test-machine",
         status: "starting",
         team_id: nil,
         agent_count: 0,
         last_heartbeat: DateTime.utc_now(),
-        project_path: "/new",
-        workspace_name: "new-ws"
+        project_path: "/unowned",
+        workspace_name: "unowned-ws"
       })
 
       push(socket, "workspace_update", %{
-        "workspace_id" => "ws-new",
-        "name" => "new-workspace",
-        "project_path" => "/new",
+        "workspace_id" => "ws-unowned",
+        "name" => "hacked",
+        "project_path" => "/unowned",
         "team_id" => nil,
         "status" => "active",
-        "agent_count" => 1
+        "agent_count" => 99
       })
 
-      # Give channel process time to handle the message
       Process.sleep(50)
 
-      # The PubSub broadcast should have fired
-      # (We can't directly check socket.assigns from outside the channel process,
-      # but we can verify the registry was updated)
-      {:ok, entry} = Registry.lookup_workspace(user.id, "ws-new")
-      assert entry.status == "active"
-      assert entry.agent_count == 1
+      # The update should have been rejected — original values preserved
+      {:ok, entry} = Registry.lookup_workspace(user.id, "ws-unowned")
+      assert entry.status == "starting"
+      assert entry.agent_count == 0
     end
   end
 

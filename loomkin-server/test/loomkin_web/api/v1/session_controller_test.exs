@@ -12,9 +12,11 @@ defmodule LoomkinWeb.API.V1.SessionControllerTest do
     user = Loomkin.AccountsFixtures.user_fixture()
     token = Loomkin.Accounts.generate_user_session_token(user)
 
+    encoded_token = Base.url_encode64(token, padding: false)
+
     conn =
       build_conn()
-      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("authorization", "Bearer #{encoded_token}")
       |> put_req_header("content-type", "application/json")
 
     {:ok, conn: conn, user: user, token: token}

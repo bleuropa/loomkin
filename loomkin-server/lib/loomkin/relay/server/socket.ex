@@ -13,13 +13,12 @@ defmodule Loomkin.Relay.Server.Socket do
   channel "daemon:lobby", Loomkin.Relay.Server.DaemonChannel
 
   @impl true
-  def connect(%{"token" => token}, socket, _connect_info) when is_binary(token) do
-    case Accounts.get_user_by_session_token(token) do
-      {user, _token_inserted_at} ->
-        {:ok, assign(socket, :user_id, user.id)}
-
-      nil ->
-        :error
+  def connect(%{"token" => encoded}, socket, _connect_info) when is_binary(encoded) do
+    with {:ok, token} <- Base.url_decode64(encoded, padding: false),
+         {user, _token_inserted_at} <- Accounts.get_user_by_session_token(token) do
+      {:ok, assign(socket, :user_id, user.id)}
+    else
+      _ -> :error
     end
   end
 

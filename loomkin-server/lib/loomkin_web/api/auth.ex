@@ -15,7 +15,8 @@ defmodule LoomkinWeb.API.Auth do
   def init(opts), do: opts
 
   def call(conn, _opts) do
-    with ["Bearer " <> token] <- get_req_header(conn, "authorization"),
+    with ["Bearer " <> encoded] <- get_req_header(conn, "authorization"),
+         {:ok, token} <- Base.url_decode64(encoded, padding: false),
          {user, _token_inserted_at} <- Accounts.get_user_by_session_token(token) do
       assign(conn, :current_scope, Scope.for_user(user))
     else

@@ -46,9 +46,6 @@ defmodule LoomkinWeb.API.V1.SessionController do
       %{user_id: uid} = session when uid == user.id ->
         json(conn, %{"ok" => true, "data" => %{"session" => session_json(session)}})
 
-      %{user_id: nil} = session ->
-        json(conn, %{"ok" => true, "data" => %{"session" => session_json(session)}})
-
       _ ->
         conn
         |> put_status(404)
@@ -60,7 +57,7 @@ defmodule LoomkinWeb.API.V1.SessionController do
     user = conn.assigns.current_scope.user
 
     case Persistence.get_session(session_id) do
-      %{user_id: uid} = _session when uid == user.id or is_nil(uid) ->
+      %{user_id: uid} = _session when uid == user.id ->
         all_messages = Persistence.load_messages(session_id)
 
         offset = parse_int(params["offset"], 0)
@@ -86,6 +83,15 @@ defmodule LoomkinWeb.API.V1.SessionController do
         |> put_status(404)
         |> json(%{"ok" => false, "error" => "session not found"})
     end
+  end
+
+  @max_message_length 100_000
+
+  def send_message(conn, %{"id" => _session_id, "text" => text})
+      when not is_binary(text) or byte_size(text) > @max_message_length do
+    conn
+    |> put_status(400)
+    |> json(%{"ok" => false, "error" => "text must be a string under 100KB"})
   end
 
   def send_message(conn, %{"id" => session_id, "text" => text}) do

@@ -97,7 +97,8 @@ defmodule Loomkin.Relay.Client do
   # Gun connection is up — upgrade to WebSocket
   def handle_info({:gun_up, pid, _protocol}, %{gun_pid: pid} = state) do
     path = ws_path(state)
-    stream = :gun.ws_upgrade(pid, path, [], %{protocols: [{<<"websocket">>, :gun_ws_h}]})
+    headers = ws_headers(state)
+    stream = :gun.ws_upgrade(pid, path, headers, %{protocols: [{<<"websocket">>, :gun_ws_h}]})
     {:noreply, %{state | ws_stream: stream}}
   end
 
@@ -149,6 +150,7 @@ defmodule Loomkin.Relay.Client do
         %{gun_pid: pid} = state
       ) do
     Logger.warning("[Relay:client] gun down: #{inspect(reason)}")
+    cleanup_gun(state)
     {:noreply, schedule_reconnect(reset_connection(state))}
   end
 
@@ -157,12 +159,18 @@ defmodule Loomkin.Relay.Client do
     {:noreply, schedule_reconnect(reset_connection(state))}
   end
 
-  # Heartbeat timer
+  # Heartbeat timer — also detects missed acks (zombie connections)
   def handle_info(:heartbeat, state) do
     if state.joined do
-      state = push_channel_msg(state, "heartbeat", %{})
-      timer = Process.send_after(self(), :heartbeat, state.heartbeat_interval_ms)
-      {:noreply, %{state | heartbeat_timer: timer}}
+      if heartbeat_stale?(state) do
+        Logger.warning("[Relay:client] heartbeat ack missed, forcing reconnect")
+        cleanup_gun(state)
+        {:noreply, schedule_reconnect(reset_connection(state))}
+      else
+        state = push_channel_msg(state, "heartbeat", %{})
+        timer = Process.send_after(self(), :heartbeat, state.heartbeat_interval_ms)
+        {:noreply, %{state | heartbeat_timer: timer}}
+      end
     else
       {:noreply, state}
     end
@@ -231,25 +239,24 @@ defmodule Loomkin.Relay.Client do
 
     transport = if uri.scheme in ["wss", "https"], do: :tls, else: :tcp
 
+    tls_opts =
+      if Application.get_env(:loomkin, :env) in [:dev, :test] do
+        [verify: :verify_none]
+      else
+        [verify: :verify_peer, cacerts: :public_key.cacerts_get()]
+      end
+
     gun_opts = %{
       protocols: [:http],
       transport: transport,
-      tls_opts: [verify: :verify_none]
+      tls_opts: tls_opts
     }
 
+    # Non-blocking: open the connection and let :gun_up arrive asynchronously
     case :gun.open(host, port, gun_opts) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
-
-        case :gun.await_up(pid, 10_000) do
-          {:ok, _protocol} ->
-            {:ok, %{state | gun_pid: pid, gun_ref: ref, status: :connecting}}
-
-          {:error, reason} ->
-            :gun.close(pid)
-            Process.demonitor(ref, [:flush])
-            {:error, reason}
-        end
+        {:ok, %{state | gun_pid: pid, gun_ref: ref, status: :connecting}}
 
       {:error, reason} ->
         {:error, reason}
@@ -259,7 +266,11 @@ defmodule Loomkin.Relay.Client do
   defp ws_path(state) do
     uri = URI.parse(state.relay_url)
     base = uri.path || "/relay/websocket"
-    "#{base}?token=#{URI.encode_www_form(state.token || "")}&vsn=2.0.0"
+    "#{base}?vsn=2.0.0"
+  end
+
+  defp ws_headers(state) do
+    [{"authorization", "Bearer #{state.token || ""}"}]
   end
 
   defp cleanup_gun(%{gun_pid: nil}), do: :ok
@@ -285,7 +296,9 @@ defmodule Loomkin.Relay.Client do
         status: :disconnected,
         joined: false,
         join_ref: nil,
-        heartbeat_timer: nil
+        heartbeat_timer: nil,
+        msg_ref: 0,
+        last_heartbeat_ack: nil
     }
   end
 
@@ -422,6 +435,18 @@ defmodule Loomkin.Relay.Client do
     }
   end
 
+  defp heartbeat_stale?(state) do
+    case state.last_heartbeat_ack do
+      nil ->
+        # No ack received yet — stale if we've been joined for > 2 heartbeat intervals
+        false
+
+      %DateTime{} = last_ack ->
+        age_ms = DateTime.diff(DateTime.utc_now(), last_ack, :millisecond)
+        age_ms > state.heartbeat_interval_ms * 2
+    end
+  end
+
   defp gather_workspaces do
     Registry.select(Loomkin.Workspace.Registry, [
       {{:"$1", :"$2", :_}, [], [%{id: :"$1", pid: :"$2"}]}
@@ -449,7 +474,9 @@ defmodule Loomkin.Relay.Client do
       end
     end)
   rescue
-    _ -> []
+    e ->
+      Logger.warning("[Relay:client] failed to gather workspaces: #{inspect(e)}")
+      []
   end
 
   defp count_agents(nil), do: 0
@@ -457,6 +484,8 @@ defmodule Loomkin.Relay.Client do
   defp count_agents(team_id) do
     team_id |> Loomkin.Teams.Manager.list_agents() |> length()
   rescue
-    _ -> 0
+    e ->
+      Logger.warning("[Relay:client] failed to count agents for #{team_id}: #{inspect(e)}")
+      0
   end
 end

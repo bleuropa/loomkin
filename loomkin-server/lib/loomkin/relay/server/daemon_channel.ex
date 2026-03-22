@@ -39,8 +39,6 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
       })
     end
 
-    Process.flag(:trap_exit, true)
-
     socket =
       socket
       |> assign(:machine_name, register.machine_name)
@@ -87,11 +85,17 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
   def handle_in("event", payload, socket) do
     event = Event.from_map(Map.put(payload, "type", "event"))
 
-    Phoenix.PubSub.broadcast(
-      Loomkin.PubSub,
-      "relay:events:#{event.workspace_id}",
-      {:relay_event, event}
-    )
+    if event.workspace_id in socket.assigns.workspace_ids do
+      Phoenix.PubSub.broadcast(
+        Loomkin.PubSub,
+        "relay:events:#{event.workspace_id}",
+        {:relay_event, event}
+      )
+    else
+      Logger.warning(
+        "DaemonChannel: event workspace_id=#{event.workspace_id} not in owned workspaces"
+      )
+    end
 
     {:noreply, socket}
   end
@@ -100,32 +104,30 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
     update = WorkspaceUpdate.from_map(Map.put(payload, "type", "workspace_update"))
     user_id = socket.assigns.user_id
 
-    changes = %{
-      status: update.status,
-      agent_count: update.agent_count
-    }
+    if update.workspace_id in socket.assigns.workspace_ids do
+      changes = %{
+        status: update.status,
+        agent_count: update.agent_count
+      }
 
-    changes =
-      changes
-      |> maybe_put(:workspace_name, update.name)
-      |> maybe_put(:project_path, update.project_path)
-      |> maybe_put(:team_id, update.team_id)
+      changes =
+        changes
+        |> maybe_put(:workspace_name, update.name)
+        |> maybe_put(:project_path, update.project_path)
+        |> maybe_put(:team_id, update.team_id)
 
-    Registry.update_workspace(user_id, update.workspace_id, changes)
+      Registry.update_workspace(user_id, update.workspace_id, changes)
 
-    # Track new workspace IDs
-    socket =
-      if update.workspace_id not in socket.assigns.workspace_ids do
-        assign(socket, :workspace_ids, [update.workspace_id | socket.assigns.workspace_ids])
-      else
-        socket
-      end
-
-    Phoenix.PubSub.broadcast(
-      Loomkin.PubSub,
-      "relay:workspaces:#{user_id}",
-      {:workspace_update, update}
-    )
+      Phoenix.PubSub.broadcast(
+        Loomkin.PubSub,
+        "relay:workspaces:#{user_id}",
+        {:workspace_update, update}
+      )
+    else
+      Logger.warning(
+        "DaemonChannel: workspace_update for unowned workspace_id=#{update.workspace_id}"
+      )
+    end
 
     {:noreply, socket}
   end
@@ -151,15 +153,24 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
         {:ok, _} =
           Elixir.Registry.register(Loomkin.Relay.PendingCommands, command.request_id, self())
 
+        ref = Process.monitor(pid)
         send(pid, {:push_command, command})
 
-        receive do
-          {:command_response, %CommandResponse{} = response} -> {:ok, response}
-        after
-          timeout ->
-            Elixir.Registry.unregister(Loomkin.Relay.PendingCommands, command.request_id)
-            {:error, :timeout}
-        end
+        result =
+          receive do
+            {:command_response, %CommandResponse{} = response} ->
+              {:ok, response}
+
+            {:DOWN, ^ref, :process, ^pid, _reason} ->
+              {:error, :not_connected}
+          after
+            timeout ->
+              {:error, :timeout}
+          end
+
+        Process.demonitor(ref, [:flush])
+        Elixir.Registry.unregister(Loomkin.Relay.PendingCommands, command.request_id)
+        result
 
       :error ->
         {:error, :not_connected}
@@ -171,10 +182,6 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
   @impl true
   def handle_info({:push_command, command}, socket) do
     push(socket, "command", Loomkin.Relay.Protocol.Command.to_map(command))
-    {:noreply, socket}
-  end
-
-  def handle_info({:EXIT, _pid, _reason}, socket) do
     {:noreply, socket}
   end
 

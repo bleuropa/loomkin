@@ -21,7 +21,7 @@ defmodule LoomkinWeb.Mobile.ChatLive do
          |> push_navigate(to: ~p"/m")}
 
       session ->
-        if user && session.user_id != nil && session.user_id != user.id do
+        if is_nil(user) || (session.user_id != nil && session.user_id != user.id) do
           {:ok,
            socket
            |> put_flash(:error, "Not authorized")
@@ -38,8 +38,10 @@ defmodule LoomkinWeb.Mobile.ChatLive do
               session_id: session.id,
               workspace_id: session.workspace_id,
               workspace: workspace,
+              back_path: if(workspace, do: ~p"/m/workspaces/#{workspace.id}", else: ~p"/m"),
               user: user,
               status: :idle,
+              streaming_chunks: [],
               streaming_content: "",
               current_tool: nil,
               pending_permissions: [],
@@ -93,12 +95,12 @@ defmodule LoomkinWeb.Mobile.ChatLive do
         action: "send_message",
         workspace_id: socket.assigns.workspace_id,
         session_id: socket.assigns.session_id,
-        payload: %{"content" => trimmed}
+        payload: %{"text" => trimmed}
       }
 
       user = socket.assigns.user
 
-      Task.start(fn ->
+      Task.Supervisor.start_child(Loomkin.Teams.TaskSupervisor, fn ->
         DaemonChannel.send_command(user.id, socket.assigns.workspace_id, command)
       end)
     end
@@ -135,7 +137,7 @@ defmodule LoomkinWeb.Mobile.ChatLive do
 
       user = socket.assigns.user
 
-      Task.start(fn ->
+      Task.Supervisor.start_child(Loomkin.Teams.TaskSupervisor, fn ->
         DaemonChannel.send_command(user.id, socket.assigns.workspace_id, command)
       end)
     end
@@ -157,7 +159,7 @@ defmodule LoomkinWeb.Mobile.ChatLive do
 
       user = socket.assigns.user
 
-      Task.start(fn ->
+      Task.Supervisor.start_child(Loomkin.Teams.TaskSupervisor, fn ->
         DaemonChannel.send_command(user.id, socket.assigns.workspace_id, command)
       end)
     end
@@ -179,7 +181,7 @@ defmodule LoomkinWeb.Mobile.ChatLive do
 
       user = socket.assigns.user
 
-      Task.start(fn ->
+      Task.Supervisor.start_child(Loomkin.Teams.TaskSupervisor, fn ->
         DaemonChannel.send_command(user.id, socket.assigns.workspace_id, command)
       end)
     end
@@ -190,18 +192,9 @@ defmodule LoomkinWeb.Mobile.ChatLive do
   # --- Render ---
 
   def render(assigns) do
-    back_path =
-      if assigns.workspace do
-        ~p"/m/workspaces/#{assigns.workspace.id}"
-      else
-        ~p"/m"
-      end
-
-    assigns = assign(assigns, :back_path, back_path)
-
     ~H"""
     <.mobile_layout page_title={@session.title || "Chat"} back_path={@back_path}>
-      <div class="flex flex-col" style="height: calc(100vh - 52px);">
+      <div class="flex flex-col h-[calc(100vh-52px)]">
         <%!-- Status bar --%>
         <.status_indicator status={@status} tool_name={@current_tool} />
 
@@ -209,7 +202,7 @@ defmodule LoomkinWeb.Mobile.ChatLive do
         <div
           id="chat-messages"
           phx-update="stream"
-          phx-hook="ScrollBottom"
+          phx-hook=".ScrollBottom"
           class="flex-1 overflow-y-auto px-4 py-3 space-y-3"
         >
           <div class="hidden only:block text-center py-20">
@@ -257,7 +250,7 @@ defmodule LoomkinWeb.Mobile.ChatLive do
               rows="1"
               placeholder="Message..."
               autocomplete="off"
-              phx-hook="AutoResize"
+              phx-hook=".AutoResize"
               class={[
                 "flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white",
                 "placeholder-gray-500 focus:outline-none focus:border-violet-500 resize-none",
@@ -270,6 +263,7 @@ defmodule LoomkinWeb.Mobile.ChatLive do
                 phx-click="cancel"
                 class="shrink-0 w-10 h-10 flex items-center justify-center rounded-xl bg-red-600/20 text-red-400 active:bg-red-600/40 transition-colors"
                 id="cancel-btn"
+                aria-label="Cancel"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -285,6 +279,7 @@ defmodule LoomkinWeb.Mobile.ChatLive do
                 type="submit"
                 class="shrink-0 w-10 h-10 flex items-center justify-center rounded-xl bg-violet-600 text-white active:bg-violet-700 transition-colors"
                 id="send-btn"
+                aria-label="Send message"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -339,16 +334,19 @@ defmodule LoomkinWeb.Mobile.ChatLive do
   # --- Relay event handlers ---
 
   defp handle_relay_event("agent.stream.start", _data, socket) do
-    {:noreply, assign(socket, status: :streaming, streaming_content: "")}
+    {:noreply, assign(socket, status: :streaming, streaming_chunks: [], streaming_content: "")}
   end
 
   defp handle_relay_event("agent.stream.delta", data, socket) do
     chunk = data["text"] || data["content"] || ""
-    {:noreply, assign(socket, streaming_content: socket.assigns.streaming_content <> chunk)}
+    chunks = [socket.assigns.streaming_chunks | chunk]
+
+    {:noreply,
+     assign(socket, streaming_chunks: chunks, streaming_content: IO.iodata_to_binary(chunks))}
   end
 
   defp handle_relay_event("agent.stream.end", _data, socket) do
-    {:noreply, assign(socket, status: :idle, streaming_content: "")}
+    {:noreply, assign(socket, status: :idle, streaming_chunks: [], streaming_content: "")}
   end
 
   defp handle_relay_event("session.new_message", data, socket) do
@@ -376,7 +374,7 @@ defmodule LoomkinWeb.Mobile.ChatLive do
       agent_name: data["agent_name"]
     }
 
-    {:noreply, assign(socket, pending_permissions: socket.assigns.pending_permissions ++ [perm])}
+    {:noreply, assign(socket, pending_permissions: [perm | socket.assigns.pending_permissions])}
   end
 
   defp handle_relay_event("approval.requested", data, socket) do
@@ -395,7 +393,7 @@ defmodule LoomkinWeb.Mobile.ChatLive do
   end
 
   defp handle_relay_event("session.cancelled", _data, socket) do
-    {:noreply, assign(socket, status: :idle, streaming_content: "")}
+    {:noreply, assign(socket, status: :idle, streaming_chunks: [], streaming_content: "")}
   end
 
   defp handle_relay_event(_type, _data, socket), do: {:noreply, socket}

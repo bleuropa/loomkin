@@ -38,6 +38,7 @@ defmodule Loomkin.Relay.Server.HeartbeatMonitor do
         )
 
         Registry.unregister_daemon(info.channel_pid)
+        Process.exit(info.channel_pid, :stale_heartbeat)
       end
     end)
 
