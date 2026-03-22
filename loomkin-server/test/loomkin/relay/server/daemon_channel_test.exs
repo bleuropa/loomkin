@@ -51,7 +51,9 @@ defmodule Loomkin.Relay.Server.DaemonChannelTest do
 
   describe "join daemon:lobby" do
     test "daemon can join with register payload", %{socket: socket, user: user} do
-      assert {:ok, _reply, socket} = join(socket, DaemonChannel, "daemon:lobby", register_payload())
+      assert {:ok, _reply, socket} =
+               join(socket, DaemonChannel, "daemon:lobby", register_payload())
+
       assert socket.assigns.machine_name == "test-machine"
       assert socket.assigns.version == "0.1.0"
       assert socket.assigns.workspace_ids == ["ws-1"]
@@ -112,7 +114,11 @@ defmodule Loomkin.Relay.Server.DaemonChannelTest do
       assert is_binary(ack["timestamp"])
 
       {:ok, entry_after} = Registry.lookup_workspace(user.id, "ws-1")
-      assert DateTime.compare(entry_after.last_heartbeat, entry_before.last_heartbeat) in [:eq, :gt]
+
+      assert DateTime.compare(entry_after.last_heartbeat, entry_before.last_heartbeat) in [
+               :eq,
+               :gt
+             ]
     end
   end
 
