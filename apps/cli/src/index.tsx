@@ -28,6 +28,7 @@ import { DEV_FALLBACK_URL } from "./lib/constants.js";
 import { isProviderConfigured } from "./lib/modelUtils.js";
 import { runPrintMode } from "./lib/print.js";
 import { getGitContext, getGitBranch } from "./lib/git.js";
+import { loadKeybindings } from "./lib/keybindingParser.js";
 
 const cli = meow(
   `
@@ -312,6 +313,12 @@ async function main() {
   if (cli.flags.apiKey) {
     // Override the stored token for this invocation only (not persisted)
     store.setToken(cli.flags.apiKey);
+  }
+
+  // Load custom keybindings from ~/.loomkin/keybindings.json
+  const customKeybindings = loadKeybindings();
+  if (Object.keys(customKeybindings).length > 0) {
+    useAppStore.getState().setCustomKeybindings(customKeybindings);
   }
 
   const timer = new StartupTimer();
