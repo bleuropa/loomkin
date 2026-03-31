@@ -24,6 +24,7 @@ defmodule Loomkin.Relay.Client do
     :ws_stream,
     :relay_url,
     :token,
+    :workspace_id,
     :heartbeat_interval_ms,
     :reconnect_base_ms,
     :reconnect_max_ms,
@@ -67,9 +68,12 @@ defmodule Loomkin.Relay.Client do
     config = Application.get_env(:loomkin, __MODULE__, [])
 
     if config[:enabled] do
+      token = config[:token] || generate_token(config)
+
       state = %__MODULE__{
         relay_url: config[:relay_url],
-        token: config[:token],
+        token: token,
+        workspace_id: config[:workspace_id],
         heartbeat_interval_ms: config[:heartbeat_interval_ms] || 15_000,
         reconnect_base_ms: config[:reconnect_base_ms] || 1_000,
         reconnect_max_ms: config[:reconnect_max_ms] || 30_000
@@ -266,7 +270,8 @@ defmodule Loomkin.Relay.Client do
   defp ws_path(state) do
     uri = URI.parse(state.relay_url)
     base = uri.path || "/relay/websocket"
-    "#{base}?vsn=2.0.0"
+    token_param = URI.encode_www_form(state.token || "")
+    "#{base}?vsn=2.0.0&token=#{token_param}"
   end
 
   defp ws_headers(state) do
@@ -320,15 +325,18 @@ defmodule Loomkin.Relay.Client do
   #
   # Phoenix v2 frames are JSON arrays: [join_ref, ref, topic, event, payload]
 
+  defp channel_topic(state), do: "daemon:#{state.workspace_id || "lobby"}"
+
   defp send_join(state) do
     {state, join_ref} = next_ref(state)
     {state, ref} = next_ref(state)
 
     register = build_register()
     payload = Register.to_map(register) |> Map.delete("type")
+    topic = channel_topic(state)
 
     frame =
-      Jason.encode!([to_string(join_ref), to_string(ref), "daemon:lobby", "phx_join", payload])
+      Jason.encode!([to_string(join_ref), to_string(ref), topic, "phx_join", payload])
 
     :gun.ws_send(state.gun_pid, state.ws_stream, {:text, frame})
 
@@ -337,9 +345,10 @@ defmodule Loomkin.Relay.Client do
 
   defp push_channel_msg(state, event, payload) do
     {state, ref} = next_ref(state)
+    topic = channel_topic(state)
 
     frame =
-      Jason.encode!([state.join_ref, to_string(ref), "daemon:lobby", event, payload])
+      Jason.encode!([state.join_ref, to_string(ref), topic, event, payload])
 
     :gun.ws_send(state.gun_pid, state.ws_stream, {:text, frame})
     state
@@ -368,7 +377,7 @@ defmodule Loomkin.Relay.Client do
 
   defp handle_channel_event("phx_reply", %{"status" => "ok"} = _payload, state) do
     unless state.joined do
-      Logger.info("[Relay:client] joined daemon:lobby")
+      Logger.info("[Relay:client] joined #{channel_topic(state)}")
       timer = Process.send_after(self(), :heartbeat, state.heartbeat_interval_ms)
       %{state | joined: true, heartbeat_timer: timer}
     else
@@ -487,5 +496,22 @@ defmodule Loomkin.Relay.Client do
     e ->
       Logger.warning("[Relay:client] failed to count agents for #{team_id}: #{inspect(e)}")
       0
+  end
+
+  defp generate_token(config) do
+    user_id = config[:user_id]
+    workspace_id = config[:workspace_id]
+
+    if user_id && workspace_id do
+      Loomkin.Accounts.generate_daemon_token(user_id, workspace_id,
+        role: config[:role] || "owner"
+      )
+    else
+      Logger.warning(
+        "[Relay:client] cannot generate token: user_id or workspace_id not configured"
+      )
+
+      nil
+    end
   end
 end

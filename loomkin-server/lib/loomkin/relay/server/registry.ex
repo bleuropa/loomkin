@@ -44,6 +44,21 @@ defmodule Loomkin.Relay.Server.Registry do
     :ok
   end
 
+  @doc """
+  Remove all workspace entries for a given user, except those owned by `keep_pid`.
+
+  Used before a new join to evict stale entries from a previous connection.
+  """
+  @spec evict_stale_workspaces(integer(), pid()) :: :ok
+  def evict_stale_workspaces(user_id, keep_pid) do
+    :ets.select_delete(@table, [
+      {{{:"$1", :_}, %{channel_pid: :"$2"}}, [{:==, :"$1", user_id}, {:"/=", :"$2", keep_pid}],
+       [true]}
+    ])
+
+    :ok
+  end
+
   @doc "Look up a single workspace entry."
   @spec lookup_workspace(integer(), String.t()) :: {:ok, workspace_entry()} | :error
   def lookup_workspace(user_id, workspace_id) do

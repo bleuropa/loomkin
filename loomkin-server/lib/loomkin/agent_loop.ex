@@ -64,6 +64,9 @@ defmodule Loomkin.AgentLoop do
     # Bootstrap failure memory: inject lessons from past errors
     messages = bootstrap_failure_memory(messages, config)
 
+    # Bootstrap learning context: inject historical performance data
+    messages = bootstrap_learning_context(messages, config)
+
     case config.reasoning_strategy do
       :react ->
         run_with_rate_limit_retry(messages, config, 0)
@@ -560,12 +563,7 @@ defmodule Loomkin.AgentLoop do
         atomized_args
       end
 
-    tool_type =
-      try do
-        String.to_existing_atom(tool_meta.tool_name)
-      rescue
-        ArgumentError -> :default
-      end
+    tool_type = String.to_existing_atom(tool_meta.tool_name)
 
     result =
       case Loomkin.Tools.RunnerRegistry.acquire(tool_type) do
@@ -1022,6 +1020,43 @@ defmodule Loomkin.AgentLoop do
           }
 
           [lesson | messages]
+
+        _ ->
+          messages
+      end
+    else
+      messages
+    end
+  rescue
+    _ -> messages
+  end
+
+  @doc """
+  Inject historical performance data into the agent's message context.
+
+  Queries `Learning.learning_context/2` for the agent's model and role (as a
+  proxy for task type). If data exists, prepends a concise system message
+  (max 500 chars) with success rate and cost information.
+
+  Returns the augmented messages if data was found, or the original messages
+  unchanged.
+  """
+  def bootstrap_learning_context(messages, config) do
+    model = config.model
+    # Use role as the task type proxy — agents work on tasks matching their role
+    task_type = to_string(config.role || "general")
+
+    if model do
+      alias Loomkin.Teams.Learning
+
+      case Learning.learning_context(model, task_type) do
+        context when is_binary(context) and context != "" ->
+          msg = %{
+            role: :system,
+            content: "[Learning context]\n#{String.slice(context, 0, 500)}"
+          }
+
+          [msg | messages]
 
         _ ->
           messages

@@ -101,13 +101,15 @@ defmodule Loomkin.Teams.Learning do
 
   Returns `{model, score}` or `nil` if no data exists.
   """
-  @spec recommend_model(String.t()) :: {String.t(), float()} | nil
-  def recommend_model(task_type) do
+  @spec recommend_model(String.t(), keyword()) :: {String.t(), float()} | nil
+  def recommend_model(task_type, opts \\ []) do
+    min_samples = Keyword.get(opts, :min_samples, 1)
+
     query =
       from m in AgentMetric,
         where: m.task_type == ^task_type,
         group_by: m.model,
-        having: count(m.id) >= 1,
+        having: count(m.id) >= ^min_samples,
         select: %{
           model: m.model,
           total: count(m.id),
@@ -251,6 +253,41 @@ defmodule Loomkin.Teams.Learning do
 
       _ ->
         {:default, tier}
+    end
+  end
+
+  @doc """
+  Build a concise learning context string for an agent about to work on a task.
+
+  Returns a short summary (max 500 chars) of historical performance data for
+  the given model and task type, or `nil` if no data exists.
+  """
+  @spec learning_context(String.t(), String.t()) :: String.t() | nil
+  def learning_context(model, task_type) do
+    rate = success_rate(model, task_type)
+    cost = avg_cost(task_type)
+
+    if rate || cost do
+      parts = []
+
+      parts =
+        if rate do
+          pct = Float.round(rate * 100, 1)
+          parts ++ ["#{pct}% success rate on #{task_type} tasks"]
+        else
+          parts
+        end
+
+      parts =
+        if cost do
+          parts ++ ["avg cost $#{Float.round(cost, 4)}"]
+        else
+          parts
+        end
+
+      "Historical data for #{model}: " <> Enum.join(parts, ", ")
+    else
+      nil
     end
   end
 

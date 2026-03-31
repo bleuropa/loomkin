@@ -2,9 +2,14 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
   @moduledoc """
   Phoenix.Channel that handles all daemon-to-cloud communication.
 
-  Joined as "daemon:lobby". On join the daemon sends its register payload
-  to announce workspaces. Subsequent messages handle heartbeats, command
-  responses, events, and workspace updates.
+  Joined as "daemon:<workspace_id>". On join the daemon sends its register
+  payload to announce workspaces. Subsequent messages handle heartbeats,
+  command responses, events, and workspace updates.
+
+  Authorization is enforced in two layers:
+  1. **Join**: the topic workspace_id must match the token's workspace_id
+  2. **Commands**: role-based access control limits what actions each role
+     can perform (observer < collaborator < owner)
   """
 
   use Phoenix.Channel
@@ -18,38 +23,53 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
 
   require Logger
 
+  # Commands grouped by minimum role required
+  @observer_commands ~w(get_status get_history get_agents)
+  @collaborator_commands @observer_commands ++
+                           ~w(send_message approve_tool deny_tool pause_agent resume_agent)
+  @owner_commands @collaborator_commands ++ ~w(kill_team change_model steer_agent cancel)
+
   # --- Join ---
 
   @impl true
-  def join("daemon:lobby", params, socket) do
-    register = Register.from_map(Map.put(params, "type", "register"))
-    user_id = socket.assigns.user_id
-    now = DateTime.utc_now()
+  def join("daemon:" <> workspace_id, params, socket) do
+    if workspace_id == socket.assigns.workspace_id do
+      register = Register.from_map(Map.put(params, "type", "register"))
+      user_id = socket.assigns.user_id
+      role = socket.assigns.role
+      now = DateTime.utc_now()
 
-    for ws <- register.workspaces do
-      Registry.register_workspace(user_id, ws.id, %{
-        channel_pid: self(),
-        machine_name: register.machine_name,
-        status: ws.status,
-        team_id: ws.team_id,
-        agent_count: ws.agent_count,
-        last_heartbeat: now,
-        project_path: ws.project_path,
-        workspace_name: ws.name
-      })
+      # Evict stale entries from previous connections for this user
+      Registry.evict_stale_workspaces(user_id, self())
+
+      for ws <- register.workspaces do
+        Registry.register_workspace(user_id, ws.id, %{
+          channel_pid: self(),
+          machine_name: register.machine_name,
+          status: ws.status,
+          team_id: ws.team_id,
+          agent_count: ws.agent_count,
+          last_heartbeat: now,
+          project_path: ws.project_path,
+          workspace_name: ws.name
+        })
+      end
+
+      socket =
+        socket
+        |> assign(:machine_name, register.machine_name)
+        |> assign(:version, register.version)
+        |> assign(:workspace_ids, Enum.map(register.workspaces, & &1.id))
+        |> assign(:role, role)
+
+      Logger.info(
+        "Daemon joined: user=#{user_id} workspace=#{workspace_id} role=#{role} machine=#{register.machine_name} workspaces=#{length(register.workspaces)}"
+      )
+
+      {:ok, socket}
+    else
+      {:error, %{reason: "workspace_id mismatch"}}
     end
-
-    socket =
-      socket
-      |> assign(:machine_name, register.machine_name)
-      |> assign(:version, register.version)
-      |> assign(:workspace_ids, Enum.map(register.workspaces, & &1.id))
-
-    Logger.info(
-      "Daemon joined: user=#{user_id} machine=#{register.machine_name} workspaces=#{length(register.workspaces)}"
-    )
-
-    {:ok, socket}
   end
 
   # --- Incoming messages ---
@@ -132,6 +152,18 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
     {:noreply, socket}
   end
 
+  def handle_in("command", payload, socket) do
+    action = payload["action"]
+    role = socket.assigns.role
+
+    if authorized?(role, action) do
+      {:reply, {:ok, %{"accepted" => true}}, socket}
+    else
+      {:reply, {:error, %{"reason" => "role '#{role}' is not authorized for action '#{action}'"}},
+       socket}
+    end
+  end
+
   def handle_in(unknown, _payload, socket) do
     Logger.warning("DaemonChannel received unknown message type: #{unknown}")
     {:noreply, socket}
@@ -150,27 +182,30 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
   def send_command(user_id, workspace_id, command, timeout \\ 30_000) do
     case Registry.lookup_workspace(user_id, workspace_id) do
       {:ok, %{channel_pid: pid}} ->
-        {:ok, _} =
-          Elixir.Registry.register(Loomkin.Relay.PendingCommands, command.request_id, self())
+        case Elixir.Registry.register(Loomkin.Relay.PendingCommands, command.request_id, self()) do
+          {:ok, _} ->
+            ref = Process.monitor(pid)
+            send(pid, {:push_command, command})
 
-        ref = Process.monitor(pid)
-        send(pid, {:push_command, command})
+            result =
+              receive do
+                {:command_response, %CommandResponse{} = response} ->
+                  {:ok, response}
 
-        result =
-          receive do
-            {:command_response, %CommandResponse{} = response} ->
-              {:ok, response}
+                {:DOWN, ^ref, :process, ^pid, _reason} ->
+                  {:error, :not_connected}
+              after
+                timeout ->
+                  {:error, :timeout}
+              end
 
-            {:DOWN, ^ref, :process, ^pid, _reason} ->
-              {:error, :not_connected}
-          after
-            timeout ->
-              {:error, :timeout}
-          end
+            Process.demonitor(ref, [:flush])
+            Elixir.Registry.unregister(Loomkin.Relay.PendingCommands, command.request_id)
+            result
 
-        Process.demonitor(ref, [:flush])
-        Elixir.Registry.unregister(Loomkin.Relay.PendingCommands, command.request_id)
-        result
+          {:error, {:already_registered, _}} ->
+            {:error, :duplicate_request_id}
+        end
 
       :error ->
         {:error, :not_connected}
@@ -200,6 +235,18 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
     )
 
     :ok
+  end
+
+  # --- Role authorization ---
+
+  @doc false
+  def authorized?(role, action) do
+    case role do
+      "owner" -> action in @owner_commands
+      "collaborator" -> action in @collaborator_commands
+      "observer" -> action in @observer_commands
+      _ -> false
+    end
   end
 
   # --- Helpers ---
