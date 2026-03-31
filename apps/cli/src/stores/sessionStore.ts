@@ -62,7 +62,7 @@ export interface SessionState {
   setContextBudgetPercent: (percent: number | null) => void;
 }
 
-export const sessionStore = createStore<Immutable<SessionState>>((set, get) => ({
+export const sessionStore = createStore<SessionState>((set, get) => ({
   sessionId: null,
   messages: [],
   isStreaming: false,

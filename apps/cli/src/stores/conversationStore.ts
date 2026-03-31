@@ -80,7 +80,7 @@ export interface ConversationStoreState {
   getList: () => ConversationInfo[];
 }
 
-export const conversationStore = createStore<Immutable<ConversationStoreState>>(
+export const conversationStore = createStore<ConversationStoreState>(
   (set, get) => ({
     conversations: new Map(),
     activeConversationId: null,

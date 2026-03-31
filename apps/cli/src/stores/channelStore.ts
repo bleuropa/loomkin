@@ -13,7 +13,7 @@ export interface ChannelStoreState {
   getChannel: () => Channel | null;
 }
 
-export const channelStore = createStore<Immutable<ChannelStoreState>>((set, get) => ({
+export const channelStore = createStore<ChannelStoreState>((set, get) => ({
   channel: null,
   topic: null,
 

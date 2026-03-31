@@ -26,7 +26,7 @@ export interface AgentStoreState {
   getAgentList: () => AgentInfo[];
 }
 
-export const agentStore = createStore<Immutable<AgentStoreState>>((set, get) => ({
+export const agentStore = createStore<AgentStoreState>((set, get) => ({
   agents: new Map(),
 
   upsertAgent: (name, partial) =>

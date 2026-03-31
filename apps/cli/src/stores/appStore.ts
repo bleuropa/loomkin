@@ -123,7 +123,7 @@ export interface AppState {
 
 const config = getConfig();
 
-export const appStore = createStore<Immutable<AppState>>((set, get) => ({
+export const appStore = createStore<AppState>((set, get) => ({
   serverUrl: config.serverUrl,
   token: config.token,
   mode: (config.defaultMode as Mode) || "code",

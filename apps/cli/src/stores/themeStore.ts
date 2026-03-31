@@ -10,7 +10,7 @@ export interface ThemeState {
 
 const initial = getConfig().theme || "default";
 
-export const themeStore = createStore<Immutable<ThemeState>>((set) => ({
+export const themeStore = createStore<ThemeState>((set) => ({
   theme: getTheme(initial),
 
   setTheme: (name) => {

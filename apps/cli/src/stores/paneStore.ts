@@ -17,7 +17,7 @@ export interface PaneState {
   setFocusedTarget: (name: string | null) => void;
 }
 
-export const paneStore = createStore<Immutable<PaneState>>((set) => ({
+export const paneStore = createStore<PaneState>((set) => ({
   splitMode: false,
   focusedPane: "left",
   selectedAgent: null,
