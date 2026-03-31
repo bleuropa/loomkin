@@ -34,6 +34,11 @@ defmodule Loomkin.Kin do
 
   def get_kin(id), do: Repo.get(KinAgent, id)
 
+  @doc "Fetch an enabled kin by exact name match. Returns nil if not found or disabled."
+  def get_kin_by_name(name) when is_binary(name) do
+    Repo.get_by(KinAgent, name: name, enabled: true)
+  end
+
   def create_kin(attrs) do
     %KinAgent{}
     |> KinAgent.changeset(attrs)

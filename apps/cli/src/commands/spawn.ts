@@ -1,9 +1,7 @@
 import pc from "picocolors";
 import { register, type CommandContext } from "./registry.js";
-import { useSessionStore } from "../stores/sessionStore.js";
 import { useAgentStore } from "../stores/agentStore.js";
-import { joinChannel } from "../lib/socket.js";
-import type { Channel } from "phoenix";
+import { getSessionChannel } from "./channelUtil.js";
 
 const BUILT_IN_ROLES = [
   "researcher",
@@ -13,12 +11,6 @@ const BUILT_IN_ROLES = [
   "lead",
   "concierge",
 ];
-
-function getSessionChannel(): Channel | null {
-  const sessionId = useSessionStore.getState().sessionId;
-  if (!sessionId) return null;
-  return joinChannel(`session:${sessionId}`);
-}
 
 register({
   name: "spawn",

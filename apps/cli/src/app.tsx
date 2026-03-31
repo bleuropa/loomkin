@@ -45,6 +45,9 @@ import "./commands/keybinds.js";
 import "./commands/focus.js";
 import "./commands/provider.js";
 import "./commands/dashboard.js";
+import "./commands/conversations.js";
+import "./commands/kin.js";
+import "./commands/kindred.js";
 
 let messageCounter = 0;
 

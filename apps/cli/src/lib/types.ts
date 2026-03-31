@@ -231,3 +231,66 @@ export interface OAuthStatusResponse {
   connected: boolean;
   flow_active: boolean;
 }
+
+// --- Conversation types ---
+
+export interface ConversationTurn {
+  conversation_id: string;
+  speaker: string;
+  content: string;
+  round: number;
+  type: "speech" | "reaction" | "yield";
+  reaction_type?: string;
+  reason?: string;
+  timestamp: string;
+}
+
+export interface ConversationInfo {
+  conversation_id: string;
+  topic: string;
+  participants: string[];
+  strategy?: string;
+  team_id: string;
+  current_round: number;
+  status: "active" | "summarizing" | "completed" | "terminated";
+  turns: ConversationTurn[];
+  summary?: ConversationSummary;
+  started_at: string;
+  ended_at?: string;
+}
+
+export interface ConversationSummary {
+  topic?: string;
+  rounds?: number;
+  participants?: string[];
+  key_points?: string[];
+  consensus?: string[];
+  disagreements?: string[];
+  open_questions?: string[];
+  recommended_actions?: string[];
+}
+
+// --- Kin types ---
+
+export interface KinAgent {
+  id: string;
+  name: string;
+  role: string;
+  display_name: string | null;
+  potency: number;
+  auto_spawn: boolean;
+  spawn_context: string | null;
+  model_override: string | null;
+  system_prompt_extra: string | null;
+  budget_limit: number | null;
+  tags: string[];
+  enabled: boolean;
+}
+
+export interface KindredBundle {
+  id: string;
+  name: string;
+  version: number;
+  status: string;
+  item_count: number;
+}

@@ -28,10 +28,11 @@ defmodule LoomkinWeb.SessionChannel do
         # creates a DB record without starting the GenServer.
         ensure_session_started(session)
 
-        # Subscribe to session, team, and agent signals so we can forward them
+        # Subscribe to session, team, agent, and collaboration signals so we can forward them
         Session.subscribe(session_id)
         Loomkin.Signals.subscribe("team.**")
         Loomkin.Signals.subscribe("agent.**")
+        Loomkin.Signals.subscribe("collaboration.**")
 
         {:ok, %{model: session.model},
          socket
@@ -87,44 +88,35 @@ defmodule LoomkinWeb.SessionChannel do
     end
   end
 
+  @valid_roles ~w(concierge lead coder researcher reviewer tester weaver)a
+
   def handle_in("spawn_agent", %{"role" => role} = params, socket) do
-    session_id = socket.assigns.session_id
-    session = Persistence.get_session(session_id)
-    name = params["name"] || role
-    model = params["model"]
-    project_path = session && session.project_path
+    case parse_role(role) do
+      {:ok, role_atom} ->
+        session_id = socket.assigns.session_id
+        session = Persistence.get_session(session_id)
+        name = params["name"] || role
+        model = params["model"]
+        project_path = session && session.project_path
 
-    # Ensure team exists — create one if the session doesn't have one
-    team_id =
-      case session && session.team_id do
-        nil ->
-          {:ok, tid} =
-            Loomkin.Teams.Manager.create_team(
-              name: "cli-team-#{session_id |> String.slice(0..7)}",
-              project_path: project_path
-            )
+        {:ok, team_id} = ensure_team_id(session, session_id, project_path)
 
-          Persistence.update_session(session, %{team_id: tid})
-          tid
+        opts =
+          [project_path: project_path, session_id: session_id] ++
+            if(model, do: [model: model], else: [])
 
-        tid ->
-          tid
-      end
+        case Loomkin.Teams.Manager.spawn_agent(team_id, name, role_atom, opts) do
+          {:ok, _pid} ->
+            notify_concierge_of_spawn(team_id, name, role)
+            {:reply, {:ok, %{name: name, role: role, team_id: team_id}}, socket}
 
-    if team_id do
-      opts =
-        [project_path: project_path, session_id: session_id] ++
-          if(model, do: [model: model], else: [])
+          {:error, reason} ->
+            {:reply, {:error, %{reason: inspect(reason)}}, socket}
+        end
 
-      case Loomkin.Teams.Manager.spawn_agent(team_id, name, String.to_atom(role), opts) do
-        {:ok, _pid} ->
-          {:reply, {:ok, %{name: name, role: role, team_id: team_id}}, socket}
-
-        {:error, reason} ->
-          {:reply, {:error, %{reason: inspect(reason)}}, socket}
-      end
-    else
-      {:reply, {:error, %{reason: "failed to create team"}}, socket}
+      {:error, :invalid_role} ->
+        valid = @valid_roles |> Enum.map(&to_string/1) |> Enum.join(", ")
+        {:reply, {:error, %{reason: "invalid role: #{role}. Valid roles: #{valid}"}}, socket}
     end
   end
 
@@ -134,6 +126,101 @@ defmodule LoomkinWeb.SessionChannel do
     case Session.update_model(session_id, model) do
       :ok -> {:reply, :ok, socket}
       {:error, reason} -> {:reply, {:error, %{reason: inspect(reason)}}, socket}
+    end
+  end
+
+  def handle_in("list_kindreds", _params, socket) do
+    session = Persistence.get_session(socket.assigns.session_id)
+
+    case fetch_session_user(session) do
+      nil ->
+        {:reply, {:ok, %{kindreds: []}}, socket}
+
+      user ->
+        kindreds =
+          Loomkin.Kindred.list_user_kindreds(user)
+          |> Enum.map(fn k ->
+            item_count = length(Loomkin.Kindred.list_items(k))
+
+            %{
+              id: k.id,
+              name: k.name,
+              version: k.version,
+              status: to_string(k.status),
+              item_count: item_count
+            }
+          end)
+
+        active = Loomkin.Kindred.active_kindred_for_user(user)
+
+        {:reply,
+         {:ok,
+          %{
+            kindreds: kindreds,
+            active_id: active && active.id
+          }}, socket}
+    end
+  end
+
+  def handle_in("list_kin", _params, socket) do
+    kin_agents =
+      Loomkin.Kin.list_kin()
+      |> Enum.map(fn kin ->
+        %{
+          id: kin.id,
+          name: kin.name,
+          role: to_string(kin.role),
+          display_name: kin.display_name,
+          potency: kin.potency,
+          auto_spawn: kin.auto_spawn,
+          spawn_context: kin.spawn_context,
+          model_override: kin.model_override,
+          budget_limit: kin.budget_limit,
+          tags: kin.tags || [],
+          enabled: kin.enabled
+        }
+      end)
+
+    {:reply, {:ok, %{kin: kin_agents}}, socket}
+  end
+
+  def handle_in("spawn_kin", %{"name" => kin_name}, socket) do
+    session_id = socket.assigns.session_id
+    session = Persistence.get_session(session_id)
+
+    case Loomkin.Kin.get_kin_by_name(kin_name) do
+      nil ->
+        {:reply, {:error, %{reason: "kin not found: #{kin_name}"}}, socket}
+
+      kin ->
+        project_path = session && session.project_path
+        {:ok, team_id} = ensure_team_id(session, session_id, project_path)
+
+        opts =
+          [project_path: project_path, session_id: session_id] ++
+            if(kin.model_override, do: [model: kin.model_override], else: []) ++
+            if(kin.system_prompt_extra,
+              do: [system_prompt_extra: kin.system_prompt_extra],
+              else: []
+            ) ++
+            if(kin.budget_limit, do: [budget_limit: kin.budget_limit], else: [])
+
+        case Loomkin.Teams.Manager.spawn_agent(team_id, kin.name, kin.role, opts) do
+          {:ok, _pid} ->
+            notify_concierge_of_spawn(team_id, kin.name, to_string(kin.role))
+
+            {:reply,
+             {:ok,
+              %{
+                name: kin.name,
+                role: to_string(kin.role),
+                team_id: team_id,
+                display_name: kin.display_name
+              }}, socket}
+
+          {:error, reason} ->
+            {:reply, {:error, %{reason: inspect(reason)}}, socket}
+        end
     end
   end
 
@@ -437,6 +524,100 @@ defmodule LoomkinWeb.SessionChannel do
     {:noreply, socket}
   end
 
+  # --- Conversation turn-level signals (filtered by team_id) ---
+
+  def handle_info(%Jido.Signal{type: "collaboration.conversation.turn"} = sig, socket) do
+    if sig.data[:team_id] == socket.assigns[:team_id] do
+      push(socket, "conversation_turn", %{
+        conversation_id: sig.data[:conversation_id],
+        speaker: sig.data[:speaker],
+        content: sig.data[:content],
+        round: sig.data[:round],
+        team_id: sig.data[:team_id]
+      })
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(%Jido.Signal{type: "collaboration.conversation.reaction"} = sig, socket) do
+    if sig.data[:team_id] == socket.assigns[:team_id] do
+      push(socket, "conversation_reaction", %{
+        conversation_id: sig.data[:conversation_id],
+        agent_name: sig.data[:agent_name],
+        reaction_type: to_string(sig.data[:reaction_type] || ""),
+        brief: sig.data[:brief] || "",
+        team_id: sig.data[:team_id]
+      })
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(%Jido.Signal{type: "collaboration.conversation.yield"} = sig, socket) do
+    if sig.data[:team_id] == socket.assigns[:team_id] do
+      push(socket, "conversation_yield", %{
+        conversation_id: sig.data[:conversation_id],
+        agent_name: sig.data[:agent_name],
+        reason: sig.data[:reason] || "",
+        team_id: sig.data[:team_id]
+      })
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(%Jido.Signal{type: "collaboration.conversation.round_started"} = sig, socket) do
+    if sig.data[:team_id] == socket.assigns[:team_id] do
+      push(socket, "conversation_round_started", %{
+        conversation_id: sig.data[:conversation_id],
+        round: sig.data[:round],
+        team_id: sig.data[:team_id]
+      })
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(
+        %Jido.Signal{type: "collaboration.conversation.round_complete"} = sig,
+        socket
+      ) do
+    if sig.data[:team_id] == socket.assigns[:team_id] do
+      push(socket, "conversation_round_complete", %{
+        conversation_id: sig.data[:conversation_id],
+        round: sig.data[:round],
+        team_id: sig.data[:team_id]
+      })
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(%Jido.Signal{type: "collaboration.conversation.summarizing"} = sig, socket) do
+    if sig.data[:team_id] == socket.assigns[:team_id] do
+      push(socket, "conversation_summarizing", %{
+        conversation_id: sig.data[:conversation_id],
+        team_id: sig.data[:team_id]
+      })
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(%Jido.Signal{type: "collaboration.conversation.budget_warning"} = sig, socket) do
+    if sig.data[:team_id] == socket.assigns[:team_id] do
+      push(socket, "conversation_budget_warning", %{
+        conversation_id: sig.data[:conversation_id],
+        tokens_used: sig.data[:tokens_used],
+        max_tokens: sig.data[:max_tokens],
+        team_id: sig.data[:team_id]
+      })
+    end
+
+    {:noreply, socket}
+  end
+
   # Catch-all for unhandled signals
   def handle_info(%Jido.Signal{}, socket), do: {:noreply, socket}
 
@@ -465,6 +646,54 @@ defmodule LoomkinWeb.SessionChannel do
     e ->
       Logger.warning("[SessionChannel] ensure_session_started error: #{inspect(e)}")
       :error
+  end
+
+  defp ensure_team_id(session, session_id, project_path) do
+    case session && session.team_id do
+      nil ->
+        {:ok, tid} =
+          Loomkin.Teams.Manager.create_team(
+            name: "cli-team-#{String.slice(session_id, 0..7)}",
+            project_path: project_path
+          )
+
+        Persistence.update_session(session, %{team_id: tid})
+        {:ok, tid}
+
+      tid ->
+        {:ok, tid}
+    end
+  end
+
+  defp parse_role(role) when is_binary(role) do
+    atom = String.to_existing_atom(role)
+    if atom in @valid_roles, do: {:ok, atom}, else: {:error, :invalid_role}
+  rescue
+    ArgumentError -> {:error, :invalid_role}
+  end
+
+  defp fetch_session_user(nil), do: nil
+
+  defp fetch_session_user(%{user_id: nil}), do: nil
+
+  defp fetch_session_user(%{user_id: user_id}) do
+    Loomkin.Accounts.get_user!(user_id)
+  rescue
+    Ecto.NoResultsError -> nil
+  end
+
+  defp notify_concierge_of_spawn(team_id, agent_name, role) do
+    case Registry.lookup(Loomkin.Teams.AgentRegistry, {team_id, "concierge"}) do
+      [{pid, _}] ->
+        message =
+          "The user manually spawned agent \"#{agent_name}\" (role: #{role}) via the CLI. " <>
+            "This agent is now available in your team. You may delegate #{role}-related tasks to it."
+
+        Loomkin.Teams.Agent.peer_message(pid, "system", message)
+
+      [] ->
+        :ok
+    end
   end
 
   defp serialize_signal_message(msg) when is_map(msg) do

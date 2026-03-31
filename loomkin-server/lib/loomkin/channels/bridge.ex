@@ -10,6 +10,8 @@ defmodule Loomkin.Channels.Bridge do
 
   use GenServer
 
+  require Logger
+
   alias Loomkin.Channels.Severity
 
   # Rate limit: max messages per window
@@ -440,15 +442,24 @@ defmodule Loomkin.Channels.Bridge do
 
     Loomkin.Signals.publish(signal)
 
-    case Registry.lookup(Loomkin.Teams.AgentRegistry, {team_id, "lead"}) do
-      [{pid, _}] ->
+    case find_routing_agent(team_id) do
+      {:ok, pid} ->
         Loomkin.Teams.Agent.send_message(pid, text)
 
-      [] ->
-        :ok
+      :error ->
+        Logger.error("[Bridge] no lead or concierge found for team=#{team_id}, dropping message")
     end
 
     {:noreply, state}
+  end
+
+  defp find_routing_agent(team_id) do
+    Enum.find_value(["lead", "concierge"], :error, fn role ->
+      case Registry.lookup(Loomkin.Teams.AgentRegistry, {team_id, role}) do
+        [{pid, _}] -> {:ok, pid}
+        [] -> nil
+      end
+    end)
   end
 
   defp handle_inbound_callback(question_id, answer, state) do

@@ -2,8 +2,10 @@ import React from "react";
 import { Box, Text } from "ink";
 import { useStore } from "zustand";
 import { MessageList } from "./MessageList.js";
+import { ConversationFeed } from "./ConversationFeed.js";
 import { usePaneStore } from "../stores/paneStore.js";
 import { useSessionStore } from "../stores/sessionStore.js";
+import { useConversationStore } from "../stores/conversationStore.js";
 import type { Message, ToolCall } from "../lib/types.js";
 
 interface Props {
@@ -21,9 +23,17 @@ export function SplitPaneLayout({
   const selectedAgent = useStore(usePaneStore, (s) => s.selectedAgent);
   const rightScrollOffset = useStore(usePaneStore, (s) => s.rightScrollOffset);
   const leftScrollOffset = useStore(useSessionStore, (s) => s.scrollOffset);
+  const activeConversation = useStore(useConversationStore, (s) => s.getActive());
 
   const leftFocused = focusedPane === "left";
   const rightFocused = focusedPane === "right";
+
+  // Show conversation feed in right pane when a conversation is active
+  const showConversation = activeConversation !== null;
+
+  const rightTitle = showConversation
+    ? `Conversation`
+    : selectedAgent ?? "No agent";
 
   return (
     <Box flexDirection="row" flexGrow={1}>
@@ -50,20 +60,24 @@ export function SplitPaneLayout({
         flexDirection="column"
         width="50%"
         borderStyle={rightFocused ? "double" : "single"}
-        borderColor={rightFocused ? "blue" : "gray"}
+        borderColor={rightFocused ? "magenta" : "gray"}
       >
         <Box paddingX={1}>
-          <Text bold color={rightFocused ? "blue" : "gray"}>
-            {selectedAgent ?? "No agent"}
+          <Text bold color={rightFocused ? "magenta" : "gray"}>
+            {rightTitle}
           </Text>
         </Box>
-        <MessageList
-          messages={messages}
-          pendingToolCalls={pendingToolCalls}
-          isStreaming={isStreaming}
-          agentFilter={selectedAgent}
-          scrollOffset={rightScrollOffset}
-        />
+        {showConversation ? (
+          <ConversationFeed conversation={activeConversation} />
+        ) : (
+          <MessageList
+            messages={messages}
+            pendingToolCalls={pendingToolCalls}
+            isStreaming={isStreaming}
+            agentFilter={selectedAgent}
+            scrollOffset={rightScrollOffset}
+          />
+        )}
       </Box>
     </Box>
   );

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
 import type { AskUserQuestion } from "../lib/types.js";
@@ -8,10 +8,24 @@ interface Props {
   onAnswer: (questionId: string, answer: string) => void;
 }
 
+const COLLECTIVE_OPTION = "Let the collective decide";
+const COLLECTIVE_ANSWER = "__collective__";
+
 export function AskUserPrompt({ question, onAnswer }: Props) {
   const [selected, setSelected] = useState(0);
   const [freeText, setFreeText] = useState("");
   const hasOptions = question.options.length > 0;
+
+  // Reset cursor when the question changes
+  useEffect(() => {
+    setSelected(0);
+    setFreeText("");
+  }, [question.question_id]);
+
+  // Append the collective option to the agent-provided choices
+  const allOptions = hasOptions
+    ? [...question.options, COLLECTIVE_OPTION]
+    : [];
 
   useInput(
     (input, key) => {
@@ -20,9 +34,12 @@ export function AskUserPrompt({ question, onAnswer }: Props) {
       if (key.upArrow) {
         setSelected((s) => Math.max(0, s - 1));
       } else if (key.downArrow) {
-        setSelected((s) => Math.min(question.options.length - 1, s + 1));
+        setSelected((s) => Math.min(allOptions.length - 1, s + 1));
       } else if (key.return) {
-        onAnswer(question.question_id, question.options[selected]);
+        const chosen = allOptions[selected];
+        const answer =
+          chosen === COLLECTIVE_OPTION ? COLLECTIVE_ANSWER : chosen;
+        onAnswer(question.question_id, answer);
       }
     },
     { isActive: hasOptions },
@@ -42,14 +59,24 @@ export function AskUserPrompt({ question, onAnswer }: Props) {
 
       {hasOptions ? (
         <Box flexDirection="column" marginTop={1}>
-          {question.options.map((opt, i) => (
-            <Text key={opt}>
-              <Text color={i === selected ? "cyan" : undefined}>
-                {i === selected ? "▸ " : "  "}
-                {opt}
+          {allOptions.map((opt, i) => {
+            const isCollective = opt === COLLECTIVE_OPTION;
+            const isSelected = i === selected;
+            const color = isCollective
+              ? "yellow"
+              : isSelected
+                ? "cyan"
+                : undefined;
+
+            return (
+              <Text key={opt}>
+                <Text color={color}>
+                  {isSelected ? "▸ " : "  "}
+                  {opt}
+                </Text>
               </Text>
-            </Text>
-          ))}
+            );
+          })}
         </Box>
       ) : (
         <Box marginTop={1}>

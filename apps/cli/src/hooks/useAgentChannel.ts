@@ -3,12 +3,11 @@ import { useStore } from "zustand";
 import { useSessionStore } from "../stores/sessionStore.js";
 import { useAppStore } from "../stores/appStore.js";
 import { useAgentStore } from "../stores/agentStore.js";
+import { useConversationStore } from "../stores/conversationStore.js";
 import { joinChannel } from "../lib/socket.js";
-import type { Channel } from "phoenix";
 
-import type { Message } from "../lib/types.js";
+import type { ConversationInfo, Message } from "../lib/types.js";
 
-let _agentChannel: Channel | null = null;
 let notifyCounter = 0;
 
 function notify(content: string) {
@@ -42,12 +41,22 @@ export function useAgentChannel() {
   useEffect(() => {
     if (!sessionId || !isConnected) return;
 
-    // Join the same session channel — events come through it
     const topic = `session:${sessionId}`;
     const channel = joinChannel(topic);
-    _agentChannel = channel;
 
-    channel.on("agent_status", (payload: { agent_name: string; status: string }) => {
+    // Track subscribed event names for cleanup.
+    // Phoenix channel.on() TS types don't expose the ref number,
+    // so we remove all handlers per event name on cleanup.
+    const subscribedEvents: string[] = [];
+
+    function on<T>(event: string, handler: (payload: T) => void) {
+      channel.on(event, handler as (payload: Record<string, unknown>) => void);
+      subscribedEvents.push(event);
+    }
+
+    // --- Agent events ---
+
+    on<{ agent_name: string; status: string }>("agent_status", (payload) => {
       useAgentStore.getState().upsertAgent(payload.agent_name, {
         status: payload.status,
       });
@@ -56,52 +65,36 @@ export function useAgentChannel() {
       }
     });
 
-    channel.on(
-      "agent_role_changed",
-      (payload: { agent_name: string; new_role: string }) => {
-        useAgentStore.getState().upsertAgent(payload.agent_name, {
-          role: payload.new_role,
-        });
-      },
-    );
+    on<{ agent_name: string; new_role: string }>("agent_role_changed", (payload) => {
+      useAgentStore.getState().upsertAgent(payload.agent_name, {
+        role: payload.new_role,
+      });
+    });
 
-    channel.on(
-      "agent_tool_executing",
-      (payload: { agent_name: string; tool_name: string }) => {
-        useAgentStore.getState().upsertAgent(payload.agent_name, {
-          currentTool: payload.tool_name,
-          status: "working",
-        });
-      },
-    );
+    on<{ agent_name: string; tool_name: string }>("agent_tool_executing", (payload) => {
+      useAgentStore.getState().upsertAgent(payload.agent_name, {
+        currentTool: payload.tool_name,
+        status: "working",
+      });
+    });
 
-    channel.on(
-      "agent_tool_complete",
-      (payload: { agent_name: string; tool_name: string }) => {
-        useAgentStore.getState().upsertAgent(payload.agent_name, {
-          currentTool: undefined,
-        });
-      },
-    );
+    on<{ agent_name: string; tool_name: string }>("agent_tool_complete", (payload) => {
+      useAgentStore.getState().upsertAgent(payload.agent_name, {
+        currentTool: undefined,
+      });
+    });
 
-    channel.on(
-      "agent_error",
-      (payload: { agent_name: string; error: string }) => {
-        useAgentStore.getState().upsertAgent(payload.agent_name, {
-          status: "error",
-          lastError: payload.error,
-        });
-        notify(`⚠ ${payload.agent_name}: ${payload.error}`);
-      },
-    );
+    on<{ agent_name: string; error: string }>("agent_error", (payload) => {
+      useAgentStore.getState().upsertAgent(payload.agent_name, {
+        status: "error",
+        lastError: payload.error,
+      });
+      notify(`⚠ ${payload.agent_name}: ${payload.error}`);
+    });
 
-    channel.on(
+    on<{ agent_name: string; tokens_used?: number; cost_usd?: number }>(
       "agent_usage",
-      (payload: {
-        agent_name: string;
-        tokens_used?: number;
-        cost_usd?: number;
-      }) => {
+      (payload) => {
         useAgentStore.getState().upsertAgent(payload.agent_name, {
           tokensUsed: payload.tokens_used,
           costUsd: payload.cost_usd,
@@ -109,69 +102,114 @@ export function useAgentChannel() {
       },
     );
 
-    channel.on(
-      "agent_spawned",
-      (payload: { agent_name: string; role: string; team_id: string }) => {
-        useAgentStore.getState().upsertAgent(payload.agent_name, {
-          role: payload.role,
-          teamId: payload.team_id,
-          status: "idle",
-        });
-        notify(`🤖 Agent ${payload.agent_name} (${payload.role}) joined the team`);
-      },
-    );
+    on<{ agent_name: string; role: string; team_id: string }>("agent_spawned", (payload) => {
+      useAgentStore.getState().upsertAgent(payload.agent_name, {
+        role: payload.role,
+        teamId: payload.team_id,
+        status: "idle",
+      });
+      notify(`🤖 Agent ${payload.agent_name} (${payload.role}) joined the team`);
+    });
 
     // --- Collaboration events ---
 
-    channel.on(
-      "peer_message",
-      (payload: { from: string; to: string; content: string }) => {
-        notify(`💬 ${payload.from} → ${payload.to}: ${payload.content}`);
-      },
-    );
+    on<{ from: string; to: string; content: string }>("peer_message", (payload) => {
+      notify(`💬 ${payload.from} → ${payload.to}: ${payload.content}`);
+    });
 
-    channel.on(
+    on<{ conversation_id: string; topic: string; participants: string[]; strategy?: string; team_id: string }>(
       "conversation_started",
-      (payload: { topic: string; participants: string[] }) => {
+      (payload) => {
+        useConversationStore.getState().startConversation(payload);
         const who = payload.participants.join(", ");
         notify(`🗣 Conversation started: ${payload.topic} (${who})`);
       },
     );
 
-    channel.on(
+    on<{ conversation_id: string; speaker: string; content: string; round: number; team_id: string }>(
+      "conversation_turn",
+      (payload) => {
+        useConversationStore.getState().addTurn({
+          conversation_id: payload.conversation_id,
+          speaker: payload.speaker,
+          content: payload.content,
+          round: payload.round,
+          type: "speech",
+          timestamp: new Date().toISOString(),
+        });
+      },
+    );
+
+    on<{ conversation_id: string; agent_name: string; reaction_type: string; brief: string; team_id: string }>(
+      "conversation_reaction",
+      (payload) => {
+        useConversationStore.getState().addReaction(payload);
+      },
+    );
+
+    on<{ conversation_id: string; agent_name: string; reason?: string; team_id: string }>(
+      "conversation_yield",
+      (payload) => {
+        useConversationStore.getState().addYield(payload);
+      },
+    );
+
+    on<{ conversation_id: string; round: number; team_id: string }>(
+      "conversation_round_started",
+      (payload) => {
+        useConversationStore.getState().advanceRound(payload.conversation_id, payload.round);
+      },
+    );
+
+    on<{ conversation_id: string; round: number; team_id: string }>(
+      "conversation_round_complete",
+      () => {
+        // Informational — next round_started will advance
+      },
+    );
+
+    on<{ conversation_id: string; team_id: string }>("conversation_summarizing", (payload) => {
+      useConversationStore.getState().setSummarizing(payload.conversation_id);
+      notify(`📝 Conversation summarizing...`);
+    });
+
+    on<{ conversation_id?: string; topic: string; outcome: string; summary?: unknown; team_id: string }>(
       "conversation_ended",
-      (payload: { topic: string; outcome: string }) => {
-        notify(`🗣 Conversation ended: ${payload.topic} → ${payload.outcome ?? "no outcome"}`);
+      (payload) => {
+        if (payload.conversation_id) {
+          useConversationStore.getState().endConversation({
+            conversation_id: payload.conversation_id,
+            outcome: payload.outcome,
+            summary: payload.summary as ConversationInfo["summary"],
+          });
+        }
+        notify(`🗣 Conversation ended: ${payload.topic} → ${payload.outcome ?? "complete"}`);
       },
     );
 
-    channel.on(
-      "debate_response",
-      (payload: { from: string; position: string; reasoning: string }) => {
-        notify(`⚔ ${payload.from} argues: ${payload.position}`);
+    on<{ conversation_id: string; tokens_used: number; max_tokens: number; team_id: string }>(
+      "conversation_budget_warning",
+      (payload) => {
+        notify(`⚠ Conversation approaching token limit (${payload.tokens_used}/${payload.max_tokens})`);
       },
     );
 
-    channel.on(
-      "vote_response",
-      (payload: { from: string; vote: string; reason: string }) => {
-        notify(`🗳 ${payload.from} votes: ${payload.vote}${payload.reason ? ` — ${payload.reason}` : ""}`);
-      },
-    );
+    on<{ from: string; position: string; reasoning: string }>("debate_response", (payload) => {
+      notify(`⚔ ${payload.from} argues: ${payload.position}`);
+    });
 
-    channel.on("team_dissolved", () => {
+    on<{ from: string; vote: string; reason: string }>("vote_response", (payload) => {
+      notify(`🗳 ${payload.from} votes: ${payload.vote}${payload.reason ? ` — ${payload.reason}` : ""}`);
+    });
+
+    on<Record<string, never>>("team_dissolved", () => {
       useAgentStore.getState().clearAgents();
       notify("Team dissolved");
     });
 
-    channel.on(
+    on<{ type: string; agent_name?: string; task?: string; status?: string }>(
       "team_task_update",
-      (payload: {
-        type: string;
-        agent_name?: string;
-        task?: string;
-        status?: string;
-      }) => {
+      (payload) => {
         if (payload.agent_name && payload.task) {
           useAgentStore.getState().upsertAgent(payload.agent_name, {
             currentTask: payload.task,
@@ -181,8 +219,11 @@ export function useAgentChannel() {
     );
 
     return () => {
-      _agentChannel = null;
-      // Don't leaveChannel here — useSessionChannel owns the channel lifecycle
+      // Remove all listeners to prevent ghost handlers on reconnect.
+      // We remove all handlers per event since Phoenix TS types don't expose refs.
+      for (const event of new Set(subscribedEvents)) {
+        channel.off(event);
+      }
     };
   }, [sessionId, isConnected]);
 
