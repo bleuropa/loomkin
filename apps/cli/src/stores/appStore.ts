@@ -63,6 +63,11 @@ export interface AppState {
   showModelPickerOnConnect: boolean;
   setShowModelPickerOnConnect: (show: boolean) => void;
 
+  // Early stdin buffer: keystrokes captured before Ink renders
+  earlyInput: string;
+  setEarlyInput: (input: string) => void;
+  consumeEarlyInput: () => string;
+
   setRetryState: (state: RetryState) => void;
   clearRetryState: () => void;
   setConnectionState: (state: ConnectionState) => void;
@@ -97,7 +102,7 @@ export interface AppState {
 
 const config = getConfig();
 
-export const appStore = createStore<AppState>((set) => ({
+export const appStore = createStore<AppState>((set, get) => ({
   serverUrl: config.serverUrl,
   token: config.token,
   mode: (config.defaultMode as Mode) || "code",
@@ -133,6 +138,14 @@ export const appStore = createStore<AppState>((set) => ({
 
   showModelPickerOnConnect: false,
   setShowModelPickerOnConnect: (show) => set({ showModelPickerOnConnect: show }),
+
+  earlyInput: "",
+  setEarlyInput: (earlyInput) => set({ earlyInput }),
+  consumeEarlyInput: () => {
+    const { earlyInput } = appStore.getState();
+    if (earlyInput) set({ earlyInput: "" });
+    return earlyInput;
+  },
 
   setRetryState: (retryState) => set({ retryState }),
   clearRetryState: () => set({ retryState: null }),

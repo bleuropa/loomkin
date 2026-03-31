@@ -3,6 +3,7 @@ import React from "react";
 import { render } from "ink";
 import meow from "meow";
 import pc from "picocolors";
+import { appendFileSync, openSync, readFileSync } from "fs";
 import { App } from "./app.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import {
@@ -41,16 +42,26 @@ const cli = meow(
     --session                       Resume a specific session by ID
     --new, -n                       Force a new session (ignore last session)
     --resume, -r                    Resume the most recent session (explicit)
+    --continue                      Resume the most recent session (shorthand)
     --print, -p                     Non-interactive: send prompt, print response, exit
-    --output-format                 Output format for --print: text or json (default: text)
+    --output-format                 Output format for --print: text, json, or stream-json (default: text)
+    --prompt-file                   Read initial prompt from file instead of argument
     --cwd, -c                       Override working directory
     --verbose, -v                   Verbose logging (socket events, API calls)
     --debug                         Show full error stack traces and state changes
+    --quiet, -q                     Suppress spinners and status bar output
+    --no-color                      Suppress ANSI color output (also respects NO_COLOR env var)
+    --log-file                      Redirect debug/verbose output to file instead of stderr
+    --api-key                       Override stored API key for this invocation
     --system-prompt                 Prepend a custom system prompt to the session
     --dangerously-skip-permissions  Auto-approve all tool calls (no prompts)
     --allowed-tools                 Comma-separated allowlist of tool names
     --disallowed-tools              Comma-separated denylist of tool names
     --max-turns                     Limit agent turns before stopping
+    --timeout                       Max execution time in ms for --print mode
+    --tool-timeout                  Per-tool execution timeout in ms
+    --dry-run                       Parse and validate without executing
+    --cost-limit                    Maximum spend in USD; stop if exceeded
 
   Examples
     $ loomkin
@@ -58,8 +69,12 @@ const cli = meow(
     $ loomkin --session abc123
     $ loomkin -p "what is 2+2"
     $ loomkin -p "list files" --output-format json
+    $ loomkin -p "summarize" --output-format stream-json
     $ loomkin --cwd /path/to/project
     $ loomkin --dangerously-skip-permissions -p "refactor auth"
+    $ loomkin --no-color -p "generate report" | tee report.txt
+    $ loomkin -p "deploy" --timeout 30000 --cost-limit 0.50
+    $ loomkin --prompt-file ./prompt.txt -p -
 `,
   {
     importMeta: import.meta,
@@ -84,6 +99,17 @@ const cli = meow(
       systemPrompt: { type: "string" },
       resume: { type: "boolean", shortFlag: "r", default: false },
       debug: { type: "boolean", default: false },
+      // Tier 4 — CI/CD & Automation
+      noColor: { type: "boolean", default: false },
+      quiet: { type: "boolean", shortFlag: "q", default: false },
+      timeout: { type: "number" },
+      logFile: { type: "string" },
+      apiKey: { type: "string" },
+      promptFile: { type: "string" },
+      continue: { type: "boolean", default: false },
+      toolTimeout: { type: "number" },
+      dryRun: { type: "boolean", default: false },
+      costLimit: { type: "number" },
     },
   },
 );
@@ -164,7 +190,7 @@ async function resolveSessionId(): Promise<string | null> {
     return createNewSession();
   }
 
-  if (cli.flags.resume || lastSession) {
+  if (cli.flags.resume || cli.flags.continue || lastSession) {
     const target = lastSession;
     if (target) {
       const resumed = await resumeSession(target);
@@ -209,6 +235,38 @@ async function main() {
     store.setMaxTurns(cli.flags.maxTurns);
   }
 
+  // Apply automation/CI flags to store
+  if (cli.flags.noColor || process.env.NO_COLOR) {
+    // picocolors already reads NO_COLOR env; set env var so all instances respect it
+    process.env.NO_COLOR = "1";
+    store.setNoColor(true);
+  }
+  if (cli.flags.quiet) store.setQuiet(true);
+  if (cli.flags.timeout != null) store.setTimeout(cli.flags.timeout);
+  if (cli.flags.toolTimeout != null) store.setToolTimeout(cli.flags.toolTimeout);
+  if (cli.flags.dryRun) store.setDryRun(true);
+  if (cli.flags.costLimit != null) store.setCostLimit(cli.flags.costLimit);
+  if (cli.flags.logFile) {
+    store.setLogFile(cli.flags.logFile);
+    // Open (create/truncate) the log file synchronously so we can append to it
+    // via a fast synchronous write — avoids async flush complexity in console.error.
+    openSync(cli.flags.logFile, "w"); // create/truncate
+    console.error = (...args: unknown[]) => {
+      const line = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+      appendFileSync(cli.flags.logFile as string, line + "\n");
+    };
+  }
+  if (cli.flags.promptFile) {
+    store.setPromptFile(cli.flags.promptFile);
+  }
+  if (cli.flags.continue) {
+    store.setContinueSession(true);
+  }
+  if (cli.flags.apiKey) {
+    // Override the stored token for this invocation only (not persisted)
+    store.setToken(cli.flags.apiKey);
+  }
+
   // Auto-detect server URL — fall back to localhost if primary is unreachable
   await detectServerUrl();
 
@@ -227,8 +285,16 @@ async function main() {
   if (cli.flags.print != null) {
     let prompt = cli.flags.print;
 
-    // Read from stdin if "-" is passed
-    if (prompt === "-") {
+    // --prompt-file: read prompt from file (overrides argument)
+    if (cli.flags.promptFile) {
+      try {
+        prompt = readFileSync(cli.flags.promptFile, "utf-8").trim();
+      } catch (err) {
+        console.error(`Error: could not read --prompt-file "${cli.flags.promptFile}": ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    } else if (prompt === "-") {
+      // Read from stdin if "-" is passed
       const chunks: Buffer[] = [];
       for await (const chunk of process.stdin) {
         chunks.push(chunk as Buffer);
@@ -241,6 +307,21 @@ async function main() {
       process.exit(1);
     }
 
+    // --dry-run: parse and validate without executing
+    if (cli.flags.dryRun) {
+      process.stdout.write(JSON.stringify({ dry_run: true, prompt, flags: cli.flags }) + "\n");
+      process.exit(0);
+    }
+
+    // --timeout: kill if print mode hangs
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    if (cli.flags.timeout != null) {
+      timeoutHandle = setTimeout(() => {
+        console.error(`Error: timed out after ${cli.flags.timeout}ms`);
+        process.exit(1);
+      }, cli.flags.timeout);
+    }
+
     try {
       const sessionId = await resolveSessionId();
 
@@ -251,7 +332,7 @@ async function main() {
 
       await runPrintMode({
         prompt,
-        outputFormat: cli.flags.outputFormat as "text" | "json",
+        outputFormat: cli.flags.outputFormat as "text" | "json" | "stream-json",
         sessionId: sessionId ?? undefined,
       });
     } catch (err) {
@@ -263,6 +344,8 @@ async function main() {
         );
       }
       process.exit(1);
+    } finally {
+      if (timeoutHandle != null) clearTimeout(timeoutHandle);
     }
     process.exit(0);
   }
