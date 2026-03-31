@@ -32,6 +32,7 @@ export function StatusBar() {
   const focusedTarget = useStore(usePaneStore, (s) => s.focusedTarget);
   const keybindMode = useStore(useAppStore, (s) => s.keybindMode);
   const vimMode = useStore(useAppStore, (s) => s.vimMode);
+  const gitBranch = useStore(useAppStore, (s) => s.gitBranch);
 
   const isConnected = connectionState === "connected";
   const isReconnecting =
@@ -85,6 +86,11 @@ export function StatusBar() {
         {sessionId && (
           <Text dimColor>
             session:<Text bold>{sessionId.slice(0, 8)}</Text>
+          </Text>
+        )}
+        {gitBranch && (
+          <Text dimColor>
+            git:<Text bold>{gitBranch}</Text>
           </Text>
         )}
         {estimatedCostUsd > 0 && (

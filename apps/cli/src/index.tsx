@@ -27,6 +27,7 @@ import { getApiBaseUrl } from "./lib/urls.js";
 import { DEV_FALLBACK_URL } from "./lib/constants.js";
 import { isProviderConfigured } from "./lib/modelUtils.js";
 import { runPrintMode } from "./lib/print.js";
+import { getGitContext, getGitBranch } from "./lib/git.js";
 
 const cli = meow(
   `
@@ -381,9 +382,17 @@ async function main() {
     try {
       const sessionId = await resolveSessionId();
 
-      // Send system prompt first if provided
-      if (cli.flags.systemPrompt && sessionId) {
-        await sendMessageRest(sessionId, cli.flags.systemPrompt);
+      // Send system prompt (with git context) if available
+      const printCwd = process.cwd();
+      const printGitContext = getGitContext(printCwd);
+      const printGitBranch = getGitBranch(printCwd);
+      if (printGitBranch) useAppStore.getState().setGitBranch(printGitBranch);
+      const printSystemParts: string[] = [];
+      if (printGitContext) printSystemParts.push(printGitContext);
+      if (cli.flags.systemPrompt) printSystemParts.push(cli.flags.systemPrompt);
+      const printCompositePrompt = printSystemParts.join("\n\n");
+      if (printCompositePrompt && sessionId) {
+        await sendMessageRest(sessionId, printCompositePrompt);
       }
 
       await runPrintMode({
@@ -410,6 +419,14 @@ async function main() {
   // typed during session setup are not lost.
   const stopEarlyInput = seedEarlyInput();
 
+  // Gather git context (synchronous, 500ms budget) before session creation
+  const cwd = process.cwd();
+  const gitContext = getGitContext(cwd);
+  const gitBranch = getGitBranch(cwd);
+  if (gitBranch) {
+    useAppStore.getState().setGitBranch(gitBranch);
+  }
+
   // Interactive mode — create or resume session
   try {
     await resolveSessionId();
@@ -419,10 +436,14 @@ async function main() {
       useAppStore.getState().setShowModelPickerOnConnect(true);
     }
 
-    // Send system prompt if provided
+    // Build composite system prompt: git context first, then user-supplied
     const sessionId = useSessionStore.getState().sessionId;
-    if (cli.flags.systemPrompt && sessionId) {
-      await sendMessageRest(sessionId, cli.flags.systemPrompt);
+    const systemParts: string[] = [];
+    if (gitContext) systemParts.push(gitContext);
+    if (cli.flags.systemPrompt) systemParts.push(cli.flags.systemPrompt);
+    const compositeSystemPrompt = systemParts.join("\n\n");
+    if (compositeSystemPrompt && sessionId) {
+      await sendMessageRest(sessionId, compositeSystemPrompt);
     }
   } catch (err) {
     // Don't hard-exit — render the app with an error banner

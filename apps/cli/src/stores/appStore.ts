@@ -59,6 +59,9 @@ export interface AppState {
   keybindMode: KeybindMode;
   vimMode: VimMode;
 
+  // Git context
+  gitBranch: string | null;
+
   // Show model picker once after first connect (set on startup)
   showModelPickerOnConnect: boolean;
   setShowModelPickerOnConnect: (show: boolean) => void;
@@ -98,6 +101,7 @@ export interface AppState {
   setVimMode: (mode: VimMode) => void;
   setModelProviderStatus: (status: "idle" | "loading" | "loaded" | "error") => void;
   setConfiguredProviderIds: (ids: Set<string>) => void;
+  setGitBranch: (branch: string | null) => void;
 }
 
 const config = getConfig();
@@ -135,6 +139,8 @@ export const appStore = createStore<AppState>((set, get) => ({
 
   keybindMode: (config.keybindMode as KeybindMode) || "default",
   vimMode: "normal" as VimMode,
+
+  gitBranch: null,
 
   showModelPickerOnConnect: false,
   setShowModelPickerOnConnect: (show) => set({ showModelPickerOnConnect: show }),
@@ -201,6 +207,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   setVimMode: (vimMode) => set({ vimMode }),
   setModelProviderStatus: (modelProviderStatus) => set({ modelProviderStatus }),
   setConfiguredProviderIds: (configuredProviderIds) => set({ configuredProviderIds }),
+  setGitBranch: (gitBranch) => set({ gitBranch }),
 }));
 
 export const useAppStore = appStore;
