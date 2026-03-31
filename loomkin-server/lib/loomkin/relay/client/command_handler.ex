@@ -115,6 +115,8 @@ defmodule Loomkin.Relay.Client.CommandHandler do
         :error ->
           CommandResponse.error(cmd.request_id, "agent not found: #{agent_name}")
       end
+    else
+      {:error, reason} -> CommandResponse.error(cmd.request_id, reason)
     end
   end
 
@@ -131,6 +133,8 @@ defmodule Loomkin.Relay.Client.CommandHandler do
         :error ->
           CommandResponse.error(cmd.request_id, "agent not found: #{agent_name}")
       end
+    else
+      {:error, reason} -> CommandResponse.error(cmd.request_id, reason)
     end
   end
 
@@ -146,6 +150,8 @@ defmodule Loomkin.Relay.Client.CommandHandler do
         :error ->
           CommandResponse.error(cmd.request_id, "agent not found: #{agent_name}")
       end
+    else
+      {:error, reason} -> CommandResponse.error(cmd.request_id, reason)
     end
   end
 
@@ -187,7 +193,7 @@ defmodule Loomkin.Relay.Client.CommandHandler do
     agent_name = cmd.payload["agent_name"]
 
     if is_nil(team_id) or is_nil(agent_name) do
-      CommandResponse.error(cmd.request_id, "team_id and agent_name required")
+      {:error, "team_id and agent_name required"}
     else
       {:ok, team_id, agent_name}
     end

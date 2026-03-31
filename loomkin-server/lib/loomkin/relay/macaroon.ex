@@ -9,8 +9,8 @@ defmodule Loomkin.Relay.Macaroon do
 
   ## Caveat format
 
-  First-party caveats are predicate strings in `key = value` or `key: value`
-  format. Supported predicates:
+  First-party caveats are predicate strings in `key = value` format.
+  Supported predicates:
 
     * `user_id = <id>` — scopes to a specific user
     * `workspace_id = <id>` — scopes to a specific workspace
@@ -49,6 +49,12 @@ defmodule Loomkin.Relay.Macaroon do
   @spec mint_daemon_token(integer() | String.t(), String.t(), keyword()) :: String.t()
   def mint_daemon_token(user_id, workspace_id, opts \\ []) do
     role = Keyword.get(opts, :role, "owner")
+
+    unless role in @valid_roles do
+      raise ArgumentError,
+            "invalid role #{inspect(role)}, expected one of #{inspect(@valid_roles)}"
+    end
+
     paths = Keyword.get(opts, :paths, nil)
     ttl = Keyword.get(opts, :ttl, 86_400)
     instance = Keyword.get(opts, :instance, nil)
@@ -102,10 +108,14 @@ defmodule Loomkin.Relay.Macaroon do
   """
   @spec attenuate(t(), [String.t()]) :: t()
   def attenuate(%__MODULE__{} = macaroon, caveats) when is_list(caveats) do
-    Enum.reduce(caveats, macaroon, fn caveat, acc ->
-      new_sig = hmac(acc.signature, caveat)
-      %{acc | caveats: acc.caveats ++ [caveat], signature: new_sig}
-    end)
+    {new_caveats_reversed, new_sig} =
+      Enum.reduce(caveats, {[], macaroon.signature}, fn caveat, {acc_caveats, sig} ->
+        {[caveat | acc_caveats], hmac(sig, caveat)}
+      end)
+
+    # Reverse to restore forward order — HMAC chain was computed left-to-right above
+    all_caveats = macaroon.caveats ++ Enum.reverse(new_caveats_reversed)
+    %{macaroon | caveats: all_caveats, signature: new_sig}
   end
 
   @doc """
@@ -118,7 +128,7 @@ defmodule Loomkin.Relay.Macaroon do
   Returns `{:ok, claims}` on success where `claims` is a map of parsed
   caveat key-value pairs, or `{:error, reason}` on failure.
   """
-  @spec verify(String.t()) :: {:ok, map()} | {:error, atom() | String.t()}
+  @spec verify(String.t()) :: {:ok, map()} | {:error, atom() | tuple()}
   def verify(serialized_token) when is_binary(serialized_token) do
     with {:ok, macaroon} <- deserialize(serialized_token),
          :ok <- verify_signature(macaroon),
@@ -180,24 +190,18 @@ defmodule Loomkin.Relay.Macaroon do
   end
 
   defp verify_caveats(%__MODULE__{caveats: caveats}) do
-    claims =
-      Enum.reduce_while(caveats, {:ok, %{}}, fn caveat, {:ok, acc} ->
-        case parse_caveat(caveat) do
-          {:ok, key, value} ->
-            case verify_single_caveat(key, value) do
-              :ok -> {:cont, {:ok, Map.put(acc, key, value)}}
-              {:error, _} = err -> {:halt, err}
-            end
+    Enum.reduce_while(caveats, {:ok, %{}}, fn caveat, {:ok, acc} ->
+      case parse_caveat(caveat) do
+        {:ok, key, value} ->
+          case verify_single_caveat(key, value) do
+            :ok -> {:cont, {:ok, Map.put(acc, key, value)}}
+            {:error, _} = err -> {:halt, err}
+          end
 
-          :error ->
-            {:halt, {:error, "invalid caveat format: #{caveat}"}}
-        end
-      end)
-
-    case claims do
-      {:ok, map} -> {:ok, map}
-      {:error, _} = err -> err
-    end
+        :error ->
+          {:halt, {:error, {:invalid_caveat_format, caveat}}}
+      end
+    end)
   end
 
   defp check_required_caveats(claims) do
@@ -238,10 +242,9 @@ defmodule Loomkin.Relay.Macaroon do
   defp verify_single_caveat("role", _), do: {:error, :invalid_role}
 
   defp verify_single_caveat("user_id", value) do
-    if String.trim(value) != "" do
-      :ok
-    else
-      {:error, :missing_user_id}
+    case Integer.parse(String.trim(value)) do
+      {id, ""} when id > 0 -> :ok
+      _ -> {:error, :invalid_user_id}
     end
   end
 
@@ -249,12 +252,16 @@ defmodule Loomkin.Relay.Macaroon do
     if String.trim(value) != "" do
       :ok
     else
-      {:error, :missing_workspace_id}
+      {:error, :empty_workspace_id}
     end
   end
 
-  # paths, instance, and any unknown caveats pass through — they are informational
-  defp verify_single_caveat(_key, _value), do: :ok
+  # Advisory / deferred-enforcement caveats: `instance` identifies the issuing relay
+  # and `paths` restricts file access. Both are enforced at the application layer
+  # (e.g. the file-access middleware), not during token verification itself.
+  defp verify_single_caveat(key, _value) when key in ~w(instance paths), do: :ok
+
+  defp verify_single_caveat(key, _value), do: {:error, {:unknown_caveat, key}}
 
   defp hmac(key, data) do
     :crypto.mac(:hmac, :sha256, key, data)
@@ -277,7 +284,7 @@ defmodule Loomkin.Relay.Macaroon do
   end
 
   defp generate_identifier(user_id, workspace_id) do
-    random = :crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)
+    random = :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
     "loomkin-daemon:#{user_id}:#{workspace_id}:#{random}"
   end
 

@@ -29,12 +29,9 @@ defmodule Loomkin.Collaboration do
          :ok <- require_owner(workspace, user),
          :ok <- check_no_duplicate_pending_invite(workspace_id, attrs) do
       %WorkspaceInvite{}
-      |> WorkspaceInvite.changeset(
-        Map.merge(attrs, %{
-          workspace_id: workspace_id,
-          invited_by_id: user.id
-        })
-      )
+      |> WorkspaceInvite.changeset(attrs)
+      |> Ecto.Changeset.put_change(:workspace_id, workspace_id)
+      |> Ecto.Changeset.put_change(:invited_by_id, user.id)
       |> Repo.insert()
     end
   end
@@ -50,8 +47,8 @@ defmodule Loomkin.Collaboration do
     Repo.transaction(fn ->
       with {:ok, invite} <- get_pending_invite(token),
            :ok <- check_not_expired(invite),
-           :ok <- check_no_existing_membership(invite.workspace_id, invite),
            {:ok, user} <- resolve_invite_user_or_error(invite),
+           :ok <- check_no_existing_membership(invite.workspace_id, user),
            {:ok, membership} <- insert_membership_from_invite(invite, user),
            {:ok, _invite} <- mark_invite_accepted(invite) do
         membership
@@ -83,6 +80,7 @@ defmodule Loomkin.Collaboration do
   """
   def revoke_invite(%{user: user}, invite_id) when not is_nil(user) do
     with {:ok, invite} <- get_invite(invite_id),
+         :ok <- require_pending(invite),
          {:ok, workspace} <- get_workspace(invite.workspace_id),
          :ok <- require_owner(workspace, user) do
       invite
@@ -95,26 +93,44 @@ defmodule Loomkin.Collaboration do
 
   @doc """
   List pending invites for a workspace.
+
+  Requires `:manage_members` authorization.
   """
-  def list_pending_invites(workspace_id) do
-    WorkspaceInvite
-    |> where([i], i.workspace_id == ^workspace_id and i.status == :pending)
-    |> order_by([i], asc: i.inserted_at)
-    |> Repo.all()
+  def list_pending_invites(%{user: user}, workspace_id) when not is_nil(user) do
+    with :ok <- authorize(user.id, workspace_id, :manage_members) do
+      invites =
+        WorkspaceInvite
+        |> where([i], i.workspace_id == ^workspace_id and i.status == :pending)
+        |> order_by([i], asc: i.inserted_at)
+        |> Repo.all()
+
+      {:ok, invites}
+    end
   end
+
+  def list_pending_invites(_scope, _workspace_id), do: {:error, :unauthenticated}
 
   # --- Membership Management ---
 
   @doc """
   List all members of a workspace with their user data preloaded.
+
+  Requires `:view` authorization.
   """
-  def list_members(workspace_id) do
-    WorkspaceMembership
-    |> where([m], m.workspace_id == ^workspace_id)
-    |> preload(:user)
-    |> order_by([m], asc: m.inserted_at)
-    |> Repo.all()
+  def list_members(%{user: user}, workspace_id) when not is_nil(user) do
+    with :ok <- authorize(user.id, workspace_id, :view) do
+      members =
+        WorkspaceMembership
+        |> where([m], m.workspace_id == ^workspace_id)
+        |> preload(:user)
+        |> order_by([m], asc: m.inserted_at)
+        |> Repo.all()
+
+      {:ok, members}
+    end
   end
+
+  def list_members(_scope, _workspace_id), do: {:error, :unauthenticated}
 
   @doc """
   Get a specific membership for a workspace+user pair.
@@ -153,19 +169,17 @@ defmodule Loomkin.Collaboration do
   """
   def remove_member(%{user: actor}, membership_id) when not is_nil(actor) do
     with {:ok, membership} <- get_membership_by_id(membership_id) do
-      membership = Repo.preload(membership, :workspace)
-
       cond do
         # Owner cannot be removed
         membership.role == :owner ->
           {:error, :cannot_remove_owner}
 
-        # Workspace owner can remove anyone
-        membership.workspace.user_id == actor.id ->
-          Repo.delete(membership)
-
         # Members can leave (remove themselves)
         membership.user_id == actor.id ->
+          Repo.delete(membership)
+
+        # Authorized users (owner role) can remove others
+        authorize(actor.id, membership.workspace_id, :manage_members) == :ok ->
           Repo.delete(membership)
 
         true ->
@@ -192,12 +206,13 @@ defmodule Loomkin.Collaboration do
       Workspace.changeset(%Workspace{}, Map.put(workspace_attrs, :user_id, user_id))
     )
     |> Ecto.Multi.insert(:membership, fn %{workspace: workspace} ->
-      WorkspaceMembership.changeset(%WorkspaceMembership{}, %{
-        workspace_id: workspace.id,
-        user_id: user_id,
+      %WorkspaceMembership{}
+      |> WorkspaceMembership.changeset(%{
         role: :owner,
         accepted_at: DateTime.utc_now() |> DateTime.truncate(:second)
       })
+      |> Ecto.Changeset.put_change(:workspace_id, workspace.id)
+      |> Ecto.Changeset.put_change(:user_id, user_id)
     end)
     |> Repo.transaction()
   end
@@ -212,11 +227,11 @@ defmodule Loomkin.Collaboration do
   def create_owner_membership(workspace_id, user_id) do
     %WorkspaceMembership{}
     |> WorkspaceMembership.changeset(%{
-      workspace_id: workspace_id,
-      user_id: user_id,
       role: :owner,
       accepted_at: DateTime.utc_now() |> DateTime.truncate(:second)
     })
+    |> Ecto.Changeset.put_change(:workspace_id, workspace_id)
+    |> Ecto.Changeset.put_change(:user_id, user_id)
     |> Repo.insert()
   end
 
@@ -315,6 +330,9 @@ defmodule Loomkin.Collaboration do
 
   defp require_owner(_workspace, _user), do: {:error, :unauthorized}
 
+  defp require_pending(%WorkspaceInvite{status: :pending}), do: :ok
+  defp require_pending(%WorkspaceInvite{}), do: {:error, :invite_not_pending}
+
   defp prevent_owner_role_change(%WorkspaceMembership{role: :owner}),
     do: {:error, :cannot_change_owner_role}
 
@@ -347,16 +365,10 @@ defmodule Loomkin.Collaboration do
 
   defp check_no_duplicate_pending_invite(_workspace_id, _attrs), do: {:error, :email_required}
 
-  defp check_no_existing_membership(workspace_id, invite) do
-    user = resolve_invite_user(invite)
-
-    if user do
-      case get_membership(workspace_id, user.id) do
-        nil -> :ok
-        _membership -> {:error, :already_a_member}
-      end
-    else
-      :ok
+  defp check_no_existing_membership(workspace_id, user) do
+    case get_membership(workspace_id, user.id) do
+      nil -> :ok
+      _membership -> {:error, :already_a_member}
     end
   end
 
@@ -374,12 +386,12 @@ defmodule Loomkin.Collaboration do
   defp insert_membership_from_invite(invite, user) do
     %WorkspaceMembership{}
     |> WorkspaceMembership.changeset(%{
-      workspace_id: invite.workspace_id,
-      user_id: user.id,
       role: invite.role,
       invited_by_id: invite.invited_by_id,
       accepted_at: DateTime.utc_now() |> DateTime.truncate(:second)
     })
+    |> Ecto.Changeset.put_change(:workspace_id, invite.workspace_id)
+    |> Ecto.Changeset.put_change(:user_id, user.id)
     |> Repo.insert()
   end
 

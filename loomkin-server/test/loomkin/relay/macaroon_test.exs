@@ -119,6 +119,12 @@ defmodule Loomkin.Relay.MacaroonTest do
       assert diff > 0
       assert diff <= 65
     end
+
+    test "raises ArgumentError for invalid role" do
+      assert_raise ArgumentError, ~r/invalid role/, fn ->
+        Macaroon.mint_daemon_token(1, "ws-1", role: "superadmin")
+      end
+    end
   end
 
   describe "verify/1" do
@@ -235,10 +241,45 @@ defmodule Loomkin.Relay.MacaroonTest do
 
       assert token_a != token_b
     end
+
+    test "rejects unknown caveats" do
+      mac =
+        Macaroon.create("loomkin-local", "test-id", root_key())
+        |> Macaroon.attenuate([
+          "user_id = 1",
+          "workspace_id = ws-1",
+          "role = owner",
+          "expires = #{future_expiry()}",
+          "unknown_thing = bad"
+        ])
+
+      token = Macaroon.serialize(mac)
+
+      assert {:error, {:unknown_caveat, "unknown_thing"}} = Macaroon.verify(token)
+    end
+
+    test "rejects non-integer user_id" do
+      mac =
+        Macaroon.create("loomkin-local", "test-id", root_key())
+        |> Macaroon.attenuate([
+          "user_id = abc",
+          "workspace_id = ws-1",
+          "role = owner",
+          "expires = #{future_expiry()}"
+        ])
+
+      token = Macaroon.serialize(mac)
+
+      assert {:error, :invalid_user_id} = Macaroon.verify(token)
+    end
   end
 
   # --- Helpers ---
 
+  # NOTE: This duplicates the production root_key/0 derivation from
+  # Loomkin.Relay.Macaroon. It is intentionally kept in sync so we can
+  # construct macaroons with valid signatures for edge-case verification
+  # tests (e.g. invalid role values that mint_daemon_token now rejects).
   defp root_key do
     base = Application.get_env(:loomkin, LoomkinWeb.Endpoint)[:secret_key_base]
     :crypto.mac(:hmac, :sha256, base, "loomkin:relay:macaroon:root-key-v1")

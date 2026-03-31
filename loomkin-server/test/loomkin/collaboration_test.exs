@@ -8,6 +8,14 @@ defmodule Loomkin.CollaborationTest do
 
   import Loomkin.AccountsFixtures
 
+  defp insert_membership(workspace_id, user_id, attrs \\ %{}) do
+    %WorkspaceMembership{}
+    |> WorkspaceMembership.changeset(Map.put_new(attrs, :role, :collaborator))
+    |> Ecto.Changeset.put_change(:workspace_id, workspace_id)
+    |> Ecto.Changeset.put_change(:user_id, user_id)
+    |> Repo.insert()
+  end
+
   defp create_workspace(user) do
     {:ok, %{workspace: workspace}} =
       Collaboration.create_workspace_with_owner(
@@ -191,8 +199,8 @@ defmodule Loomkin.CollaborationTest do
       workspace = create_workspace(owner)
       scope = owner_scope(owner)
 
-      # Create membership first
-      {:ok, _membership} = Collaboration.create_owner_membership(workspace.id, invitee.id)
+      # Create collaborator membership first
+      {:ok, _membership} = insert_membership(workspace.id, invitee.id)
 
       {:ok, invite} =
         Collaboration.create_invite(scope, workspace.id, %{
@@ -298,30 +306,23 @@ defmodule Loomkin.CollaborationTest do
       # Decline one
       Collaboration.decline_invite(invite2.token)
 
-      pending = Collaboration.list_pending_invites(workspace.id)
+      assert {:ok, pending} = Collaboration.list_pending_invites(scope, workspace.id)
       assert length(pending) == 1
       assert hd(pending).email == "a@example.com"
     end
   end
 
-  describe "list_members/1" do
+  describe "list_members/2" do
     test "returns all members with preloaded users" do
       owner = user_fixture()
       member = user_fixture()
       workspace = create_workspace(owner)
+      scope = owner_scope(owner)
 
       # Owner membership already created by create_workspace; add a collaborator
-      {:ok, _} =
-        %WorkspaceMembership{}
-        |> WorkspaceMembership.changeset(%{
-          workspace_id: workspace.id,
-          user_id: member.id,
-          role: :collaborator,
-          invited_by_id: owner.id
-        })
-        |> Repo.insert()
+      {:ok, _} = insert_membership(workspace.id, member.id, %{invited_by_id: owner.id})
 
-      members = Collaboration.list_members(workspace.id)
+      assert {:ok, members} = Collaboration.list_members(scope, workspace.id)
       assert length(members) == 2
       assert Enum.all?(members, fn m -> m.user != nil end)
     end
@@ -335,14 +336,7 @@ defmodule Loomkin.CollaborationTest do
       scope = owner_scope(owner)
 
       {:ok, membership} =
-        %WorkspaceMembership{}
-        |> WorkspaceMembership.changeset(%{
-          workspace_id: workspace.id,
-          user_id: member.id,
-          role: :collaborator,
-          invited_by_id: owner.id
-        })
-        |> Repo.insert()
+        insert_membership(workspace.id, member.id, %{invited_by_id: owner.id})
 
       assert {:ok, updated} = Collaboration.update_member_role(scope, membership.id, :observer)
       assert updated.role == :observer
@@ -355,14 +349,7 @@ defmodule Loomkin.CollaborationTest do
       workspace = create_workspace(owner)
       other_scope = owner_scope(other)
 
-      {:ok, membership} =
-        %WorkspaceMembership{}
-        |> WorkspaceMembership.changeset(%{
-          workspace_id: workspace.id,
-          user_id: member.id,
-          role: :collaborator
-        })
-        |> Repo.insert()
+      {:ok, membership} = insert_membership(workspace.id, member.id)
 
       assert {:error, :unauthorized} =
                Collaboration.update_member_role(other_scope, membership.id, :observer)
@@ -387,14 +374,7 @@ defmodule Loomkin.CollaborationTest do
       workspace = create_workspace(owner)
       scope = owner_scope(owner)
 
-      {:ok, membership} =
-        %WorkspaceMembership{}
-        |> WorkspaceMembership.changeset(%{
-          workspace_id: workspace.id,
-          user_id: member.id,
-          role: :collaborator
-        })
-        |> Repo.insert()
+      {:ok, membership} = insert_membership(workspace.id, member.id)
 
       assert {:ok, _deleted} = Collaboration.remove_member(scope, membership.id)
       assert Collaboration.get_membership(workspace.id, member.id) == nil
@@ -406,14 +386,7 @@ defmodule Loomkin.CollaborationTest do
       workspace = create_workspace(owner)
       member_scope = owner_scope(member)
 
-      {:ok, membership} =
-        %WorkspaceMembership{}
-        |> WorkspaceMembership.changeset(%{
-          workspace_id: workspace.id,
-          user_id: member.id,
-          role: :collaborator
-        })
-        |> Repo.insert()
+      {:ok, membership} = insert_membership(workspace.id, member.id)
 
       assert {:ok, _deleted} = Collaboration.remove_member(member_scope, membership.id)
       assert Collaboration.get_membership(workspace.id, member.id) == nil
@@ -437,14 +410,7 @@ defmodule Loomkin.CollaborationTest do
       workspace = create_workspace(owner)
       other_scope = owner_scope(other)
 
-      {:ok, membership} =
-        %WorkspaceMembership{}
-        |> WorkspaceMembership.changeset(%{
-          workspace_id: workspace.id,
-          user_id: member.id,
-          role: :collaborator
-        })
-        |> Repo.insert()
+      {:ok, membership} = insert_membership(workspace.id, member.id)
 
       assert {:error, :unauthorized} = Collaboration.remove_member(other_scope, membership.id)
     end
@@ -473,14 +439,7 @@ defmodule Loomkin.CollaborationTest do
       collab = user_fixture()
       workspace = create_workspace(owner)
 
-      {:ok, _} =
-        %WorkspaceMembership{}
-        |> WorkspaceMembership.changeset(%{
-          workspace_id: workspace.id,
-          user_id: collab.id,
-          role: :collaborator
-        })
-        |> Repo.insert()
+      {:ok, _} = insert_membership(workspace.id, collab.id)
 
       assert :ok == Collaboration.authorize(collab.id, workspace.id, :view)
       assert :ok == Collaboration.authorize(collab.id, workspace.id, :send_message)
@@ -499,14 +458,7 @@ defmodule Loomkin.CollaborationTest do
       observer = user_fixture()
       workspace = create_workspace(owner)
 
-      {:ok, _} =
-        %WorkspaceMembership{}
-        |> WorkspaceMembership.changeset(%{
-          workspace_id: workspace.id,
-          user_id: observer.id,
-          role: :observer
-        })
-        |> Repo.insert()
+      {:ok, _} = insert_membership(workspace.id, observer.id, %{role: :observer})
 
       assert :ok == Collaboration.authorize(observer.id, workspace.id, :view)
 
@@ -557,14 +509,7 @@ defmodule Loomkin.CollaborationTest do
       stranger = user_fixture()
       workspace = create_workspace(owner)
 
-      {:ok, _} =
-        %WorkspaceMembership{}
-        |> WorkspaceMembership.changeset(%{
-          workspace_id: workspace.id,
-          user_id: member.id,
-          role: :collaborator
-        })
-        |> Repo.insert()
+      {:ok, _} = insert_membership(workspace.id, member.id)
 
       assert Collaboration.member?(owner.id, workspace.id)
       assert Collaboration.member?(member.id, workspace.id)

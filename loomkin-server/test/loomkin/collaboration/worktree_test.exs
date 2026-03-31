@@ -67,14 +67,14 @@ defmodule Loomkin.Collaboration.WorktreeTest do
       wt_path = Worktree.worktree_path(@workspace_id, @user_id, path)
       assert String.contains?(wt_path, "collab")
       assert String.contains?(wt_path, "42")
-      assert String.contains?(wt_path, "abcdef12")
+      assert String.contains?(wt_path, "abcdef1234567890abcdef1234567890")
     end
   end
 
   describe "branch_name/2" do
     test "produces deterministic branch name" do
       name = Worktree.branch_name(@workspace_id, @user_id)
-      assert name == "collab/abcdef12/42"
+      assert name == "collab/abcdef1234567890abcdef1234567890/42"
     end
 
     test "different users get different branches" do
@@ -112,6 +112,18 @@ defmodule Loomkin.Collaboration.WorktreeTest do
         )
 
       assert String.trim(output) == expected_branch
+    end
+
+    test "returns error for non-git project path" do
+      non_git_dir =
+        Path.join(System.tmp_dir!(), "loomkin_wt_no_git_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(non_git_dir)
+
+      on_exit(fn -> File.rm_rf!(non_git_dir) end)
+
+      assert {:error, {:worktree_creation_failed, _output}} =
+               Worktree.create_worktree(@workspace_id, @user_id, non_git_dir)
     end
   end
 

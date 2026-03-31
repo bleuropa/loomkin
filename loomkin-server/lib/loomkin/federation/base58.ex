@@ -19,14 +19,17 @@ defmodule Loomkin.Federation.Base58 do
     leading_zeros = count_leading_zeros(data, 0)
 
     # Convert binary to integer and encode
+    int_value = :binary.decode_unsigned(data, :big)
+
     encoded =
-      data
-      |> :binary.decode_unsigned(:big)
-      |> encode_int([])
+      if int_value == 0 do
+        ""
+      else
+        int_value |> encode_int([]) |> to_string()
+      end
 
     # Prepend '1' for each leading zero byte
-    prefix = String.duplicate("1", leading_zeros)
-    prefix <> to_string(encoded)
+    String.duplicate("1", leading_zeros) <> encoded
   end
 
   @doc """

@@ -47,7 +47,7 @@ defmodule Loomkin.Teams.Learning do
     * `:tokens_used` - total tokens consumed (integer)
     * `:duration_ms` - wall-clock duration in milliseconds
     * `:project_path` - project path for context
-    * `:scope_tier` - scope tier string (e.g. "surgical", "scoped", "broad", "transformative")
+    * `:scope_tier` - scope tier string (e.g. "quick", "session", "campaign")
     * `:files_touched` - number of files touched by the task
   """
   @spec record_task_result(map()) :: {:ok, AgentMetric.t()} | {:error, Ecto.Changeset.t()}
@@ -261,33 +261,40 @@ defmodule Loomkin.Teams.Learning do
 
   Returns a short summary (max 500 chars) of historical performance data for
   the given model and task type, or `nil` if no data exists.
+
+  Uses a single DB query filtered by both model AND task type to avoid
+  averaging cost across unrelated models.
   """
   @spec learning_context(String.t(), String.t()) :: String.t() | nil
   def learning_context(model, task_type) do
-    rate = success_rate(model, task_type)
-    cost = avg_cost(task_type)
+    query =
+      from m in AgentMetric,
+        where: m.model == ^model and m.task_type == ^task_type,
+        select: %{
+          total: count(m.id),
+          successes: sum(fragment("CASE WHEN ? THEN 1 ELSE 0 END", m.success)),
+          avg_cost: avg(m.cost_usd)
+        }
 
-    if rate || cost do
-      parts = []
+    case Repo.one(query) do
+      %{total: 0} ->
+        nil
 
-      parts =
-        if rate do
-          pct = Float.round(rate * 100, 1)
-          parts ++ ["#{pct}% success rate on #{task_type} tasks"]
-        else
-          parts
-        end
+      nil ->
+        nil
 
-      parts =
-        if cost do
-          parts ++ ["avg cost $#{Float.round(cost, 4)}"]
-        else
-          parts
-        end
+      %{total: total, successes: successes, avg_cost: avg_cost} ->
+        rate = (successes || 0) / total
+        pct = Float.round(rate * 100, 1)
 
-      "Historical data for #{model}: " <> Enum.join(parts, ", ")
-    else
-      nil
+        parts =
+          [
+            "#{pct}% success rate on #{task_type} tasks",
+            if(avg_cost, do: "avg cost $#{Float.round(avg_cost, 4)}")
+          ]
+          |> Enum.reject(&is_nil/1)
+
+        "Historical data for #{model}: " <> Enum.join(parts, ", ")
     end
   end
 

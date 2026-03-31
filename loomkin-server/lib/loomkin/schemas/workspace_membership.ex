@@ -27,13 +27,12 @@ defmodule Loomkin.Schemas.WorkspaceMembership do
   end
 
   @required_fields ~w(role)a
-  @optional_fields ~w(workspace_id user_id invited_by_id worktree_path accepted_at)a
+  @optional_fields ~w(invited_by_id worktree_path accepted_at)a
 
   def changeset(membership, attrs) do
     membership
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
-    |> validate_inclusion(:role, [:owner, :collaborator, :observer])
     |> unique_constraint([:workspace_id, :user_id])
     |> foreign_key_constraint(:workspace_id)
     |> foreign_key_constraint(:user_id)

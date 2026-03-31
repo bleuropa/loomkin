@@ -461,4 +461,61 @@ defmodule Loomkin.Teams.LearningTest do
       assert metric.files_touched == nil
     end
   end
+
+  # ── consult_model_recommendation integration (via recommend_model) ──
+
+  describe "recommend_model with min_samples: 5 (consult_model_recommendation path)" do
+    test "returns recommendation when 5+ samples exist for a role" do
+      for _ <- 1..6 do
+        insert_metric(%{
+          model: "anthropic:claude-sonnet-4-6",
+          task_type: "developer",
+          success: true,
+          cost_usd: 0.05
+        })
+      end
+
+      assert {model, score} = Learning.recommend_model("developer", min_samples: 5)
+      assert model == "anthropic:claude-sonnet-4-6"
+      assert is_float(score) and score > 0
+    end
+
+    test "returns nil when fewer than 5 samples exist for a role" do
+      for _ <- 1..4 do
+        insert_metric(%{
+          model: "anthropic:claude-sonnet-4-6",
+          task_type: "reviewer",
+          success: true,
+          cost_usd: 0.03
+        })
+      end
+
+      assert Learning.recommend_model("reviewer", min_samples: 5) == nil
+    end
+
+    test "picks best model among multiple candidates with 5+ samples" do
+      # Fast cheap model with high success
+      for _ <- 1..6 do
+        insert_metric(%{
+          model: "fast-model",
+          task_type: "coder",
+          success: true,
+          cost_usd: 0.01
+        })
+      end
+
+      # Expensive model with lower success
+      for _ <- 1..6 do
+        insert_metric(%{
+          model: "expensive-model",
+          task_type: "coder",
+          success: true,
+          cost_usd: 1.00
+        })
+      end
+
+      {model, _score} = Learning.recommend_model("coder", min_samples: 5)
+      assert model == "fast-model"
+    end
+  end
 end

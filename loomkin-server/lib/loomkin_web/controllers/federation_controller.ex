@@ -7,20 +7,21 @@ defmodule LoomkinWeb.FederationController do
 
   use LoomkinWeb, :controller
 
+  require Logger
+
   alias Loomkin.Federation.DidDocument
   alias Loomkin.Federation.Identity
 
   @doc """
   Serve the instance-level DID document at `/.well-known/did.json`.
 
-  Loads (or generates) the instance keypair and builds the DID document
-  using the configured domain.
+  Uses the cached keypair (loaded at startup via `:persistent_term`) and
+  builds the DID document using the configured domain.
   """
   def did_document(conn, _params) do
-    config = Application.get_env(:loomkin, Identity, [])
-    domain = Keyword.get(config, :domain, "localhost")
+    domain = Identity.domain()
 
-    case Identity.get_or_create_keypair() do
+    case Identity.cached_keypair() do
       {:ok, keypair} ->
         doc =
           DidDocument.build(
@@ -33,9 +34,11 @@ defmodule LoomkinWeb.FederationController do
         |> json(doc)
 
       {:error, reason} ->
+        Logger.error("Failed to load identity keypair: #{inspect(reason)}")
+
         conn
         |> put_status(:internal_server_error)
-        |> json(%{error: "Failed to load identity", detail: inspect(reason)})
+        |> json(%{error: "identity unavailable"})
     end
   end
 end

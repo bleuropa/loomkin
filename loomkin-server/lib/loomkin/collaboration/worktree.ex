@@ -26,36 +26,37 @@ defmodule Loomkin.Collaboration.Worktree do
   def create_worktree(workspace_id, user_id, project_path) do
     wt_path = worktree_path(workspace_id, user_id, project_path)
     branch = branch_name(workspace_id, user_id)
+    args = ["worktree", "add", wt_path, "-b", branch]
 
-    if File.exists?(wt_path) do
-      Logger.info(
-        "[Worktree] already exists workspace=#{workspace_id} user=#{user_id} path=#{wt_path}"
-      )
+    case System.cmd("git", args, cd: project_path, stderr_to_stdout: true) do
+      {_output, 0} ->
+        Logger.info(
+          "[Worktree] created workspace=#{workspace_id} user=#{user_id} path=#{wt_path}"
+        )
 
-      {:ok, wt_path}
-    else
-      args = ["worktree", "add", wt_path, "-b", branch]
+        {:ok, wt_path}
 
-      case System.cmd("git", args, cd: project_path, stderr_to_stdout: true) do
-        {_output, 0} ->
-          Logger.info(
-            "[Worktree] created workspace=#{workspace_id} user=#{user_id} path=#{wt_path}"
-          )
+      {output, _code} ->
+        cond do
+          # Worktree already exists at this path — treat as success
+          File.dir?(wt_path) and valid_worktree?(wt_path, project_path) ->
+            Logger.info(
+              "[Worktree] already exists workspace=#{workspace_id} user=#{user_id} path=#{wt_path}"
+            )
 
-          {:ok, wt_path}
+            {:ok, wt_path}
 
-        {output, _code} ->
-          # Branch may already exist — try without -b
-          if String.contains?(output, "already exists") do
+          # Branch already exists — try without -b
+          String.contains?(output, "already exists") ->
             create_worktree_existing_branch(workspace_id, user_id, project_path, wt_path, branch)
-          else
+
+          true ->
             Logger.error(
               "[Worktree] creation failed workspace=#{workspace_id} user=#{user_id} output=#{output}"
             )
 
             {:error, {:worktree_creation_failed, output}}
-          end
-      end
+        end
     end
   end
 
@@ -105,8 +106,8 @@ defmodule Loomkin.Collaboration.Worktree do
   def worktree_path(workspace_id, user_id, project_path) do
     base_name = Path.basename(project_path)
     parent_dir = Path.dirname(project_path)
-    workspace_short = String.slice(to_string(workspace_id), 0, 8)
-    Path.join(parent_dir, "#{base_name}-collab-#{workspace_short}-#{user_id}")
+    workspace_slug = workspace_id |> to_string() |> String.replace("-", "")
+    Path.join(parent_dir, "#{base_name}-collab-#{workspace_slug}-#{user_id}")
   end
 
   @doc """
@@ -114,11 +115,23 @@ defmodule Loomkin.Collaboration.Worktree do
   """
   @spec branch_name(String.t(), integer() | String.t()) :: String.t()
   def branch_name(workspace_id, user_id) do
-    workspace_short = String.slice(to_string(workspace_id), 0, 8)
-    "collab/#{workspace_short}/#{user_id}"
+    workspace_slug = workspace_id |> to_string() |> String.replace("-", "")
+    "collab/#{workspace_slug}/#{user_id}"
   end
 
   # --- Private ---
+
+  defp valid_worktree?(wt_path, project_path) do
+    {output, 0} =
+      System.cmd("git", ["worktree", "list", "--porcelain"],
+        cd: project_path,
+        stderr_to_stdout: true
+      )
+
+    String.contains?(output, wt_path)
+  rescue
+    _ -> false
+  end
 
   defp create_worktree_existing_branch(workspace_id, user_id, project_path, wt_path, branch) do
     args = ["worktree", "add", wt_path, branch]

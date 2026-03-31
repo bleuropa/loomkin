@@ -29,6 +29,59 @@ defmodule Loomkin.Federation.Identity do
   end
 
   @doc """
+  Load the keypair into `:persistent_term` for fast subsequent access.
+
+  Call this at application startup to avoid disk I/O on every request.
+  Returns `:ok` on success or `{:error, reason}` on failure.
+  """
+  @spec ensure_loaded() :: :ok | {:error, term()}
+  def ensure_loaded do
+    case get_or_create_keypair() do
+      {:ok, keypair} ->
+        :persistent_term.put({__MODULE__, :keypair}, keypair)
+        :ok
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Return the cached keypair from `:persistent_term`, loading it on first call.
+
+  Avoids disk I/O on every request by caching in `:persistent_term`.
+  Returns `{:ok, keypair}` on success, `{:error, reason}` on failure.
+  """
+  @spec cached_keypair() :: {:ok, keypair()} | {:error, term()}
+  def cached_keypair do
+    case :persistent_term.get({__MODULE__, :keypair}, nil) do
+      nil ->
+        case get_or_create_keypair() do
+          {:ok, keypair} ->
+            :persistent_term.put({__MODULE__, :keypair}, keypair)
+            {:ok, keypair}
+
+          {:error, _reason} = error ->
+            error
+        end
+
+      keypair ->
+        {:ok, keypair}
+    end
+  end
+
+  @doc """
+  Return the configured domain for this instance.
+
+  Defaults to `"localhost"` when not configured.
+  """
+  @spec domain() :: String.t()
+  def domain do
+    config = Application.get_env(:loomkin, __MODULE__, [])
+    Keyword.get(config, :domain, "localhost")
+  end
+
+  @doc """
   Load an existing keypair from disk, or generate and persist a new one.
 
   The storage path is read from application config:
@@ -130,6 +183,9 @@ defmodule Loomkin.Federation.Identity do
       case decoded do
         <<0xED, 0x01, public_key::binary-size(32)>> ->
           {:ok, public_key}
+
+        <<0xED, 0x01, _rest::binary>> ->
+          {:error, :invalid_key_length}
 
         _other ->
           {:error, :invalid_multicodec_prefix}

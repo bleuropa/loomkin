@@ -15,8 +15,7 @@ defmodule Loomkin.Repo.Migrations.CreateWorkspaceInvites do
           null: false
 
       add :invited_by_id,
-          references(:users, type: :bigint, on_delete: :delete_all),
-          null: false
+          references(:users, type: :bigint, on_delete: :nilify_all)
 
       timestamps(type: :utc_datetime)
     end

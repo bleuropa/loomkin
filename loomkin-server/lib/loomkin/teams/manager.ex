@@ -648,9 +648,31 @@ defmodule Loomkin.Teams.Manager do
   # Consult Learning module for a model recommendation based on historical data.
   # Returns the recommended model string if 5+ samples exist, otherwise nil
   # (letting the caller fall back to the default model selection).
+  # Results are cached for 5 minutes via :persistent_term to avoid a DB query
+  # on every spawn_agent call.
   defp consult_model_recommendation(role) do
     task_type = to_string(role)
+    cache_key = {:learning_rec, task_type}
 
+    case :persistent_term.get(cache_key, :miss) do
+      :miss ->
+        result = fetch_model_recommendation(task_type)
+        :persistent_term.put(cache_key, {result, System.monotonic_time(:second)})
+        result
+
+      {result, cached_at} ->
+        if System.monotonic_time(:second) - cached_at > 300 do
+          :persistent_term.erase(cache_key)
+          consult_model_recommendation(role)
+        else
+          result
+        end
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp fetch_model_recommendation(task_type) do
     case Loomkin.Teams.Learning.recommend_model(task_type, min_samples: 5) do
       {model, _score} ->
         Logger.info(

@@ -152,7 +152,12 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
     {:noreply, socket}
   end
 
-  def handle_in("command", payload, socket) do
+  # Daemon-initiated command request: the daemon asks the relay whether its
+  # role is authorized for a given action. This is NOT the relay pushing a
+  # command to the daemon (that flow goes through handle_info({:push_command, ...})).
+  # The trust boundary is: the relay validates the daemon's role claim (set at
+  # socket connect time from the macaroon token) and returns accepted/rejected.
+  def handle_in("command_request", payload, socket) do
     action = payload["action"]
     role = socket.assigns.role
 
@@ -239,7 +244,16 @@ defmodule Loomkin.Relay.Server.DaemonChannel do
 
   # --- Role authorization ---
 
-  @doc false
+  @doc """
+  Check whether a given `role` is authorized to perform `action`.
+
+  Roles are hierarchical: observer < collaborator < owner.
+  Returns `true` if the role has sufficient privileges, `false` otherwise.
+
+  This function is public to support unit testing of the role-action matrix
+  independently from a full channel integration test.
+  """
+  @spec authorized?(String.t(), String.t()) :: boolean()
   def authorized?(role, action) do
     case role do
       "owner" -> action in @owner_commands

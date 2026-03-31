@@ -32,6 +32,7 @@ defmodule Loomkin.Relay.Client do
     reconnect_attempts: 0,
     heartbeat_timer: nil,
     last_heartbeat_ack: nil,
+    joined_at: nil,
     join_ref: nil,
     msg_ref: 0,
     joined: false
@@ -274,8 +275,10 @@ defmodule Loomkin.Relay.Client do
     "#{base}?vsn=2.0.0&token=#{token_param}"
   end
 
-  defp ws_headers(state) do
-    [{"authorization", "Bearer #{state.token || ""}"}]
+  defp ws_headers(_state) do
+    # Token is passed via URL query param (read by the server socket).
+    # No Authorization header to avoid token exposure in server access logs.
+    []
   end
 
   defp cleanup_gun(%{gun_pid: nil}), do: :ok
@@ -300,6 +303,7 @@ defmodule Loomkin.Relay.Client do
         ws_stream: nil,
         status: :disconnected,
         joined: false,
+        joined_at: nil,
         join_ref: nil,
         heartbeat_timer: nil,
         msg_ref: 0,
@@ -379,7 +383,7 @@ defmodule Loomkin.Relay.Client do
     unless state.joined do
       Logger.info("[Relay:client] joined #{channel_topic(state)}")
       timer = Process.send_after(self(), :heartbeat, state.heartbeat_interval_ms)
-      %{state | joined: true, heartbeat_timer: timer}
+      %{state | joined: true, joined_at: DateTime.utc_now(), heartbeat_timer: timer}
     else
       state
     end
@@ -448,7 +452,14 @@ defmodule Loomkin.Relay.Client do
     case state.last_heartbeat_ack do
       nil ->
         # No ack received yet — stale if we've been joined for > 2 heartbeat intervals
-        false
+        case state.joined_at do
+          %DateTime{} = joined_at ->
+            age_ms = DateTime.diff(DateTime.utc_now(), joined_at, :millisecond)
+            age_ms > state.heartbeat_interval_ms * 2
+
+          nil ->
+            false
+        end
 
       %DateTime{} = last_ack ->
         age_ms = DateTime.diff(DateTime.utc_now(), last_ack, :millisecond)
@@ -460,26 +471,22 @@ defmodule Loomkin.Relay.Client do
     Registry.select(Loomkin.Workspace.Registry, [
       {{:"$1", :"$2", :_}, [], [%{id: :"$1", pid: :"$2"}]}
     ])
-    |> Enum.flat_map(fn %{id: workspace_id, pid: pid} ->
-      if Process.alive?(pid) do
-        case Loomkin.Workspace.Server.get_state(workspace_id) do
-          {:ok, ws_state} ->
-            [
-              %{
-                id: workspace_id,
-                name: ws_state.name || workspace_id,
-                project_path: List.first(ws_state.project_paths || []) || "",
-                team_id: ws_state.team_id,
-                status: to_string(ws_state.status || :active),
-                agent_count: count_agents(ws_state.team_id)
-              }
-            ]
+    |> Enum.flat_map(fn %{id: workspace_id, pid: _pid} ->
+      case Loomkin.Workspace.Server.get_state(workspace_id) do
+        {:ok, ws_state} ->
+          [
+            %{
+              id: workspace_id,
+              name: ws_state.name || workspace_id,
+              project_path: List.first(ws_state.project_paths || []) || "",
+              team_id: ws_state.team_id,
+              status: to_string(ws_state.status || :active),
+              agent_count: count_agents(ws_state.team_id)
+            }
+          ]
 
-          _ ->
-            []
-        end
-      else
-        []
+        _ ->
+          []
       end
     end)
   rescue

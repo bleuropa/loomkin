@@ -10,9 +10,10 @@ defmodule Loomkin.AgentLoop do
   alias Loomkin.AgentLoop.Checkpoint
   alias Loomkin.Healing.ErrorClassifier
   alias Loomkin.Permissions.HookRunner
+  alias Loomkin.Security.Redactor
   alias Loomkin.Session.ContextWindow
   alias Loomkin.Teams.ContextOffload
-  alias Loomkin.Security.Redactor
+  alias Loomkin.Teams.Learning
   alias Loomkin.Telemetry, as: LoomkinTelemetry
 
   require Logger
@@ -1031,24 +1032,13 @@ defmodule Loomkin.AgentLoop do
     _ -> messages
   end
 
-  @doc """
-  Inject historical performance data into the agent's message context.
-
-  Queries `Learning.learning_context/2` for the agent's model and role (as a
-  proxy for task type). If data exists, prepends a concise system message
-  (max 500 chars) with success rate and cost information.
-
-  Returns the augmented messages if data was found, or the original messages
-  unchanged.
-  """
+  @doc false
   def bootstrap_learning_context(messages, config) do
     model = config.model
     # Use role as the task type proxy — agents work on tasks matching their role
     task_type = to_string(config.role || "general")
 
     if model do
-      alias Loomkin.Teams.Learning
-
       case Learning.learning_context(model, task_type) do
         context when is_binary(context) and context != "" ->
           msg = %{

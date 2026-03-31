@@ -32,14 +32,13 @@ defmodule Loomkin.Schemas.WorkspaceInvite do
   end
 
   @required_fields ~w(email role)a
-  @optional_fields ~w(workspace_id invited_by_id status expires_at token)a
+  @optional_fields ~w(status expires_at token)a
 
   def changeset(invite, attrs) do
     invite
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_format(:email, ~r/^[^@,;\s]+@[^@,;\s]+$/, message: "must be a valid email")
-    |> validate_inclusion(:role, [:collaborator, :observer])
     |> maybe_generate_token()
     |> maybe_set_expiry()
     |> unique_constraint(:token)

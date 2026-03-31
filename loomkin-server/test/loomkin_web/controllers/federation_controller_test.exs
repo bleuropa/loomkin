@@ -15,8 +15,12 @@ defmodule LoomkinWeb.FederationControllerTest do
       key_path: @tmp_dir
     )
 
+    # Clear cached keypair so each test starts fresh
+    :persistent_term.erase({Identity, :keypair})
+
     on_exit(fn ->
       Application.put_env(:loomkin, Identity, original)
+      :persistent_term.erase({Identity, :keypair})
       File.rm_rf!(@tmp_dir)
     end)
 
@@ -65,6 +69,49 @@ defmodule LoomkinWeb.FederationControllerTest do
         |> List.first()
 
       assert content_type =~ "application/did+ld+json"
+    end
+
+    test "does not leak private key material in response", %{conn: conn} do
+      # First, get the keypair so we know the private key bytes
+      {:ok, keypair} = Loomkin.Federation.Identity.get_or_create_keypair()
+
+      conn = get(conn, "/.well-known/did.json")
+      body = json_response(conn, 200)
+      raw_json = Jason.encode!(body)
+
+      # Must not contain a "privateKey" field
+      refute String.contains?(raw_json, "privateKey")
+
+      # Must not contain the raw private key bytes encoded in any form
+      private_b64 = Base.encode64(keypair.private)
+      private_hex = Base.encode16(keypair.private, case: :lower)
+
+      refute String.contains?(raw_json, private_b64)
+      refute String.contains?(raw_json, private_hex)
+    end
+
+    test "returns generic error on identity failure", %{conn: conn} do
+      # Clear the persistent_term cache so it tries to load fresh
+      :persistent_term.erase({Loomkin.Federation.Identity, :keypair})
+
+      # Point key_path to a non-writable location to force failure
+      original = Application.get_env(:loomkin, Loomkin.Federation.Identity, [])
+
+      Application.put_env(:loomkin, Loomkin.Federation.Identity,
+        domain: "test.loomkin.dev",
+        key_path: "/dev/null/impossible"
+      )
+
+      on_exit(fn ->
+        Application.put_env(:loomkin, Loomkin.Federation.Identity, original)
+      end)
+
+      conn = get(conn, "/.well-known/did.json")
+      body = json_response(conn, 500)
+
+      # Error message must be generic, not leaking internal details
+      assert body["error"] == "identity unavailable"
+      refute Map.has_key?(body, "detail")
     end
   end
 end

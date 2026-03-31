@@ -10,8 +10,16 @@ defmodule Loomkin.Relay.Server.HeartbeatMonitor do
 
   require Logger
 
-  @check_interval_ms 10_000
-  @stale_threshold_seconds 30
+  @check_interval_ms Application.compile_env(
+                       :loomkin,
+                       [__MODULE__, :check_interval_ms],
+                       10_000
+                     )
+  @stale_threshold_seconds Application.compile_env(
+                             :loomkin,
+                             [__MODULE__, :stale_threshold_seconds],
+                             30
+                           )
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)

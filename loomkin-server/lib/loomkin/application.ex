@@ -20,6 +20,9 @@ defmodule Loomkin.Application do
     # Create ETS table for relay daemon registry (must exist before endpoint starts)
     Loomkin.Relay.Server.Registry.init()
 
+    # Pre-load federation keypair into :persistent_term to avoid disk I/O per request
+    Loomkin.Federation.Identity.ensure_loaded()
+
     children =
       [
         # Storage

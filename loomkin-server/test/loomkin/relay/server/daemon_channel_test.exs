@@ -186,32 +186,32 @@ defmodule Loomkin.Relay.Server.DaemonChannelTest do
 
     test "observer can issue read-only commands", %{socket: socket} do
       for action <- ~w(get_status get_history get_agents) do
-        ref = push(socket, "command", %{"action" => action})
+        ref = push(socket, "command_request", %{"action" => action})
         assert_reply ref, :ok, %{"accepted" => true}
       end
     end
 
     test "observer cannot send_message", %{socket: socket} do
-      ref = push(socket, "command", %{"action" => "send_message"})
+      ref = push(socket, "command_request", %{"action" => "send_message"})
       assert_reply ref, :error, %{"reason" => reason}
       assert reason =~ "observer"
       assert reason =~ "send_message"
     end
 
     test "observer cannot kill_team", %{socket: socket} do
-      ref = push(socket, "command", %{"action" => "kill_team"})
+      ref = push(socket, "command_request", %{"action" => "kill_team"})
       assert_reply ref, :error, %{"reason" => reason}
       assert reason =~ "observer"
     end
 
     test "observer cannot change_model", %{socket: socket} do
-      ref = push(socket, "command", %{"action" => "change_model"})
+      ref = push(socket, "command_request", %{"action" => "change_model"})
       assert_reply ref, :error, %{"reason" => reason}
       assert reason =~ "observer"
     end
 
     test "observer cannot steer_agent", %{socket: socket} do
-      ref = push(socket, "command", %{"action" => "steer_agent"})
+      ref = push(socket, "command_request", %{"action" => "steer_agent"})
       assert_reply ref, :error, %{"reason" => reason}
       assert reason =~ "observer"
     end
@@ -229,38 +229,38 @@ defmodule Loomkin.Relay.Server.DaemonChannelTest do
 
     test "collaborator can issue observer commands", %{socket: socket} do
       for action <- ~w(get_status get_history get_agents) do
-        ref = push(socket, "command", %{"action" => action})
+        ref = push(socket, "command_request", %{"action" => action})
         assert_reply ref, :ok, %{"accepted" => true}
       end
     end
 
     test "collaborator can issue collaborator-level commands", %{socket: socket} do
       for action <- ~w(send_message approve_tool deny_tool pause_agent resume_agent) do
-        ref = push(socket, "command", %{"action" => action})
+        ref = push(socket, "command_request", %{"action" => action})
         assert_reply ref, :ok, %{"accepted" => true}
       end
     end
 
     test "collaborator cannot kill_team", %{socket: socket} do
-      ref = push(socket, "command", %{"action" => "kill_team"})
+      ref = push(socket, "command_request", %{"action" => "kill_team"})
       assert_reply ref, :error, %{"reason" => reason}
       assert reason =~ "collaborator"
     end
 
     test "collaborator cannot change_model", %{socket: socket} do
-      ref = push(socket, "command", %{"action" => "change_model"})
+      ref = push(socket, "command_request", %{"action" => "change_model"})
       assert_reply ref, :error, %{"reason" => reason}
       assert reason =~ "collaborator"
     end
 
     test "collaborator cannot steer_agent", %{socket: socket} do
-      ref = push(socket, "command", %{"action" => "steer_agent"})
+      ref = push(socket, "command_request", %{"action" => "steer_agent"})
       assert_reply ref, :error, %{"reason" => reason}
       assert reason =~ "collaborator"
     end
 
     test "collaborator cannot cancel", %{socket: socket} do
-      ref = push(socket, "command", %{"action" => "cancel"})
+      ref = push(socket, "command_request", %{"action" => "cancel"})
       assert_reply ref, :error, %{"reason" => reason}
       assert reason =~ "collaborator"
     end
@@ -281,7 +281,7 @@ defmodule Loomkin.Relay.Server.DaemonChannelTest do
         ~w(get_status get_history get_agents send_message approve_tool deny_tool pause_agent resume_agent kill_team change_model steer_agent cancel)
 
       for action <- all_commands do
-        ref = push(socket, "command", %{"action" => action})
+        ref = push(socket, "command_request", %{"action" => action})
         assert_reply ref, :ok, %{"accepted" => true}
       end
     end
@@ -297,9 +297,6 @@ defmodule Loomkin.Relay.Server.DaemonChannelTest do
         join(socket, DaemonChannel, "daemon:#{@workspace_id}", register_payload())
 
       {:ok, entry_before} = Registry.lookup_workspace(user.id, @workspace_id)
-
-      # Small delay to ensure timestamp differs
-      Process.sleep(10)
 
       ref = push(socket, "heartbeat", %{})
       assert_reply ref, :ok, ack
@@ -389,16 +386,18 @@ defmodule Loomkin.Relay.Server.DaemonChannelTest do
         workspace_name: "unowned-ws"
       })
 
-      push(socket, "workspace_update", %{
-        "workspace_id" => "ws-unowned",
-        "name" => "hacked",
-        "project_path" => "/unowned",
-        "team_id" => nil,
-        "status" => "active",
-        "agent_count" => 99
-      })
+      ref =
+        push(socket, "workspace_update", %{
+          "workspace_id" => "ws-unowned",
+          "name" => "hacked",
+          "project_path" => "/unowned",
+          "team_id" => nil,
+          "status" => "active",
+          "agent_count" => 99
+        })
 
-      Process.sleep(50)
+      # Synchronize: wait for the channel to process the message
+      refute_reply ref, :ok, 200
 
       # The update should have been rejected -- original values preserved
       {:ok, entry} = Registry.lookup_workspace(user.id, "ws-unowned")
@@ -419,11 +418,12 @@ defmodule Loomkin.Relay.Server.DaemonChannelTest do
       assert {:ok, _} = Registry.lookup_workspace(user.id, @workspace_id)
 
       Process.unlink(socket.channel_pid)
+      monitor_ref = Process.monitor(socket.channel_pid)
       ref = leave(socket)
       assert_reply ref, :ok
 
-      # Give process time to terminate
-      Process.sleep(50)
+      # Wait for the channel process to terminate
+      assert_receive {:DOWN, ^monitor_ref, :process, _, _}, 1000
 
       assert :error = Registry.lookup_workspace(user.id, @workspace_id)
     end

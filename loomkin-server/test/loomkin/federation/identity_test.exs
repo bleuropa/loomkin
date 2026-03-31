@@ -154,5 +154,21 @@ defmodule Loomkin.Federation.IdentityTest do
     test "decode_multibase rejects invalid prefix" do
       assert {:error, :invalid_multibase_prefix} = Identity.decode_multibase("Q" <> "abc")
     end
+
+    test "decode_multibase rejects truncated key (too short)" do
+      # Create a valid multicodec prefix with only 16 bytes instead of 32
+      truncated = <<0xED, 0x01>> <> :crypto.strong_rand_bytes(16)
+      encoded = "z" <> Loomkin.Federation.Base58.encode(truncated)
+
+      assert {:error, :invalid_key_length} = Identity.decode_multibase(encoded)
+    end
+
+    test "decode_multibase rejects oversized key (too long)" do
+      # Create a valid multicodec prefix with 48 bytes instead of 32
+      oversized = <<0xED, 0x01>> <> :crypto.strong_rand_bytes(48)
+      encoded = "z" <> Loomkin.Federation.Base58.encode(oversized)
+
+      assert {:error, :invalid_key_length} = Identity.decode_multibase(encoded)
+    end
   end
 end

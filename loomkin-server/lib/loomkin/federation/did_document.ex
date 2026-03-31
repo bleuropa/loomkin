@@ -36,7 +36,7 @@ defmodule Loomkin.Federation.DidDocument do
   def build(%{domain: domain, public_key: public_key} = opts) do
     did = did_for_domain(domain)
 
-    doc = %{
+    %{
       "@context" => [
         "https://www.w3.org/ns/did/v1",
         "https://w3id.org/security/suites/ed25519-2020/v1"
@@ -53,20 +53,7 @@ defmodule Loomkin.Federation.DidDocument do
       "authentication" => ["#{did}#key-1"],
       "assertionMethod" => ["#{did}#key-1"]
     }
-
-    case Map.get(opts, :service_endpoint) do
-      nil ->
-        doc
-
-      endpoint ->
-        Map.put(doc, "service", [
-          %{
-            "id" => "#{did}#pds",
-            "type" => "LoomkinPDS",
-            "serviceEndpoint" => endpoint
-          }
-        ])
-    end
+    |> maybe_put_service(did, opts)
   end
 
   @doc """
@@ -85,7 +72,7 @@ defmodule Loomkin.Federation.DidDocument do
   def build_for_user(%{domain: domain, username: username, public_key: public_key} = opts) do
     did = did_for_user(domain, username)
 
-    doc = %{
+    %{
       "@context" => [
         "https://www.w3.org/ns/did/v1",
         "https://w3id.org/security/suites/ed25519-2020/v1"
@@ -102,20 +89,7 @@ defmodule Loomkin.Federation.DidDocument do
       "authentication" => ["#{did}#key-1"],
       "assertionMethod" => ["#{did}#key-1"]
     }
-
-    case Map.get(opts, :service_endpoint) do
-      nil ->
-        doc
-
-      endpoint ->
-        Map.put(doc, "service", [
-          %{
-            "id" => "#{did}#pds",
-            "type" => "LoomkinPDS",
-            "serviceEndpoint" => endpoint
-          }
-        ])
-    end
+    |> maybe_put_service(did, opts)
   end
 
   @doc """
@@ -149,5 +123,20 @@ defmodule Loomkin.Federation.DidDocument do
   @spec did_for_user(String.t(), String.t()) :: String.t()
   def did_for_user(domain, username) do
     "#{did_for_domain(domain)}:#{username}"
+  end
+
+  # -- Private --
+
+  defp maybe_put_service(doc, _did, opts) when not is_map_key(opts, :service_endpoint), do: doc
+  defp maybe_put_service(doc, _did, %{service_endpoint: nil}), do: doc
+
+  defp maybe_put_service(doc, did, %{service_endpoint: endpoint}) do
+    Map.put(doc, "service", [
+      %{
+        "id" => "#{did}#pds",
+        "type" => "LoomkinPDS",
+        "serviceEndpoint" => endpoint
+      }
+    ])
   end
 end
