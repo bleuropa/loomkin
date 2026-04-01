@@ -5,17 +5,20 @@ import { useStore } from "zustand";
 import { CommandPalette } from "./CommandPalette.js";
 import { ModelPicker } from "./ModelPicker.js";
 import { ListPicker } from "./ListPicker.js";
-import { resolve, getCompletions } from "../commands/registry.js";
-import type { CommandContext, ListPickerOptions } from "../commands/registry.js";
+import {
+  resolve,
+  getCompletions,
+  getArgCompletions,
+} from "../commands/registry.js";
+import type {
+  CommandContext,
+  ListPickerOptions,
+} from "../commands/registry.js";
 import { useAppStore } from "../stores/appStore.js";
 import { usePaneStore } from "../stores/paneStore.js";
 import { listModelProviders } from "../lib/api.js";
 import { runOAuthFlowInApp } from "../lib/oauth.js";
-import {
-  findAction,
-  defaultKeymap,
-  getVimKeymap,
-} from "../lib/keymap.js";
+import { findAction, defaultKeymap, getVimKeymap } from "../lib/keymap.js";
 import type { ModelProvider } from "../lib/types.js";
 import { loadHistory, saveHistory, appendHistory } from "../lib/history.js";
 
@@ -29,9 +32,13 @@ export function InputArea({ onSubmit, commandContext }: Props) {
   const [history, setHistory] = useState<string[]>(() => loadHistory());
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [paletteIndex, setPaletteIndex] = useState(0);
+  const [argPaletteIndex, setArgPaletteIndex] = useState(0);
   const [cursor, setCursor] = useState(0);
-  const [modelPickerProviders, setModelPickerProviders] = useState<ModelProvider[] | null>(null);
-  const [listPickerOptions, setListPickerOptions] = useState<ListPickerOptions | null>(null);
+  const [modelPickerProviders, setModelPickerProviders] = useState<
+    ModelProvider[] | null
+  >(null);
+  const [listPickerOptions, setListPickerOptions] =
+    useState<ListPickerOptions | null>(null);
   const [awaitingCapture, setAwaitingCapture] = useState(false);
   // Ctrl+R reverse-search state
   const [searchMode, setSearchMode] = useState(false);
@@ -48,7 +55,10 @@ export function InputArea({ onSubmit, commandContext }: Props) {
   const setVimMode = useStore(useAppStore, (s) => s.setVimMode);
   const focusedTarget = useStore(usePaneStore, (s) => s.focusedTarget);
   const connectionState = useStore(useAppStore, (s) => s.connectionState);
-  const showModelPickerOnConnect = useStore(useAppStore, (s) => s.showModelPickerOnConnect);
+  const showModelPickerOnConnect = useStore(
+    useAppStore,
+    (s) => s.showModelPickerOnConnect,
+  );
   const autoShownRef = useRef(false);
 
   // Replay early input buffered before Ink mounted
@@ -62,7 +72,12 @@ export function InputArea({ onSubmit, commandContext }: Props) {
 
   // Auto-show model picker once after first connect
   useEffect(() => {
-    if (!showModelPickerOnConnect || connectionState !== "connected" || autoShownRef.current) return;
+    if (
+      !showModelPickerOnConnect ||
+      connectionState !== "connected" ||
+      autoShownRef.current
+    )
+      return;
     autoShownRef.current = true;
     useAppStore.getState().setShowModelPickerOnConnect(false);
     listModelProviders()
@@ -81,12 +96,21 @@ export function InputArea({ onSubmit, commandContext }: Props) {
   const hasArgs = value.includes(" ");
   const showPalette =
     value.startsWith("/") &&
-    (!hasArgs || getCompletions(commandWord).some((c) => `/${c.name}` === commandWord));
+    (!hasArgs ||
+      getCompletions(commandWord).some((c) => `/${c.name}` === commandWord));
   const completions = showPalette
     ? hasArgs
       ? getCompletions(commandWord).filter((c) => `/${c.name}` === commandWord)
       : getCompletions(value)
     : [];
+
+  // Arg completions: active when user has typed a full command + space
+  const spaceIdx = value.indexOf(" ");
+  const argCompletions =
+    value.startsWith("/") && hasArgs && spaceIdx > 0
+      ? getArgCompletions(value.slice(1, spaceIdx), value.slice(spaceIdx + 1))
+      : [];
+  const showArgPalette = argCompletions.length > 0;
 
   // Vim helper: find next word boundary
   const nextWordBoundary = (str: string, pos: number): number => {
@@ -160,9 +184,7 @@ export function InputArea({ onSubmit, commandContext }: Props) {
           if (value.length > 0 && cursor < value.length) {
             undoStack.current.push(value);
             setValue(value.slice(0, cursor) + value.slice(cursor + 1));
-            setCursor((c) =>
-              Math.min(c, Math.max(0, value.length - 2)),
-            );
+            setCursor((c) => Math.min(c, Math.max(0, value.length - 2)));
           }
           break;
         case "vim:undo":
@@ -284,7 +306,8 @@ export function InputArea({ onSubmit, commandContext }: Props) {
       if (key.return) {
         if (!hasArgs) {
           const selected = completions[paletteIndex];
-          const isExactMatch = selected && value.toLowerCase() === `/${selected.name}`;
+          const isExactMatch =
+            selected && value.toLowerCase() === `/${selected.name}`;
           if (selected && !isExactMatch) {
             // Partial match — dispatch immediately, block TextInput's duplicate onSubmit
             handleSubmit(`/${selected.name}`);
@@ -306,19 +329,43 @@ export function InputArea({ onSubmit, commandContext }: Props) {
       }
     }
 
+    // Arg palette navigation (Tab / arrows to pick an agent name)
+    if (showArgPalette) {
+      if (key.upArrow) {
+        setArgPaletteIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setArgPaletteIndex((i) => Math.min(argCompletions.length - 1, i + 1));
+        return;
+      }
+      if (key.tab) {
+        const selected = argCompletions[argPaletteIndex];
+        if (selected) {
+          // Replace the arg portion with the chosen completion + trailing space
+          setValue(`${commandWord} ${selected} `);
+          setArgPaletteIndex(0);
+          if (isVim) setVimMode("insert");
+        }
+        return;
+      }
+    }
+
     // Vim normal mode: intercept all input
     if (isNormal) {
       const keymap = getVimKeymap("normal");
       const action = findAction(
-        { key: key.escape ? "escape" : input || key.return ? "return" : "", ctrl: key.ctrl, shift: key.shift, meta: key.meta },
+        {
+          key: key.escape ? "escape" : input || key.return ? "return" : "",
+          ctrl: key.ctrl,
+          shift: key.shift,
+          meta: key.meta,
+        },
         keymap,
       );
 
       // Handle the raw input character for vim normal bindings
-      const charAction = findAction(
-        { key: input, shift: key.shift },
-        keymap,
-      );
+      const charAction = findAction({ key: input, shift: key.shift }, keymap);
 
       if (action && action !== "submit") {
         handleVimAction(action);
@@ -352,10 +399,7 @@ export function InputArea({ onSubmit, commandContext }: Props) {
         return;
       }
       const keymap = getVimKeymap("insert");
-      const action = findAction(
-        { key: input, ctrl: key.ctrl },
-        keymap,
-      );
+      const action = findAction({ key: input, ctrl: key.ctrl }, keymap);
       if (action === "vim:normal") {
         handleVimAction("vim:normal");
         return;
@@ -366,7 +410,9 @@ export function InputArea({ onSubmit, commandContext }: Props) {
     // Default mode: history navigation (only when not in palette)
     if (!showPalette && key.upArrow && history.length > 0) {
       const newIdx =
-        historyIndex === -1 ? history.length - 1 : Math.max(0, historyIndex - 1);
+        historyIndex === -1
+          ? history.length - 1
+          : Math.max(0, historyIndex - 1);
       setHistoryIndex(newIdx);
       setValue(history[newIdx]);
       return;
@@ -430,6 +476,7 @@ export function InputArea({ onSubmit, commandContext }: Props) {
       setValue("");
       setCursor(0);
       setPaletteIndex(0);
+      setArgPaletteIndex(0);
 
       // Return to normal mode after submit in vim
       if (isVim) setVimMode("normal");
@@ -444,7 +491,11 @@ export function InputArea({ onSubmit, commandContext }: Props) {
       // Parse @mention prefix: "@agent-name rest of message"
       const mentionMatch = trimmed.match(/^@(\S+)\s+([\s\S]+)$/);
       if (mentionMatch) {
-        const [, mentionTarget, rest] = mentionMatch as [string, string, string];
+        const [, mentionTarget, rest] = mentionMatch as [
+          string,
+          string,
+          string,
+        ];
         onSubmit(rest, mentionTarget);
         setValue("");
         // history already added above; no duplicate needed
@@ -457,13 +508,7 @@ export function InputArea({ onSubmit, commandContext }: Props) {
   );
 
   // Prompt indicator
-  const promptChar = isVim
-    ? isNormal
-      ? ":"
-      : isInsert
-        ? ">"
-        : "/"
-    : ">";
+  const promptChar = isVim ? (isNormal ? ":" : isInsert ? ">" : "/") : ">";
 
   const promptColor = isVim
     ? isNormal
@@ -510,7 +555,9 @@ export function InputArea({ onSubmit, commandContext }: Props) {
           onSelect={(id, label) => {
             commandContext.appStore.setModel(id);
             commandContext.setSessionModel?.(id);
-            commandContext.addSystemMessage(`Switched to model ${label} (${id}).`);
+            commandContext.addSystemMessage(
+              `Switched to model ${label} (${id}).`,
+            );
             modelPickerAutoRef.current = false;
             setModelPickerProviders(null);
           }}
@@ -531,7 +578,9 @@ export function InputArea({ onSubmit, commandContext }: Props) {
               enrichedContext.captureNextInput,
             );
             if (ok) {
-              commandContext.addSystemMessage(`${name} connected. Refreshing model list...`);
+              commandContext.addSystemMessage(
+                `${name} connected. Refreshing model list...`,
+              );
               try {
                 const { providers } = await listModelProviders();
                 setModelPickerProviders(providers);
@@ -546,7 +595,9 @@ export function InputArea({ onSubmit, commandContext }: Props) {
               {promptChar}{" "}
             </Text>
             {focusedTarget && !isNormal && (
-              <Text color="cyan" dimColor>@{focusedTarget}{" "}</Text>
+              <Text color="cyan" dimColor>
+                @{focusedTarget}{" "}
+              </Text>
             )}
             {isNormal ? (
               // In normal mode, show value as static text with cursor highlight
@@ -571,6 +622,7 @@ export function InputArea({ onSubmit, commandContext }: Props) {
                   setValue(v);
                   setCursor(v.length);
                   setPaletteIndex(0);
+                  setArgPaletteIndex(0);
                 }}
                 onSubmit={handleSubmit}
                 placeholder={placeholder}
@@ -584,20 +636,50 @@ export function InputArea({ onSubmit, commandContext }: Props) {
             )}
           </Box>
           {searchMode && (
-            <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
-              <Text color="cyan" bold>reverse-i-search: <Text color="white">{searchQuery}</Text><Text color="cyan" inverse> </Text></Text>
+            <Box
+              flexDirection="column"
+              borderStyle="single"
+              borderColor="cyan"
+              paddingX={1}
+            >
+              <Text color="cyan" bold>
+                reverse-i-search: <Text color="white">{searchQuery}</Text>
+                <Text color="cyan" inverse>
+                  {" "}
+                </Text>
+              </Text>
               {searchResults.slice(0, 10).map((entry, i) => (
-                <Text key={entry + i} color={i === searchResultIndex ? "black" : undefined} backgroundColor={i === searchResultIndex ? "cyan" : undefined}>
+                <Text
+                  key={entry + i}
+                  color={i === searchResultIndex ? "black" : undefined}
+                  backgroundColor={i === searchResultIndex ? "cyan" : undefined}
+                >
                   {entry}
                 </Text>
               ))}
-              {searchResults.length === 0 && (
-                <Text dimColor>(no matches)</Text>
-              )}
+              {searchResults.length === 0 && <Text dimColor>(no matches)</Text>}
             </Box>
           )}
           {!searchMode && showPalette && completions.length > 0 && (
             <CommandPalette input={value} selectedIndex={paletteIndex} />
+          )}
+          {!searchMode && showArgPalette && (
+            <Box
+              flexDirection="column"
+              borderStyle="single"
+              borderColor="gray"
+              paddingX={1}
+            >
+              {argCompletions.map((name, i) => (
+                <Text
+                  key={name}
+                  color={i === argPaletteIndex ? "blue" : undefined}
+                  bold={i === argPaletteIndex}
+                >
+                  {i === argPaletteIndex ? ">" : " "} {name}
+                </Text>
+              ))}
+            </Box>
           )}
         </>
       )}

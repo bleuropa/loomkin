@@ -35,6 +35,8 @@ export interface SlashCommand {
   description: string;
   args?: string;
   handler: (args: string, ctx: CommandContext) => Promise<void> | void;
+  /** Return completions for the argument currently being typed. */
+  getArgCompletions?: (partialArg: string) => string[];
 }
 
 const commands = new Map<string, SlashCommand>();
@@ -100,6 +102,21 @@ export function getCompletions(partial: string): SlashCommand[] {
   }
 
   return results.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Get argument completions for a command.
+ * @param commandName - the resolved command name (e.g. "delegate")
+ * @param partialArg - text after the command and space (e.g. "cod" when user typed "/delegate cod")
+ */
+export function getArgCompletions(
+  commandName: string,
+  partialArg: string,
+): string[] {
+  const cmd =
+    commands.get(commandName) ?? commands.get(aliasMap.get(commandName) ?? "");
+  if (!cmd?.getArgCompletions) return [];
+  return cmd.getArgCompletions(partialArg);
 }
 
 export function getAllCommands(): SlashCommand[] {
