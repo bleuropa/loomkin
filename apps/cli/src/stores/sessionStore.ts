@@ -32,6 +32,14 @@ export interface SessionState {
   // MCP output tracking
   mcpOutputTotalChars: number;
 
+  // Recent file path tracking (for post-compact re-injection)
+  recentFilePaths: string[];
+
+  // Background memory extraction tracking
+  lastExtractionTokenCount: number;
+  toolCallsSinceExtraction: number;
+  extractionInProgress: boolean;
+
   setSessionId: (id: string | null) => void;
   addMessage: (message: Message) => void;
   updateMessage: (id: string, partial: Partial<Message>) => void;
@@ -63,6 +71,10 @@ export interface SessionState {
   trackTokenUsage: (inputTokens: number, outputTokens: number, model: string) => void;
   setContextBudgetPercent: (percent: number | null) => void;
   addMcpOutputChars: (n: number) => void;
+  trackFilePath: (path: string) => void;
+  incrementToolCallsForExtraction: () => void;
+  setExtractionInProgress: (v: boolean) => void;
+  recordExtraction: (currentTokenCount: number) => void;
 }
 
 export const sessionStore = createStore<SessionState>((set, _get) => ({
@@ -82,6 +94,10 @@ export const sessionStore = createStore<SessionState>((set, _get) => ({
   estimatedCostUsd: 0,
   contextBudgetPercent: null,
   mcpOutputTotalChars: 0,
+  recentFilePaths: [],
+  lastExtractionTokenCount: 0,
+  toolCallsSinceExtraction: 0,
+  extractionInProgress: false,
 
   setSessionId: (sessionId) => set({ sessionId }),
 
@@ -219,6 +235,20 @@ export const sessionStore = createStore<SessionState>((set, _get) => ({
 
   addMcpOutputChars: (n) =>
     set((state) => ({ mcpOutputTotalChars: state.mcpOutputTotalChars + n })),
+
+  trackFilePath: (path) =>
+    set((state) => {
+      const paths = [path, ...state.recentFilePaths.filter((p) => p !== path)].slice(0, 10);
+      return { recentFilePaths: paths };
+    }),
+
+  incrementToolCallsForExtraction: () =>
+    set((state) => ({ toolCallsSinceExtraction: state.toolCallsSinceExtraction + 1 })),
+
+  setExtractionInProgress: (extractionInProgress) => set({ extractionInProgress }),
+
+  recordExtraction: (currentTokenCount) =>
+    set({ lastExtractionTokenCount: currentTokenCount, toolCallsSinceExtraction: 0 }),
 }));
 
 export const useSessionStore = sessionStore;

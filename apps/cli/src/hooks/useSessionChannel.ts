@@ -4,6 +4,7 @@ import { useSessionStore } from "../stores/sessionStore.js";
 import { useAppStore } from "../stores/appStore.js";
 import { useChannelStore } from "../stores/channelStore.js";
 import { isMcpTool, truncateMcpOutput } from "../lib/mcpTruncation.js";
+import { shouldExtract, runBackgroundExtraction } from "../lib/sessionExtractor.js";
 import type { Message, ToolCall, PermissionRequest, AskUserQuestion, PlanMessage } from "../lib/types.js";
 
 /**
@@ -103,6 +104,15 @@ export function useSessionChannel() {
           store.trackTokenUsage(inputTokens, outputTokens, model);
         }
       }
+      // Fire background session memory extraction if thresholds are met
+      if (shouldExtract()) {
+        const sessionId = useSessionStore.getState().sessionId;
+        if (sessionId) {
+          runBackgroundExtraction(sessionId).catch(() => {
+            useSessionStore.getState().setExtractionInProgress(false);
+          });
+        }
+      }
     });
 
     on("tool_call_started", (raw) => {
@@ -135,6 +145,7 @@ export function useSessionChannel() {
       }
 
       store.removePendingToolCall(payload.tool_call.id);
+      store.incrementToolCallsForExtraction();
     });
 
     on("permission_request", (raw) => {

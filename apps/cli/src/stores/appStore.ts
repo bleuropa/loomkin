@@ -78,6 +78,9 @@ export interface AppState {
   autoCompact: boolean;
   lastAutoCompactAt: number | null;
 
+  // Inject context (recent files + memories) after compaction
+  injectContextAfterCompact: boolean;
+
   // Show model picker once after first connect (set on startup)
   showModelPickerOnConnect: boolean;
   setShowModelPickerOnConnect: (show: boolean) => void;
@@ -124,6 +127,7 @@ export interface AppState {
   setThinkingBudget: (budget: number | null) => void;
   setAutoCompact: (v: boolean) => void;
   setLastAutoCompactAt: (ts: number) => void;
+  setInjectContextAfterCompact: (v: boolean) => void;
 }
 
 const config = getConfig();
@@ -174,6 +178,8 @@ export const appStore = createStore<AppState>((set, get) => ({
 
   autoCompact: true,
   lastAutoCompactAt: null,
+
+  injectContextAfterCompact: true,
 
   showModelPickerOnConnect: false,
   setShowModelPickerOnConnect: (show) => set({ showModelPickerOnConnect: show }),
@@ -247,6 +253,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   setThinkingBudget: (thinkingBudget) => set({ thinkingBudget }),
   setAutoCompact: (autoCompact) => set({ autoCompact }),
   setLastAutoCompactAt: (lastAutoCompactAt) => set({ lastAutoCompactAt }),
+  setInjectContextAfterCompact: (injectContextAfterCompact) => set({ injectContextAfterCompact }),
 }));
 
 export const useAppStore = appStore;

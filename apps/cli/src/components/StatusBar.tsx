@@ -48,6 +48,7 @@ export function StatusBar() {
   const updateAvailable = useStore(useAppStore, (s) => s.updateAvailable);
   const autoCompact = useStore(useAppStore, (s) => s.autoCompact);
   const activeConversation = useStore(useConversationStore, (s) => s.getActive());
+  const extractionInProgress = useStore(useSessionStore, (s) => s.extractionInProgress);
 
   const isConnected = connectionState === "connected";
   const isReconnecting =
@@ -125,6 +126,7 @@ export function StatusBar() {
           </Text>
         )}
         {!autoCompact && <Text dimColor>no-ac</Text>}
+        {extractionInProgress && <Text dimColor>mem:saving</Text>}
         {hasActivityGroup && <Text dimColor>│</Text>}
         {agentCount > 0 && (
           <Text dimColor>
