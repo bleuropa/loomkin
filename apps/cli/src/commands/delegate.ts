@@ -6,6 +6,16 @@ register({
   name: "delegate",
   description: "Delegate a task to a named agent",
   args: "<agent-name> <task>",
+  getArgCompletions: (partial: string) => {
+    // Only complete the first argument (agent name).
+    // If partial contains a space, the user is typing the task — no completions.
+    if (partial.includes(" ")) return [];
+    return useAgentStore
+      .getState()
+      .getAgentList()
+      .map((a) => a.name)
+      .filter((name) => name.startsWith(partial));
+  },
   handler: (_args, ctx) => {
     const parts = _args.trim().split(" ");
     const agentName = parts[0];
