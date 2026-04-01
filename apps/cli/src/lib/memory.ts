@@ -7,23 +7,36 @@ export interface MemoryEntry {
   type: string;
   content: string;
   filePath: string;
+  scope: "global" | "project" | "agent";
+  agentName?: string;
 }
 
 const MAX_PROMPT_CHARS = 2000;
 
-export function getMemoryDir(): string {
+export function getGlobalMemoryDir(): string {
   return join(homedir(), ".loomkin", "memory");
 }
 
-function ensureMemoryDir(): void {
-  const dir = getMemoryDir();
+/** Backward-compat alias. */
+export function getMemoryDir(): string {
+  return getGlobalMemoryDir();
+}
+
+export function getProjectMemoryDir(cwd?: string): string {
+  return join(cwd ?? process.cwd(), ".loomkin", "memory");
+}
+
+export function getAgentMemoryDir(agentName: string): string {
+  return join(homedir(), ".loomkin", "memory", "agents", agentName);
+}
+
+function ensureDir(dir: string): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
 }
 
 function safeName(raw: string): string {
-  // Sanitize to valid filename chars
   return raw
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
@@ -31,7 +44,11 @@ function safeName(raw: string): string {
     .slice(0, 60) || "memory";
 }
 
-function parseMemoryFile(filePath: string): MemoryEntry | null {
+function parseMemoryFile(
+  filePath: string,
+  scope: MemoryEntry["scope"],
+  agentName?: string,
+): MemoryEntry | null {
   try {
     const raw = readFileSync(filePath, "utf-8");
     // Parse YAML frontmatter: --- ... ---
@@ -49,23 +66,23 @@ function parseMemoryFile(filePath: string): MemoryEntry | null {
 
     if (!name) return null;
 
-    return { name, type, content, filePath };
+    return { name, type, content, filePath, scope, agentName };
   } catch {
     return null;
   }
 }
 
-/**
- * Load all memory entries from ~/.loomkin/memory/*.md
- */
-export function loadAllMemories(): MemoryEntry[] {
-  const dir = getMemoryDir();
+function loadFromDir(
+  dir: string,
+  scope: MemoryEntry["scope"],
+  agentName?: string,
+): MemoryEntry[] {
   if (!existsSync(dir)) return [];
 
   try {
     const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
     return files
-      .map((f) => parseMemoryFile(join(dir, f)))
+      .map((f) => parseMemoryFile(join(dir, f), scope, agentName))
       .filter((e): e is MemoryEntry => e !== null);
   } catch {
     return [];
@@ -73,12 +90,53 @@ export function loadAllMemories(): MemoryEntry[] {
 }
 
 /**
- * Save a memory entry to ~/.loomkin/memory/<name>.md
+ * Load all memory entries from global (~/.loomkin/memory/) and project
+ * (<cwd>/.loomkin/memory/) directories. Project entries win on name collision.
  */
-export function saveMemory(name: string, type: string, content: string): void {
-  ensureMemoryDir();
+export function loadAllMemories(cwd?: string): MemoryEntry[] {
+  const globalEntries = loadFromDir(getGlobalMemoryDir(), "global");
+  const projectEntries = loadFromDir(getProjectMemoryDir(cwd), "project");
+
+  // Project entries win on name collision
+  const byName = new Map<string, MemoryEntry>();
+  for (const e of globalEntries) byName.set(e.name, e);
+  for (const e of projectEntries) byName.set(e.name, e);
+
+  return Array.from(byName.values());
+}
+
+/**
+ * Load memory entries scoped to a specific agent.
+ */
+export function loadAgentMemories(agentName: string): MemoryEntry[] {
+  return loadFromDir(getAgentMemoryDir(agentName), "agent", agentName);
+}
+
+/**
+ * Save a memory entry.
+ * @param scope - 'global' saves to ~/.loomkin/memory/
+ *                'project' saves to <cwd>/.loomkin/memory/
+ *                'agent' saves to ~/.loomkin/memory/agents/<agentName>/
+ */
+export function saveMemory(
+  name: string,
+  type: string,
+  content: string,
+  scope: MemoryEntry["scope"] = "global",
+  agentName?: string,
+): void {
+  let dir: string;
+  if (scope === "agent" && agentName) {
+    dir = getAgentMemoryDir(agentName);
+  } else if (scope === "project") {
+    dir = getProjectMemoryDir();
+  } else {
+    dir = getGlobalMemoryDir();
+  }
+
+  ensureDir(dir);
   const safe = safeName(name);
-  const filePath = join(getMemoryDir(), `${safe}.md`);
+  const filePath = join(dir, `${safe}.md`);
   const frontmatter = `---\nname: ${name}\ntype: ${type}\n---\n${content}\n`;
   writeFileSync(filePath, frontmatter, "utf-8");
 }

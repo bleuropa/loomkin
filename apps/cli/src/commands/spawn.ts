@@ -2,6 +2,7 @@ import pc from "picocolors";
 import { register, type CommandContext } from "./registry.js";
 import { useAgentStore } from "../stores/agentStore.js";
 import { getSessionChannel } from "./channelUtil.js";
+import { loadAgentMemories, formatMemoriesForPrompt } from "../lib/memory.js";
 
 const BUILT_IN_ROLES = [
   "researcher",
@@ -55,10 +56,20 @@ register({
       pc.dim(`Spawning ${role} agent${name ? ` "${name}"` : ""}${worktree ? " (with worktree)" : ""}…`),
     );
 
+    // Load agent-scoped memories to include as additional system prompt
+    const agentMemories = [
+      ...loadAgentMemories(role),
+      ...(name ? loadAgentMemories(name) : []),
+    ];
+    const agentMemoryPrompt = agentMemories.length > 0
+      ? formatMemoriesForPrompt(agentMemories)
+      : null;
+
     const payload: Record<string, unknown> = { role };
     if (name) payload.name = name;
     if (model) payload.model = model;
     if (worktree) payload.worktree = true;
+    if (agentMemoryPrompt) payload.additional_system_prompt = agentMemoryPrompt;
 
     channel
       .push("spawn_agent", payload)
