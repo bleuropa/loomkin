@@ -50,15 +50,9 @@ export function useSessionChannel() {
       } else {
         store.addMessage(payload.message);
       }
-      // Track token usage from message event if provided by server
-      if (payload.usage) {
-        const inputTokens = payload.usage.input_tokens ?? 0;
-        const outputTokens = payload.usage.output_tokens ?? 0;
-        const model = payload.usage.model ?? useAppStore.getState().model ?? "";
-        if (inputTokens > 0 || outputTokens > 0) {
-          store.trackTokenUsage(inputTokens, outputTokens, model);
-        }
-      }
+      // Token usage is tracked in stream_end only to avoid double-counting.
+      // new_message events may also carry usage but we ignore them here since
+      // the server sends both events for the same LLM turn.
     });
 
     on("message_updated", (raw) => {

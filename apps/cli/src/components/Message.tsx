@@ -17,15 +17,18 @@ function estimateTokens(text: string): string {
   return String(tokens);
 }
 
-function ThinkingBlock({ content }: { content: string }) {
+function ThinkingBlock({ content, isActive = false }: { content: string; isActive?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const tokenCount = estimateTokens(content);
 
-  useInput((input, key) => {
-    if (key.return || input === " ") {
-      setExpanded((e) => !e);
-    }
-  });
+  useInput(
+    (input, key) => {
+      if (key.return || input === " ") {
+        setExpanded((e) => !e);
+      }
+    },
+    { isActive },
+  );
 
   return (
     <Box flexDirection="column" marginBottom={1}>

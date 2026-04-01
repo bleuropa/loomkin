@@ -34,11 +34,23 @@ register({
       return;
     }
 
-    useChannelStore.getState().channel?.push("peer_message", {
-      to: agentName,
-      content: task,
-      from: "user",
-    });
-    ctx.addSystemMessage(`Task delegated to ${agentName}`);
+    const channel = useChannelStore.getState().channel;
+    if (!channel) {
+      ctx.addSystemMessage("Not connected to server. Cannot delegate.");
+      return;
+    }
+
+    channel
+      .push("peer_message", {
+        to: agentName,
+        content: task,
+        from: "user",
+      })
+      .receive("ok", () => {
+        ctx.addSystemMessage(`Task delegated to ${agentName}`);
+      })
+      .receive("error", (resp: Record<string, unknown>) => {
+        ctx.addSystemMessage(`Failed to delegate: ${JSON.stringify(resp)}`);
+      });
   },
 });

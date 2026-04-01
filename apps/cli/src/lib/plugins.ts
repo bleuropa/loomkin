@@ -50,8 +50,26 @@ export async function loadPlugins(): Promise<void> {
     return;
   }
 
+  const MAX_PLUGIN_FILES = 50;
+  if (files.length > MAX_PLUGIN_FILES) {
+    console.error(
+      `[plugins] found ${files.length} plugin files — loading first ${MAX_PLUGIN_FILES} only`,
+    );
+    files = files.slice(0, MAX_PLUGIN_FILES);
+  }
+
+  const resolvedDir = await Bun.file(dir).exists() ? (await Bun.resolve(".", dir)) : dir;
+
   for (const file of files) {
     const filePath = join(dir, file);
+
+    // Ensure resolved path stays within the plugins directory (prevent symlink escape)
+    const resolved = await Bun.resolve(filePath, ".");
+    if (!resolved.startsWith(resolvedDir)) {
+      console.error(`[plugins] ${file}: path escapes plugins directory — skipping`);
+      continue;
+    }
+
     const plugin: LoadedPlugin = { filePath, commands: [], status: "loaded" };
 
     try {

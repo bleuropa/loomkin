@@ -96,9 +96,18 @@ register({
       renderAgent(root, 0);
     }
 
-    // Also render agents whose parent isn't in the current list
+    // Also render agents whose parent isn't in the current list (orphans)
+    const rendered = new Set(roots.map((r) => r.name));
+    function collectRendered(agent: AgentInfo) {
+      rendered.add(agent.name);
+      for (const child of childrenOf.get(agent.name) ?? []) {
+        collectRendered(child);
+      }
+    }
+    for (const root of roots) collectRendered(root);
+
     for (const agent of agents) {
-      if (agent.parentAgent && !agents.find((a) => a.name === agent.parentAgent)) {
+      if (!rendered.has(agent.name)) {
         lines.push(formatAgent(agent, "  "));
       }
     }

@@ -22,12 +22,40 @@ export interface HookOutput {
 
 const HOOKS_CONFIG_PATH = join(homedir(), ".loomkin", "hooks.json");
 
+const MAX_HOOKS_FILE_SIZE = 64 * 1024; // 64KB
+
+const VALID_EVENTS = new Set<HookDef["event"]>([
+  "PreToolUse",
+  "PostToolUse",
+  "SessionStart",
+  "SubagentStart",
+]);
+
+function isValidHookDef(h: unknown): h is HookDef {
+  if (typeof h !== "object" || h === null) return false;
+  const obj = h as Record<string, unknown>;
+  return (
+    typeof obj.command === "string" &&
+    obj.command.length > 0 &&
+    obj.command.length <= 4096 &&
+    typeof obj.event === "string" &&
+    VALID_EVENTS.has(obj.event as HookDef["event"])
+  );
+}
+
 export function loadHooks(): HookDef[] {
   if (!existsSync(HOOKS_CONFIG_PATH)) return [];
   try {
+    const stat = Bun.file(HOOKS_CONFIG_PATH);
+    if (stat.size > MAX_HOOKS_FILE_SIZE) {
+      console.error(`[hooks] config exceeds ${MAX_HOOKS_FILE_SIZE} bytes — skipping`);
+      return [];
+    }
     const raw = readFileSync(HOOKS_CONFIG_PATH, "utf-8");
     const parsed = JSON.parse(raw) as HooksConfig;
-    return parsed.hooks ?? [];
+    const hooks = parsed.hooks ?? [];
+    if (!Array.isArray(hooks)) return [];
+    return hooks.filter(isValidHookDef);
   } catch {
     return [];
   }

@@ -27,7 +27,7 @@ register({
         `  Latest version:   ${pc.dim("(checking in background...)")}`,
       );
       lines.push("");
-      lines.push(pc.dim("  You are up to date."));
+      lines.push(pc.dim("  Version check still in progress. Try again shortly."));
     }
 
     lines.push("");

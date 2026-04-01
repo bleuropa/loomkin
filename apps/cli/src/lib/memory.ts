@@ -27,7 +27,12 @@ export function getProjectMemoryDir(cwd?: string): string {
 }
 
 export function getAgentMemoryDir(agentName: string): string {
-  return join(homedir(), ".loomkin", "memory", "agents", agentName);
+  // Sanitize agentName to prevent path traversal
+  const safe = agentName
+    .replace(/[^a-zA-Z0-9_-]/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || "unknown";
+  return join(homedir(), ".loomkin", "memory", "agents", safe);
 }
 
 function ensureDir(dir: string): void {

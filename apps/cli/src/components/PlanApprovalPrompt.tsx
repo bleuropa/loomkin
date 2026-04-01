@@ -23,10 +23,14 @@ export function PlanApprovalPrompt({ plan, onRespond }: Props) {
       const elapsed = (Date.now() - plan.received_at) / 1000;
       const left = Math.max(0, Math.round(plan.timeout_ms / 1000 - elapsed));
       setRemaining(left);
-      if (left <= 0) clearInterval(interval);
+      if (left <= 0) {
+        clearInterval(interval);
+        // Auto-reject when timer expires so the prompt doesn't become a zombie
+        onRespond(plan.plan_id, "rejected", "expired — no response within time limit");
+      }
     }, 1000);
     return () => clearInterval(interval);
-  }, [plan.plan_id, plan.received_at, plan.timeout_ms]);
+  }, [plan.plan_id, plan.received_at, plan.timeout_ms, onRespond]);
 
   useInput(
     (input) => {
