@@ -184,6 +184,35 @@ export function useSessionChannel() {
         agent_name: null,
         inserted_at: new Date().toISOString(),
       });
+
+      // Auto-compact if enabled and threshold reached
+      const appState = useAppStore.getState();
+      const now = Date.now();
+      const cooldownPassed =
+        !appState.lastAutoCompactAt || now - appState.lastAutoCompactAt > 60_000;
+
+      if (
+        appState.autoCompact &&
+        typeof percent === "number" &&
+        percent >= 85 &&
+        cooldownPassed
+      ) {
+        const liveChannel = useChannelStore.getState().getChannel();
+        if (liveChannel) {
+          liveChannel.push("compact_history", {});
+          appState.setLastAutoCompactAt(now);
+          store.addMessage({
+            id: `auto-compact-${now}`,
+            role: "system",
+            content: `Auto-compacting conversation (context at ${percent}% — threshold: 85%)`,
+            tool_calls: null,
+            tool_call_id: null,
+            token_count: null,
+            agent_name: null,
+            inserted_at: new Date().toISOString(),
+          });
+        }
+      }
     });
 
     return () => {

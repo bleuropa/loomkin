@@ -69,6 +69,7 @@ const cli = meow(
     --tool-timeout                  Per-tool execution timeout in ms
     --dry-run                       Parse and validate without executing
     --cost-limit                    Maximum spend in USD; stop if exceeded
+    --no-auto-compact               Disable automatic context compaction at 85% usage
 
   Examples
     $ loomkin
@@ -119,6 +120,11 @@ const cli = meow(
       costLimit: { type: "number" },
       noUpdateCheck: { type: "boolean", default: false },
       thinkingBudget: { type: "number" },
+      noAutoCompact: {
+        type: "boolean",
+        default: false,
+        description: "Disable automatic context compaction",
+      },
     },
   },
 );
@@ -303,6 +309,7 @@ async function main() {
   if (cli.flags.dryRun) store.setDryRun(true);
   if (cli.flags.costLimit != null) store.setCostLimit(cli.flags.costLimit);
   if (cli.flags.thinkingBudget != null) store.setThinkingBudget(cli.flags.thinkingBudget);
+  if (cli.flags.noAutoCompact) store.setAutoCompact(false);
   if (cli.flags.logFile) {
     store.setLogFile(cli.flags.logFile);
     // Open (create/truncate) the log file synchronously so we can append to it

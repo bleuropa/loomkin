@@ -74,6 +74,10 @@ export interface AppState {
   // Extended thinking budget (null = disabled)
   thinkingBudget: number | null;
 
+  // Auto-compact: automatically trigger compaction when context budget >= 85%
+  autoCompact: boolean;
+  lastAutoCompactAt: number | null;
+
   // Show model picker once after first connect (set on startup)
   showModelPickerOnConnect: boolean;
   setShowModelPickerOnConnect: (show: boolean) => void;
@@ -118,6 +122,8 @@ export interface AppState {
   setUpdateAvailable: (version: string | null) => void;
   setPlanMode: (enabled: boolean) => void;
   setThinkingBudget: (budget: number | null) => void;
+  setAutoCompact: (v: boolean) => void;
+  setLastAutoCompactAt: (ts: number) => void;
 }
 
 const config = getConfig();
@@ -165,6 +171,9 @@ export const appStore = createStore<AppState>((set, get) => ({
   planMode: false,
 
   thinkingBudget: null,
+
+  autoCompact: true,
+  lastAutoCompactAt: null,
 
   showModelPickerOnConnect: false,
   setShowModelPickerOnConnect: (show) => set({ showModelPickerOnConnect: show }),
@@ -236,6 +245,8 @@ export const appStore = createStore<AppState>((set, get) => ({
   setUpdateAvailable: (updateAvailable) => set({ updateAvailable }),
   setPlanMode: (planMode) => set({ planMode }),
   setThinkingBudget: (thinkingBudget) => set({ thinkingBudget }),
+  setAutoCompact: (autoCompact) => set({ autoCompact }),
+  setLastAutoCompactAt: (lastAutoCompactAt) => set({ lastAutoCompactAt }),
 }));
 
 export const useAppStore = appStore;
