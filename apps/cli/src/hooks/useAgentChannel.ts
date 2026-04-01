@@ -4,6 +4,10 @@ import { useSessionStore } from "../stores/sessionStore.js";
 import { useAgentStore } from "../stores/agentStore.js";
 import { useConversationStore } from "../stores/conversationStore.js";
 import { useChannelStore } from "../stores/channelStore.js";
+import {
+  getAgentCostsForSession,
+  setAgentCostForSession,
+} from "../lib/config.js";
 
 import type { ConversationInfo, Message } from "../lib/types.js";
 
@@ -29,6 +33,22 @@ export function useAgentChannel() {
   const channel = useStore(useChannelStore, (s) => s.channel);
   const agentsMap = useStore(useAgentStore, (s) => s.agents);
   const notifyCounter = useRef(0);
+
+  // Restore persisted costs for the current session on channel connect
+  useEffect(() => {
+    if (!channel) return;
+    const topic = useChannelStore.getState().topic ?? "";
+    const sessionId = topic.startsWith("session:") ? topic.slice(8) : null;
+    if (!sessionId) return;
+
+    const savedCosts = getAgentCostsForSession(sessionId);
+    for (const [agentName, entry] of Object.entries(savedCosts)) {
+      useAgentStore.getState().upsertAgent(agentName, {
+        costUsd: entry.costUsd,
+        tokensUsed: entry.tokensUsed,
+      });
+    }
+  }, [channel]);
 
   useEffect(() => {
     if (!channel) return;
@@ -94,6 +114,18 @@ export function useAgentChannel() {
           tokensUsed: payload.tokens_used,
           costUsd: payload.cost_usd,
         });
+
+        // Persist to config keyed by session
+        const topic = useChannelStore.getState().topic ?? "";
+        const sessionId = topic.startsWith("session:") ? topic.slice(8) : null;
+        if (sessionId && payload.cost_usd != null && payload.tokens_used != null) {
+          setAgentCostForSession(
+            sessionId,
+            payload.agent_name,
+            payload.cost_usd,
+            payload.tokens_used,
+          );
+        }
       },
     );
 

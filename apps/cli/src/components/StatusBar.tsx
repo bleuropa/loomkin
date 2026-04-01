@@ -27,6 +27,17 @@ export function StatusBar() {
     }
     return count;
   });
+  const teamCostData = useStore(useAgentStore, (s) => {
+    let totalCost = 0;
+    let agentsWithCost = 0;
+    for (const agent of s.agents.values()) {
+      if (agent.costUsd != null && agent.costUsd > 0) {
+        totalCost += agent.costUsd;
+        agentsWithCost++;
+      }
+    }
+    return { totalCost, agentsWithCost };
+  });
   const splitMode = useStore(usePaneStore, (s) => s.splitMode);
   const selectedAgent = useStore(usePaneStore, (s) => s.selectedAgent);
   const focusedTarget = useStore(usePaneStore, (s) => s.focusedTarget);
@@ -34,6 +45,7 @@ export function StatusBar() {
   const vimMode = useStore(useAppStore, (s) => s.vimMode);
   const gitBranch = useStore(useAppStore, (s) => s.gitBranch);
   const updateAvailable = useStore(useAppStore, (s) => s.updateAvailable);
+  const autoCompact = useStore(useAppStore, (s) => s.autoCompact);
 
   const isConnected = connectionState === "connected";
   const isReconnecting =
@@ -110,11 +122,19 @@ export function StatusBar() {
             ctx:<Text bold>{contextBudgetPercent}%</Text>
           </Text>
         )}
+        {!autoCompact && <Text dimColor>no-ac</Text>}
         {hasActivityGroup && <Text dimColor>│</Text>}
         {agentCount > 0 && (
           <Text dimColor>
             agents:<Text bold color={workingCount > 0 ? "green" : undefined}>
               {workingCount}/{agentCount}
+            </Text>
+          </Text>
+        )}
+        {agentCount >= 2 && teamCostData.agentsWithCost >= 2 && (
+          <Text dimColor>
+            team:<Text bold>
+              {agentCount} | {formatCost(teamCostData.totalCost)}
             </Text>
           </Text>
         )}

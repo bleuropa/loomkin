@@ -3,6 +3,11 @@ import { join } from "path";
 import { homedir } from "os";
 import { DEFAULT_MODE, DEFAULT_MODEL, DEFAULT_SERVER_URL } from "./constants.js";
 
+export interface AgentCostEntry {
+  costUsd: number;
+  tokensUsed: number;
+}
+
 export interface LoomkinConfig {
   serverUrl: string;
   token: string | null;
@@ -11,6 +16,7 @@ export interface LoomkinConfig {
   lastSessionId: string | null;
   theme: string;
   keybindMode: "default" | "vim";
+  agentCosts: Record<string, Record<string, AgentCostEntry>>;
 }
 
 const config = new Conf<LoomkinConfig>({
@@ -23,6 +29,7 @@ const config = new Conf<LoomkinConfig>({
     lastSessionId: null,
     theme: "loomkin",
     keybindMode: "default",
+    agentCosts: {},
   },
 });
 
@@ -54,4 +61,39 @@ export function setLastSessionId(sessionId: string | null): void {
 
 export function getHistoryPath(): string {
   return join(homedir(), ".loomkin", "history.json");
+}
+
+const MAX_COST_SESSIONS = 10;
+
+export function getAgentCostsForSession(
+  sessionId: string,
+): Record<string, AgentCostEntry> {
+  const allCosts = config.get("agentCosts") ?? {};
+  return allCosts[sessionId] ?? {};
+}
+
+export function setAgentCostForSession(
+  sessionId: string,
+  agentName: string,
+  costUsd: number,
+  tokensUsed: number,
+): void {
+  const allCosts: Record<string, Record<string, AgentCostEntry>> =
+    config.get("agentCosts") ?? {};
+
+  if (!allCosts[sessionId]) {
+    allCosts[sessionId] = {};
+  }
+  allCosts[sessionId][agentName] = { costUsd, tokensUsed };
+
+  // Trim to last MAX_COST_SESSIONS sessions
+  const keys = Object.keys(allCosts);
+  if (keys.length > MAX_COST_SESSIONS) {
+    const toRemove = keys.slice(0, keys.length - MAX_COST_SESSIONS);
+    for (const k of toRemove) {
+      delete allCosts[k];
+    }
+  }
+
+  config.set("agentCosts", allCosts);
 }
