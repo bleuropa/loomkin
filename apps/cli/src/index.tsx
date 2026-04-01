@@ -31,6 +31,7 @@ import { getGitContext, getGitBranch } from "./lib/git.js";
 import { loadKeybindings } from "./lib/keybindingParser.js";
 import { checkForUpdate, getUpdateAvailable } from "./lib/updater.js";
 import { loadAllMemories, formatMemoriesForPrompt } from "./lib/memory.js";
+import { loadSessionMemory } from "./lib/sessionExtractor.js";
 import { loadPlugins } from "./lib/plugins.js";
 
 const cli = meow(
@@ -209,6 +210,20 @@ async function resumeSession(sessionId: string): Promise<boolean> {
     const { messages } = await getSessionMessages(sessionId);
     if (messages.length > 0) {
       useSessionStore.getState().loadMessages(messages);
+    }
+    // Load session memory if it was previously extracted
+    const sessionMemory = loadSessionMemory(sessionId);
+    if (sessionMemory) {
+      useSessionStore.getState().addMessage({
+        id: `session-memory-${sessionId}`,
+        role: "system",
+        content: `[Restored session memory]\n${sessionMemory}`,
+        tool_calls: null,
+        tool_call_id: null,
+        token_count: null,
+        agent_name: null,
+        inserted_at: new Date().toISOString(),
+      });
     }
     setLastSessionId(sessionId);
     console.error(pc.green(`Resumed session ${sessionId.slice(0, 8)} (${messages.length} messages)`));
