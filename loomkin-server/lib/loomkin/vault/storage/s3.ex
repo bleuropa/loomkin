@@ -62,9 +62,8 @@ defmodule Loomkin.Vault.Storage.S3 do
   @impl true
   def list(prefix, opts) do
     bucket = Keyword.fetch!(opts, :bucket)
-    full_prefix = s3_key(prefix, opts)
-    full_prefix = ensure_trailing_slash(full_prefix)
     vault_prefix = Keyword.get(opts, :prefix, "vault/")
+    full_prefix = ensure_trailing_slash(vault_prefix <> prefix)
 
     bucket
     |> ExAws.S3.list_objects_v2(prefix: full_prefix)
