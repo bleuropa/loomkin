@@ -45,41 +45,51 @@ defmodule LoomkinWeb.HomeLive do
               <svg
                 width="24"
                 height="24"
-                viewBox="0 0 52 52"
+                viewBox="0 0 32 32"
                 fill="none"
                 class="opacity-80 group-hover:opacity-100 transition-opacity"
               >
-                <ellipse
-                  cx="26"
-                  cy="26"
-                  rx="18"
-                  ry="8"
-                  transform="rotate(-30 26 26)"
-                  stroke="#7C3AED"
-                  stroke-width="2.5"
-                  fill="none"
+                <%!-- Owl head silhouette --%>
+                <path
+                  d="M16 4C10 4 6 8 6 14c0 4 2 7 4 9l2 3c1 1.5 2.5 2 4 2s3-.5 4-2l2-3c2-2 4-5 4-9 0-6-4-10-10-10z"
+                  fill="var(--surface-2)"
+                  stroke="var(--brand)"
+                  stroke-width="1.5"
                 />
-                <ellipse
-                  cx="26"
-                  cy="26"
-                  rx="18"
-                  ry="8"
-                  transform="rotate(30 26 26)"
-                  stroke="#22d3ee"
-                  stroke-width="2.5"
-                  fill="none"
-                  opacity="0.6"
+                <%!-- Ear tufts --%>
+                <path
+                  d="M10 6L8 2M22 6l2-4"
+                  stroke="var(--brand)"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
                 />
-                <ellipse
-                  cx="26"
-                  cy="26"
-                  rx="18"
-                  ry="8"
-                  transform="rotate(90 26 26)"
-                  stroke="#a78bfa"
-                  stroke-width="2.5"
-                  fill="none"
-                  opacity="0.5"
+                <%!-- Left eye --%>
+                <circle
+                  cx="12"
+                  cy="14"
+                  r="3.5"
+                  fill="var(--surface-0)"
+                  stroke="var(--accent-amber)"
+                  stroke-width="1"
+                />
+                <circle cx="12" cy="14" r="1.5" fill="var(--accent-amber)" />
+                <%!-- Right eye --%>
+                <circle
+                  cx="20"
+                  cy="14"
+                  r="3.5"
+                  fill="var(--surface-0)"
+                  stroke="var(--accent-amber)"
+                  stroke-width="1"
+                />
+                <circle cx="20" cy="14" r="1.5" fill="var(--accent-amber)" />
+                <%!-- Beak --%>
+                <path
+                  d="M14.5 18L16 20l1.5-2"
+                  stroke="var(--accent-peach)"
+                  stroke-width="1.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
                 />
               </svg>
               <span
@@ -139,74 +149,71 @@ defmodule LoomkinWeb.HomeLive do
 
   defp signed_out_hero(assigns) do
     ~H"""
-    <div class="pt-24 pb-20 text-center">
-      <div class="inline-block mb-6">
-        <svg
-          width="64"
-          height="64"
-          viewBox="0 0 52 52"
-          fill="none"
-          class="drop-shadow-[0_0_20px_rgba(124,58,237,0.25)]"
+    <div class="pt-32 pb-24">
+      <%!-- Atmospheric glow behind the text --%>
+      <div
+        class="absolute top-20 left-1/2 -translate-x-1/2 w-[600px] h-[300px] rounded-full blur-[120px] opacity-20 pointer-events-none"
+        style="background: radial-gradient(ellipse, var(--accent-mauve), transparent 70%);"
+      />
+
+      <div class="relative text-center">
+        <p
+          class="text-[11px] font-mono uppercase tracking-[0.3em] mb-6"
+          style="color: var(--text-muted);"
         >
-          <ellipse
-            cx="26"
-            cy="26"
-            rx="18"
-            ry="8"
-            transform="rotate(-30 26 26)"
-            stroke="url(#eh1)"
-            stroke-width="1.5"
-            fill="none"
-          />
-          <ellipse
-            cx="26"
-            cy="26"
-            rx="18"
-            ry="8"
-            transform="rotate(30 26 26)"
-            stroke="url(#eh2)"
-            stroke-width="1.5"
-            fill="none"
-          />
-          <ellipse
-            cx="26"
-            cy="26"
-            rx="18"
-            ry="8"
-            transform="rotate(90 26 26)"
-            stroke="url(#eh3)"
-            stroke-width="1.5"
-            fill="none"
-          />
-          <defs>
-            <linearGradient id="eh1" x1="8" y1="18" x2="44" y2="34" gradientUnits="userSpaceOnUse">
-              <stop stop-color="#7C3AED" />
-              <stop offset="1" stop-color="#a78bfa" />
-            </linearGradient>
-            <linearGradient id="eh2" x1="8" y1="34" x2="44" y2="18" gradientUnits="userSpaceOnUse">
-              <stop stop-color="#22d3ee" stop-opacity="0.6" />
-              <stop offset="1" stop-color="#7C3AED" />
-            </linearGradient>
-            <linearGradient id="eh3" x1="26" y1="8" x2="26" y2="44" gradientUnits="userSpaceOnUse">
-              <stop stop-color="#a78bfa" stop-opacity="0.5" />
-              <stop offset="1" stop-color="#22d3ee" stop-opacity="0.7" />
-            </linearGradient>
-          </defs>
-        </svg>
+          agent orchestration platform
+        </p>
+
+        <h1
+          class="text-5xl md:text-6xl font-light tracking-tight mb-1"
+          style="color: var(--text-primary);"
+        >
+          loom<span class="font-semibold" style="color: var(--brand);">kin</span>
+        </h1>
+
+        <div
+          class="w-16 h-px mx-auto my-6"
+          style="background: linear-gradient(90deg, transparent, var(--brand), transparent);"
+        />
+
+        <p
+          class="text-sm max-w-sm mx-auto leading-relaxed"
+          style="color: var(--text-secondary);"
+        >
+          AI agent teams that work alongside yours. <br />
+          <span style="color: var(--text-muted);">Orchestrate, delegate, and build — together.</span>
+        </p>
       </div>
-      <h1 class="text-3xl font-light tracking-tight mb-3" style="color: var(--text-primary);">
-        Welcome to <span class="font-semibold">Loomkin</span>
-      </h1>
-      <p class="text-sm max-w-md mx-auto leading-relaxed mb-8" style="color: var(--text-muted);">
-        AI agent teams that work alongside yours. Orchestrate, delegate, and build — together.
-      </p>
-      <.link
-        href={~p"/users/log-in"}
-        class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium text-white transition-all"
-        style="background: var(--brand);"
-      >
-        Log in to continue
-      </.link>
+
+      <%!-- Capability hints — quiet, not CTAs --%>
+      <div class="flex items-center justify-center gap-8 mt-16">
+        <div
+          :for={
+            {label, icon_path} <- [
+              {"Knowledge Vaults",
+               "M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"},
+              {"Agent Teams",
+               "M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"},
+              {"Decision Graphs",
+               "M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"}
+            ]
+          }
+          class="flex items-center gap-2"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            class="w-3.5 h-3.5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="1.5"
+            style="color: var(--text-muted);"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d={icon_path} />
+          </svg>
+          <span class="text-xs" style="color: var(--text-muted);">{label}</span>
+        </div>
+      </div>
     </div>
     """
   end
