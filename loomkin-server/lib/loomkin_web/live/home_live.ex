@@ -174,11 +174,80 @@ defmodule LoomkinWeb.HomeLive do
 
       <div class="relative text-center">
         <p
-          class="text-[11px] font-mono uppercase tracking-[0.3em] mb-6"
+          class="text-[11px] font-mono uppercase tracking-[0.3em] mb-8"
           style="color: var(--text-muted);"
         >
           agent orchestration platform
         </p>
+
+        <%!-- Owl perched above the wordmark --%>
+        <div class="mb-4">
+          <svg
+            width="56"
+            height="56"
+            viewBox="0 0 32 32"
+            fill="none"
+            class="mx-auto drop-shadow-[0_0_24px_rgba(180,160,232,0.2)]"
+          >
+            <%!-- Nestled body --%>
+            <path
+              d="M16 3C9.5 3 5.5 7.5 5.5 13.5c0 3.5 1.5 6.5 3.5 8.5C11 24 13 26 16 26s5-2 7-4c2-2 3.5-5 3.5-8.5C26.5 7.5 22.5 3 16 3z"
+              fill="var(--surface-1)"
+              stroke="var(--brand)"
+              stroke-width="1"
+            />
+            <%!-- Ear tufts --%>
+            <path
+              d="M11 5.5L9.5 2.5M21 5.5l1.5-3"
+              stroke="var(--brand)"
+              stroke-width="1.2"
+              stroke-linecap="round"
+            />
+            <%!-- Wings --%>
+            <path
+              d="M8 16c1.5 2 2.5 4.5 3 7M24 16c-1.5 2-2.5 4.5-3 7"
+              stroke="var(--brand)"
+              stroke-width="0.8"
+              stroke-linecap="round"
+              opacity="0.3"
+            />
+            <%!-- Chest feathers --%>
+            <path
+              d="M13 20c1-.6 2-.9 3-.9s2 .3 3 .9M13.5 22c.8-.4 1.6-.6 2.5-.6s1.7.2 2.5.6"
+              stroke="var(--brand)"
+              stroke-width="0.7"
+              stroke-linecap="round"
+              opacity="0.2"
+            />
+            <%!-- Eyes --%>
+            <circle
+              cx="12"
+              cy="13"
+              r="3.5"
+              fill="var(--surface-0)"
+              stroke="var(--accent-amber)"
+              stroke-width="0.8"
+            />
+            <circle cx="12.3" cy="12.7" r="1.5" fill="var(--accent-amber)" />
+            <circle
+              cx="20"
+              cy="13"
+              r="3.5"
+              fill="var(--surface-0)"
+              stroke="var(--accent-amber)"
+              stroke-width="0.8"
+            />
+            <circle cx="20.3" cy="12.7" r="1.5" fill="var(--accent-amber)" />
+            <%!-- Beak --%>
+            <path
+              d="M15 17l1 1.5 1-1.5"
+              stroke="var(--accent-peach)"
+              stroke-width="1"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
 
         <h1
           class="text-5xl md:text-6xl font-light tracking-tight mb-1"
