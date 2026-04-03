@@ -148,23 +148,54 @@ defmodule LoomkinWeb.VaultBrowserLive do
         <div class="max-w-7xl mx-auto flex items-center gap-6">
           <%!-- Vault identity --%>
           <div class="flex items-center gap-3">
-            <div class="vault-icon-ring">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                class="w-4 h-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="1.5"
-                style="color: var(--brand);"
-              >
+            <.link navigate="/" class="vault-owl-mark" title="Home">
+              <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+                <%!-- Body --%>
                 <path
+                  d="M16 5C10.5 5 7 9 7 14c0 3 1.5 6 3.5 8C12.5 24 14 25.5 16 25.5s3.5-1.5 5.5-3.5c2-2 3.5-5 3.5-8 0-5-3.5-9-9-9z"
+                  fill="var(--surface-1)"
+                  stroke="var(--brand)"
+                  stroke-width="0.8"
+                />
+                <%!-- Ear tufts --%>
+                <path
+                  d="M11 7.5L9.5 4M21 7.5l1.5-3.5"
+                  stroke="var(--brand)"
+                  stroke-width="0.8"
+                  stroke-linecap="round"
+                />
+                <%!-- Left eye --%>
+                <circle
+                  cx="13"
+                  cy="14"
+                  r="3"
+                  fill="var(--surface-0)"
+                  stroke="var(--accent-amber)"
+                  stroke-width="0.6"
+                />
+                <circle cx="13.2" cy="13.7" r="1.3" fill="var(--accent-amber)" />
+                <circle cx="12.6" cy="13.2" r="0.4" fill="var(--surface-0)" opacity="0.7" />
+                <%!-- Right eye --%>
+                <circle
+                  cx="19"
+                  cy="14"
+                  r="3"
+                  fill="var(--surface-0)"
+                  stroke="var(--accent-amber)"
+                  stroke-width="0.6"
+                />
+                <circle cx="19.2" cy="13.7" r="1.3" fill="var(--accent-amber)" />
+                <circle cx="18.6" cy="13.2" r="0.4" fill="var(--surface-0)" opacity="0.7" />
+                <%!-- Beak --%>
+                <path
+                  d="M15 18l1 1.5 1-1.5"
+                  stroke="var(--accent-peach)"
+                  stroke-width="0.8"
                   stroke-linecap="round"
                   stroke-linejoin="round"
-                  d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"
                 />
               </svg>
-            </div>
+            </.link>
             <div>
               <h1 class="text-base font-semibold" style="color: var(--text-primary);">
                 {@vault.name}
