@@ -19,6 +19,7 @@ defmodule LoomkinWeb.VaultEntryLive do
         {:ok, entry} ->
           backlinks = Index.backlinks(slug, path)
           rendered_html = render_vault_markdown(entry.body, slug)
+          headings = extract_headings(entry.body)
 
           {:ok,
            assign(socket,
@@ -28,6 +29,7 @@ defmodule LoomkinWeb.VaultEntryLive do
              entry: entry,
              backlinks: backlinks,
              rendered_html: rendered_html,
+             headings: headings,
              page_title: entry.title || Path.basename(path, ".md")
            )}
 
@@ -87,134 +89,169 @@ defmodule LoomkinWeb.VaultEntryLive do
         </span>
       </header>
 
-      <%!-- Content area --%>
-      <div class="max-w-3xl mx-auto px-6 py-8 md:py-12">
-        <%!-- Entry header --%>
-        <div class="mb-8">
-          <h1
-            class="text-2xl md:text-3xl font-semibold leading-tight mb-4"
-            style="color: var(--text-primary);"
+      <%!-- Content area — 2-column: article + sidebar --%>
+      <div class="max-w-6xl mx-auto px-6 py-8 md:py-12 flex gap-10">
+        <%!-- Main column --%>
+        <div class="min-w-0 flex-1 max-w-3xl">
+          <%!-- Entry header --%>
+          <div class="mb-8">
+            <h1
+              class="text-2xl md:text-3xl font-semibold leading-tight mb-2"
+              style="color: var(--text-primary);"
+            >
+              {@entry.title || Path.basename(@path, ".md")}
+            </h1>
+            <div class="flex items-center gap-2 mt-2">
+              <span
+                :if={@entry.entry_type}
+                class="text-xs font-medium uppercase tracking-wider px-2 py-1 rounded-md"
+                style="background: var(--brand-subtle); color: var(--text-brand);"
+              >
+                {@entry.entry_type}
+              </span>
+              <span :if={meta_date(@entry)} class="text-xs" style="color: var(--text-muted);">
+                {meta_date(@entry)}
+              </span>
+              <span :if={meta_author(@entry)} class="text-xs" style="color: var(--text-muted);">
+                by {meta_author(@entry)}
+              </span>
+            </div>
+          </div>
+
+          <%!-- Rendered markdown body --%>
+          <article class="vault-prose" id="vault-entry-body">
+            {raw(@rendered_html)}
+          </article>
+
+          <%!-- Backlinks --%>
+          <div
+            :if={@backlinks != []}
+            class="mt-12 pt-8 border-t"
+            style="border-color: var(--border-subtle);"
           >
-            {@entry.title || Path.basename(@path, ".md")}
-          </h1>
-
-          <div class="flex flex-wrap items-center gap-3">
-            <span
-              :if={@entry.entry_type}
-              class="text-xs font-medium uppercase tracking-wider px-2 py-1 rounded-md"
-              style="background: var(--brand-subtle); color: var(--text-brand);"
-            >
-              {@entry.entry_type}
-            </span>
-
-            <span
-              :if={meta_date(@entry)}
-              class="flex items-center gap-1.5 text-xs"
+            <h2
+              class="flex items-center gap-2 text-xs font-medium uppercase tracking-wider mb-4"
               style="color: var(--text-muted);"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                class="w-3.5 h-3.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="1.5"
+              Linked from ({length(@backlinks)})
+            </h2>
+            <div class="space-y-1">
+              <.link
+                :for={bl <- @backlinks}
+                navigate={~p"/vault/#{@slug}/#{bl.path}"}
+                class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-[var(--surface-1)]"
+                style="color: var(--text-secondary);"
               >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                />
-              </svg>
-              {meta_date(@entry)}
-            </span>
-
-            <span
-              :if={meta_author(@entry)}
-              class="flex items-center gap-1.5 text-xs"
-              style="color: var(--text-muted);"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                class="w-3.5 h-3.5"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="1.5"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                />
-              </svg>
-              {meta_author(@entry)}
-            </span>
-
-            <span
-              :for={tag <- @entry.tags || []}
-              class="text-xs px-2 py-0.5 rounded-full"
-              style="background: var(--brand-muted); color: var(--text-brand);"
-            >
-              {tag}
-            </span>
+                <span
+                  class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
+                  style="background: var(--surface-2); color: var(--text-muted);"
+                >
+                  {bl.link_type}
+                </span>
+                <span class="hover:text-[var(--brand)]">
+                  {bl.title || Path.basename(bl.path, ".md")}
+                </span>
+              </.link>
+            </div>
           </div>
         </div>
 
-        <%!-- Rendered markdown body --%>
-        <article class="vault-prose" id="vault-entry-body">
-          {raw(@rendered_html)}
-        </article>
-
-        <%!-- Backlinks --%>
-        <div
-          :if={@backlinks != []}
-          class="mt-12 pt-8 border-t"
-          style="border-color: var(--border-subtle);"
-        >
-          <h2
-            class="flex items-center gap-2 text-xs font-medium uppercase tracking-wider mb-4"
-            style="color: var(--text-muted);"
+        <%!-- Sidebar — metadata + TOC --%>
+        <aside class="hidden lg:block w-56 shrink-0 sticky top-20 self-start space-y-6">
+          <%!-- Metadata --%>
+          <div
+            class="rounded-lg p-4 space-y-3"
+            style="background: var(--surface-1); border: 1px solid var(--border-subtle);"
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              class="w-3.5 h-3.5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              stroke-width="1.5"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-              />
-            </svg>
-            Linked from ({length(@backlinks)})
-          </h2>
-
-          <div class="space-y-1">
-            <.link
-              :for={bl <- @backlinks}
-              navigate={~p"/vault/#{@slug}/#{bl.path}"}
-              class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-[var(--surface-1)]"
-              style="color: var(--text-secondary);"
-            >
+            <div :if={meta_val(@entry, "status")} class="text-xs">
               <span
-                class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
-                style="background: var(--surface-2); color: var(--text-muted);"
+                class="block font-medium uppercase tracking-wider mb-1"
+                style="color: var(--text-muted);"
               >
-                {bl.link_type}
+                Status
               </span>
               <span
-                class="hover:text-[var(--brand)]"
-                style="transition: color var(--transition-fast);"
+                class="inline-block px-2 py-0.5 rounded text-xs font-medium"
+                style={"background: #{status_color(meta_val(@entry, "status"))}; color: var(--surface-0);"}
               >
-                {bl.title || Path.basename(bl.path, ".md")}
+                {meta_val(@entry, "status")}
               </span>
-            </.link>
+            </div>
+            <div :if={meta_date(@entry)} class="text-xs">
+              <span
+                class="block font-medium uppercase tracking-wider mb-1"
+                style="color: var(--text-muted);"
+              >
+                Date
+              </span>
+              <span style="color: var(--text-secondary);">{meta_date(@entry)}</span>
+            </div>
+            <div :if={meta_author(@entry)} class="text-xs">
+              <span
+                class="block font-medium uppercase tracking-wider mb-1"
+                style="color: var(--text-muted);"
+              >
+                Author
+              </span>
+              <span style="color: var(--text-secondary);">{meta_author(@entry)}</span>
+            </div>
+            <div :if={meta_val(@entry, "id")} class="text-xs">
+              <span
+                class="block font-medium uppercase tracking-wider mb-1"
+                style="color: var(--text-muted);"
+              >
+                ID
+              </span>
+              <span class="font-mono" style="color: var(--text-secondary);">
+                {meta_val(@entry, "id")}
+              </span>
+            </div>
+            <div :if={(@entry.tags || []) != []} class="text-xs">
+              <span
+                class="block font-medium uppercase tracking-wider mb-1"
+                style="color: var(--text-muted);"
+              >
+                Tags
+              </span>
+              <div class="flex flex-wrap gap-1">
+                <span
+                  :for={tag <- @entry.tags}
+                  class="px-1.5 py-0.5 rounded"
+                  style="background: var(--brand-muted); color: var(--text-brand);"
+                >
+                  {tag}
+                </span>
+              </div>
+            </div>
+            <div class="text-xs">
+              <span
+                class="block font-medium uppercase tracking-wider mb-1"
+                style="color: var(--text-muted);"
+              >
+                Path
+              </span>
+              <span class="font-mono break-all" style="color: var(--text-muted);">{@path}</span>
+            </div>
           </div>
-        </div>
+
+          <%!-- Table of Contents --%>
+          <div :if={@headings != []} class="space-y-1">
+            <p
+              class="text-xs font-medium uppercase tracking-wider mb-2 px-1"
+              style="color: var(--text-muted);"
+            >
+              On this page
+            </p>
+            <a
+              :for={%{level: level, text: text, anchor: anchor} <- @headings}
+              href={"##{anchor}"}
+              class="block text-xs py-1 transition-colors hover:text-[var(--brand)]"
+              style={"color: var(--text-muted); padding-left: #{(level - 1) * 0.75}rem;"}
+            >
+              {text}
+            </a>
+          </div>
+        </aside>
       </div>
     </div>
     """
@@ -230,6 +267,17 @@ defmodule LoomkinWeb.VaultEntryLive do
     |> MDEx.to_html!(
       extension: [table: true, strikethrough: true, tasklist: true, autolink: true]
     )
+    |> add_heading_ids()
+  end
+
+  @heading_tag_regex ~r/<(h[1-4])>(.+?)<\/h[1-4]>/
+
+  defp add_heading_ids(html) do
+    Regex.replace(@heading_tag_regex, html, fn _, tag, text ->
+      plain = String.replace(text, ~r/<[^>]+>/, "")
+      anchor = slugify_heading(plain)
+      ~s(<#{tag} id="#{anchor}">#{text}</#{tag}>)
+    end)
   end
 
   defp convert_wiki_links(body, slug) do
@@ -247,4 +295,50 @@ defmodule LoomkinWeb.VaultEntryLive do
 
   defp meta_author(%{metadata: %{"author" => author}}) when is_binary(author), do: author
   defp meta_author(_), do: nil
+
+  defp meta_val(%{metadata: meta}, key) when is_map(meta) do
+    case Map.get(meta, key) do
+      val when is_binary(val) and val != "" -> val
+      _ -> nil
+    end
+  end
+
+  defp meta_val(_, _), do: nil
+
+  defp status_color("draft"), do: "var(--accent-amber)"
+  defp status_color("published"), do: "var(--accent-emerald)"
+  defp status_color("approved"), do: "var(--accent-emerald)"
+  defp status_color("implemented"), do: "var(--accent-cyan)"
+  defp status_color("planned"), do: "var(--accent-amber)"
+  defp status_color("in-progress"), do: "var(--accent-peach)"
+  defp status_color("done"), do: "var(--accent-emerald)"
+  defp status_color("archived"), do: "var(--text-muted)"
+  defp status_color("accepted"), do: "var(--accent-emerald)"
+  defp status_color("rejected"), do: "var(--accent-rose)"
+  defp status_color(_), do: "var(--surface-3)"
+
+  # --- Heading extraction for TOC ---
+
+  @heading_regex ~r/^(\#{1,4})\s+(.+)$/m
+
+  defp extract_headings(nil), do: []
+
+  defp extract_headings(body) do
+    Regex.scan(@heading_regex, body)
+    |> Enum.map(fn [_, hashes, text] ->
+      %{
+        level: String.length(hashes),
+        text: text |> String.trim(),
+        anchor: text |> String.trim() |> slugify_heading()
+      }
+    end)
+  end
+
+  defp slugify_heading(text) do
+    text
+    |> String.downcase()
+    |> String.replace(~r/[^\w\s-]/u, "")
+    |> String.replace(~r/[\s]+/, "-")
+    |> String.trim("-")
+  end
 end
