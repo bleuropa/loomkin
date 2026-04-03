@@ -2147,16 +2147,18 @@ body {
   margin-top: 2px;
 }
 
-.vault-icon-ring {
-  width: 2rem;
-  height: 2rem;
-  border-radius: var(--radius-md);
+.vault-owl-mark {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--brand-subtle);
-  border: 1px solid var(--border-brand);
-  box-shadow: var(--glow-brand);
+  transition: all var(--transition-base);
+  border-radius: var(--radius-md);
+  padding: 2px;
+}
+
+.vault-owl-mark:hover {
+  filter: drop-shadow(0 0 8px rgba(180, 160, 232, 0.35));
+  transform: scale(1.05);
 }
 
 .vault-search-input {
