@@ -67,7 +67,7 @@ export async function requestDeviceCode(): Promise<DeviceCodeResponse> {
     method: "POST",
     body: JSON.stringify({
       client_id: "loomkin-cli",
-      scope: "vault:read vault:write",
+      scope: "profile vault:read vault:write",
     }),
   });
 }

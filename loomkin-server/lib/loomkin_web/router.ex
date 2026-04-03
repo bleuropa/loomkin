@@ -29,6 +29,7 @@ defmodule LoomkinWeb.Router do
     post "/auth/login", AuthController, :login
     post "/auth/login/confirm", AuthController, :confirm
     post "/auth/anonymous", AuthController, :anonymous
+    post "/auth/bootstrap", AuthController, :bootstrap
 
     post "/device/code", DeviceAuthController, :create_code
     post "/device/token", DeviceAuthController, :poll_token

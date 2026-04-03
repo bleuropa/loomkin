@@ -144,6 +144,13 @@ export async function anonymousLogin(): Promise<AuthResponse> {
   return request<AuthResponse>("/auth/anonymous", { method: "POST" });
 }
 
+export async function bootstrapWithCloudToken(cloudToken: string): Promise<AuthResponse> {
+  return request<AuthResponse>("/auth/bootstrap", {
+    method: "POST",
+    body: JSON.stringify({ cloud_token: cloudToken }),
+  });
+}
+
 export async function confirmLogin(token: string): Promise<AuthResponse> {
   return request<AuthResponse>("/auth/login/confirm", {
     method: "POST",

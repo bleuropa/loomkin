@@ -11,6 +11,7 @@ defmodule Loomkin.Accounts.User do
     field :username, :string
     field :display_name, :string
     field :avatar_url, :string
+    field :cloud_user_id, :string
 
     timestamps(type: :utc_datetime)
   end
@@ -20,7 +21,7 @@ defmodule Loomkin.Accounts.User do
   """
   def registration_changeset(user, attrs, opts \\ []) do
     user
-    |> cast(attrs, [:email, :username, :display_name, :avatar_url])
+    |> cast(attrs, [:email, :username, :display_name, :avatar_url, :cloud_user_id])
     |> validate_email(opts)
     |> validate_username(opts)
     |> maybe_apply_password(attrs, opts)

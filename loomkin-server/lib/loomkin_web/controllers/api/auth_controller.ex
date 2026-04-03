@@ -125,6 +125,71 @@ defmodule LoomkinWeb.Api.AuthController do
     json(conn, %{user: serialize_user(user)})
   end
 
+  @doc """
+  POST /api/v1/auth/bootstrap
+  Accepts a loomkin.dev cloud token, validates it against loomkin.dev,
+  creates or links a local user, and returns a local session token.
+  """
+  def bootstrap(conn, %{"cloud_token" => cloud_token}) do
+    cloud_url = System.get_env("LOOMKIN_CLOUD_URL") || "https://loomkin.dev"
+
+    case verify_cloud_token(cloud_url, cloud_token) do
+      {:ok, cloud_user} ->
+        cloud_id = to_string(cloud_user["id"])
+
+        attrs = %{
+          email: cloud_user["email"],
+          username: cloud_user["username"],
+          display_name: cloud_user["display_name"],
+          avatar_url: cloud_user["avatar_url"]
+        }
+
+        case Accounts.find_or_create_user_by_cloud_id(cloud_id, attrs) do
+          {:ok, user} ->
+            token = Accounts.generate_user_session_token(user)
+
+            conn
+            |> put_status(:created)
+            |> json(%{
+              token: Base.url_encode64(token),
+              user: serialize_user(user)
+            })
+
+          {:error, changeset} ->
+            {:error, changeset}
+        end
+
+      {:error, :unauthorized} ->
+        conn
+        |> put_status(:unauthorized)
+        |> json(%{error: "invalid_cloud_token", message: "Cloud token is invalid or expired"})
+
+      {:error, :unreachable} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{
+          error: "cloud_unreachable",
+          message: "Could not reach loomkin.dev to verify token"
+        })
+    end
+  end
+
+  defp verify_cloud_token(cloud_url, token) do
+    url = "#{cloud_url}/api/v1/auth/me"
+    headers = [{"authorization", "Bearer #{token}"}, {"content-type", "application/json"}]
+
+    case Req.get(url, headers: headers, receive_timeout: 10_000) do
+      {:ok, %{status: 200, body: %{"user" => user}}} ->
+        {:ok, user}
+
+      {:ok, %{status: status}} when status in [401, 403] ->
+        {:error, :unauthorized}
+
+      _ ->
+        {:error, :unreachable}
+    end
+  end
+
   defp serialize_user(user) do
     %{
       id: user.id,

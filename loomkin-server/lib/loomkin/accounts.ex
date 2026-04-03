@@ -78,6 +78,22 @@ defmodule Loomkin.Accounts do
     Repo.get_by!(User, username: username)
   end
 
+  @doc """
+  Finds an existing user by cloud_user_id, or creates a new one from the given attributes.
+  Used by the CLI bootstrap flow after OAuth with loomkin.dev.
+  """
+  def find_or_create_user_by_cloud_id(cloud_user_id, attrs) when is_binary(cloud_user_id) do
+    case Repo.get_by(User, cloud_user_id: cloud_user_id) do
+      %User{} = user ->
+        {:ok, user}
+
+      nil ->
+        attrs
+        |> Map.put(:cloud_user_id, cloud_user_id)
+        |> then(&register_user/1)
+    end
+  end
+
   ## User registration
 
   @doc """
