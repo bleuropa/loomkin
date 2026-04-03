@@ -4,6 +4,8 @@ defmodule Loomkin.Vault.Validators.TemporalLanguage do
   Returns :ok or {:warn, violations} — never blocks writes.
   """
 
+  # Temporal types (spec, milestone, decision, meeting, checkin, okr) are intentionally
+  # excluded — they describe planned/time-bound work and use temporal language by design.
   @evergreen_types ~w(note topic project person idea source stream_idea guest_profile)
 
   @blocked_patterns [

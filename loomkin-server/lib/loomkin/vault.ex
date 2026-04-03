@@ -214,9 +214,12 @@ defmodule Loomkin.Vault do
                storage_type: "local",
                workspace_id: workspace_id
              }) do
-          {:ok, _config} -> {:ok, vault_id}
-          # Another process may have created it concurrently
-          {:error, %Ecto.Changeset{}} -> {:ok, vault_id}
+          {:ok, _config} ->
+            {:ok, vault_id}
+
+          {:error, %Ecto.Changeset{errors: errors}} ->
+            # Concurrent creation race — the vault exists now
+            if Keyword.has_key?(errors, :vault_id), do: {:ok, vault_id}, else: {:error, errors}
         end
     end
   end

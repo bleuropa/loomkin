@@ -70,13 +70,15 @@ defmodule Loomkin.Tools.VaultPromote do
   defp promote_entry(vault_id, entry, wip_prefix) do
     old_path = entry.path
 
-    canonical_path =
-      if String.starts_with?(old_path, wip_prefix) do
-        String.replace_leading(old_path, wip_prefix, "")
-      else
-        old_path
-      end
+    if not String.starts_with?(old_path, wip_prefix) do
+      {:error, "#{old_path}: not a WIP path (expected prefix #{wip_prefix})"}
+    else
+      canonical_path = String.replace_leading(old_path, wip_prefix, "")
+      do_promote(vault_id, entry, old_path, canonical_path)
+    end
+  end
 
+  defp do_promote(vault_id, entry, old_path, canonical_path) do
     # Update metadata: remove branch, set status to published
     promoted_metadata =
       entry.metadata
@@ -147,5 +149,7 @@ defmodule Loomkin.Tools.VaultPromote do
     |> Repo.update_all(set: [target_path: new_path])
 
     :ok
+  rescue
+    e -> {:error, "failed to update links: #{Exception.message(e)}"}
   end
 end

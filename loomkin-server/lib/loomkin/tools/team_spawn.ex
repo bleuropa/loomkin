@@ -50,6 +50,7 @@ defmodule Loomkin.Tools.TeamSpawn do
     parent_team_id = param(context, :parent_team_id)
     session_id = param(context, :session_id)
     model = param(context, :model)
+    vault_id = param(context, :vault_id)
     agent_name = param(context, :agent_name) || "architect"
 
     roles = param!(params, :roles)
@@ -62,6 +63,7 @@ defmodule Loomkin.Tools.TeamSpawn do
       parent_team_id,
       session_id,
       model,
+      vault_id,
       agent_name
     )
   end
@@ -74,6 +76,7 @@ defmodule Loomkin.Tools.TeamSpawn do
          parent_team_id,
          session_id,
          model,
+         vault_id,
          agent_name
        ) do
     require Logger
@@ -105,6 +108,7 @@ defmodule Loomkin.Tools.TeamSpawn do
           project_path,
           session_id,
           model,
+          vault_id,
           agent_name,
           parent_team_id
         )
@@ -119,6 +123,7 @@ defmodule Loomkin.Tools.TeamSpawn do
          project_path,
          session_id,
          model,
+         vault_id,
          requesting_agent,
          parent_team_id
        ) do
@@ -128,6 +133,7 @@ defmodule Loomkin.Tools.TeamSpawn do
       [project_path: project_path]
       |> then(fn opts -> if session_id, do: [{:session_id, session_id} | opts], else: opts end)
       |> then(fn opts -> if model, do: [{:model, model} | opts], else: opts end)
+      |> then(fn opts -> if vault_id, do: [{:vault_id, vault_id} | opts], else: opts end)
 
     spawn_results =
       Enum.map(roles, fn role_map ->

@@ -160,8 +160,6 @@ defmodule Loomkin.Tools.VaultCreateEntry do
         "source" -> "sources"
         "stream_idea" -> "ideas/streams"
         "guest_profile" -> "ideas/streams/guests"
-        "spec" -> "specs"
-        "milestone" -> "milestones"
         other -> other
       end
 

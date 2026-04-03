@@ -454,7 +454,9 @@ defmodule Loomkin.Teams.Manager do
         end
     end
   rescue
-    _ -> nil
+    e ->
+      Logger.warning("[Manager] vault resolution failed team=#{team_id}: #{Exception.message(e)}")
+      nil
   end
 
   @doc "Get the project path for a team from ETS metadata."
