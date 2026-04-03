@@ -46,6 +46,7 @@ defmodule LoomkinWeb.VaultBrowserLive do
 
     if Vault.user_can_access_vault?(user, vault) do
       type_counts = Vault.stats(slug).by_type
+      recent = Index.list(slug, limit: 5, order_by: {:desc, :updated_at})
       entries = Index.list(slug, limit: 50, order_by: {:desc, :updated_at})
 
       {:ok,
@@ -56,6 +57,7 @@ defmodule LoomkinWeb.VaultBrowserLive do
          type_counts: type_counts,
          active_type: nil,
          search_query: "",
+         recent: recent,
          page_title: vault.name
        )
        |> stream(:entries, entries)}
@@ -223,6 +225,66 @@ defmodule LoomkinWeb.VaultBrowserLive do
 
         <%!-- Main: entry list --%>
         <main class="flex-1 overflow-y-auto" style="background: var(--surface-0);">
+          <%!-- Recently updated --%>
+          <div
+            :if={@search_query == "" and @active_type == nil and @recent != []}
+            class="px-6 pt-5 pb-3"
+          >
+            <p
+              class="text-xs font-medium uppercase tracking-wider mb-3"
+              style="color: var(--text-muted);"
+            >
+              Recently updated
+            </p>
+            <div class="flex gap-3 overflow-x-auto pb-2">
+              <.link
+                :for={entry <- @recent}
+                navigate={~p"/vault/#{@slug}/#{entry.path}"}
+                class="shrink-0 w-52 rounded-lg p-3.5 transition-all hover:translate-y-[-1px] group/card"
+                style="background: var(--surface-1); border: 1px solid var(--border-subtle);"
+              >
+                <div class="flex items-center gap-2 mb-2">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    class={["w-3.5 h-3.5 shrink-0", type_color(entry.entry_type)]}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d={type_icon(entry.entry_type)}
+                    />
+                  </svg>
+                  <span
+                    class="text-[10px] uppercase tracking-wider"
+                    style="color: var(--text-muted);"
+                  >
+                    {entry.entry_type}
+                  </span>
+                </div>
+                <h3
+                  class="text-sm font-medium truncate group-hover/card:text-[var(--brand)]"
+                  style="color: var(--text-primary); transition: color 0.15s;"
+                >
+                  {entry.title || Path.basename(entry.path, ".md")}
+                </h3>
+                <p
+                  :if={body_preview(entry) != ""}
+                  class="text-xs mt-1 line-clamp-1"
+                  style="color: var(--text-muted);"
+                >
+                  {body_preview(entry)}
+                </p>
+                <span class="text-[10px] mt-2 block" style="color: var(--text-muted);">
+                  {format_date(entry.updated_at)}
+                </span>
+              </.link>
+            </div>
+          </div>
+
           <div
             id="entries"
             phx-update="stream"
@@ -301,7 +363,14 @@ defmodule LoomkinWeb.VaultBrowserLive do
             {@entry.entry_type}
           </span>
         </div>
-        <div class="flex items-center gap-3 mt-1">
+        <p
+          :if={body_preview(@entry) != ""}
+          class="text-xs mt-1 line-clamp-2 leading-relaxed"
+          style="color: var(--text-muted);"
+        >
+          {body_preview(@entry)}
+        </p>
+        <div class="flex items-center gap-3 mt-1.5">
           <span
             :if={@entry.updated_at}
             class="text-xs"
@@ -359,6 +428,20 @@ defmodule LoomkinWeb.VaultBrowserLive do
 
   defp total_count(type_counts) do
     type_counts |> Map.values() |> Enum.sum()
+  end
+
+  defp body_preview(%{body: nil}), do: ""
+  defp body_preview(%{body: ""}), do: ""
+
+  defp body_preview(%{body: body}) do
+    body
+    |> String.split("\n", trim: true)
+    |> Enum.reject(&String.starts_with?(String.trim(&1), "#"))
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.take(2)
+    |> Enum.join(" ")
+    |> String.slice(0, 200)
   end
 
   defp format_date(%DateTime{} = dt) do
