@@ -190,6 +190,9 @@ export function App() {
           s.setScrollOffset(Math.max(0, s.scrollOffset - 5));
         }
         break;
+      case "toggleVerboseToolOutput":
+        useAppStore.getState().toggleVerboseToolOutput();
+        break;
     }
   });
 

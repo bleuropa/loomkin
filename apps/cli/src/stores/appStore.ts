@@ -68,6 +68,10 @@ export interface AppState {
   // Update available (version string or null)
   updateAvailable: string | null;
 
+  // Verbose tool output (condensed mode when false)
+  verboseToolOutput: boolean;
+  toggleVerboseToolOutput: () => void;
+
   // Plan mode
   planMode: boolean;
 
@@ -171,6 +175,9 @@ export const appStore = createStore<AppState>((set, get) => ({
   customKeybindings: {},
 
   updateAvailable: null,
+
+  verboseToolOutput: true,
+  toggleVerboseToolOutput: () => set((state) => ({ verboseToolOutput: !state.verboseToolOutput })),
 
   planMode: false,
 

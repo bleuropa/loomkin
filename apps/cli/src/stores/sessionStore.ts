@@ -40,6 +40,9 @@ export interface SessionState {
   toolCallsSinceExtraction: number;
   extractionInProgress: boolean;
 
+  // Hook progress tracking
+  inProgressHookCounts: Map<string, number>;
+
   setSessionId: (id: string | null) => void;
   addMessage: (message: Message) => void;
   updateMessage: (id: string, partial: Partial<Message>) => void;
@@ -75,6 +78,8 @@ export interface SessionState {
   incrementToolCallsForExtraction: () => void;
   setExtractionInProgress: (v: boolean) => void;
   recordExtraction: (currentTokenCount: number) => void;
+  hookStarted: (toolUseId: string) => void;
+  hookCompleted: (toolUseId: string) => void;
 }
 
 export const sessionStore = createStore<SessionState>((set, _get) => ({
@@ -98,6 +103,7 @@ export const sessionStore = createStore<SessionState>((set, _get) => ({
   lastExtractionTokenCount: 0,
   toolCallsSinceExtraction: 0,
   extractionInProgress: false,
+  inProgressHookCounts: new Map(),
 
   setSessionId: (sessionId) => set({ sessionId }),
 
@@ -249,6 +255,37 @@ export const sessionStore = createStore<SessionState>((set, _get) => ({
 
   recordExtraction: (currentTokenCount) =>
     set({ lastExtractionTokenCount: currentTokenCount, toolCallsSinceExtraction: 0 }),
+
+  hookStarted: (toolUseId) =>
+    set((state) => {
+      const next = new Map(state.inProgressHookCounts);
+      next.set(toolUseId, (next.get(toolUseId) ?? 0) + 1);
+      return { inProgressHookCounts: next };
+    }),
+
+  hookCompleted: (toolUseId) =>
+    set((state) => {
+      const next = new Map(state.inProgressHookCounts);
+      const current = next.get(toolUseId) ?? 0;
+      next.set(toolUseId, Math.max(0, current - 1));
+      return { inProgressHookCounts: next };
+    }),
 }));
+
+/** Returns a map of messageId → ToolCall[] for any messageId that has 2+ pending tool calls. */
+export function getParallelGroups(pendingToolCalls: import("../lib/types.js").ToolCall[]): Map<string, import("../lib/types.js").ToolCall[]> {
+  const byMessage = new Map<string, import("../lib/types.js").ToolCall[]>();
+  for (const tc of pendingToolCalls) {
+    if (!tc.messageId) continue;
+    const group = byMessage.get(tc.messageId) ?? [];
+    group.push(tc);
+    byMessage.set(tc.messageId, group);
+  }
+  const result = new Map<string, import("../lib/types.js").ToolCall[]>();
+  for (const [msgId, calls] of byMessage) {
+    if (calls.length >= 2) result.set(msgId, calls);
+  }
+  return result;
+}
 
 export const useSessionStore = sessionStore;
