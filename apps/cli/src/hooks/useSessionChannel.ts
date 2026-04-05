@@ -114,13 +114,17 @@ export function useSessionChannel() {
     on("tool_call_started", (raw) => {
       const payload = raw as { tool_call: ToolCall };
       const store = useSessionStore.getState();
-      store.addPendingToolCall(payload.tool_call);
+      const messageId = store.currentStreamingMessageId ?? undefined;
+      store.addPendingToolCall({ ...payload.tool_call, messageId });
 
       // Run PreToolUse hooks asynchronously — deny prevents the tool from proceeding
+      const toolUseId = payload.tool_call.id;
+      useSessionStore.getState().hookStarted(toolUseId);
       void runHooks("PreToolUse", {
         tool: payload.tool_call.name,
         input: payload.tool_call.arguments,
       }).then((hookOutputs) => {
+        useSessionStore.getState().hookCompleted(toolUseId);
         const denied = hookOutputs.find((o) => o.decision === "deny");
         if (denied) {
           useChannelStore.getState().getChannel()?.push("tool_denied", {
@@ -142,7 +146,9 @@ export function useSessionChannel() {
             inserted_at: new Date().toISOString(),
           });
         }
-      }).catch(() => {});
+      }).catch(() => {
+        useSessionStore.getState().hookCompleted(toolUseId);
+      });
     });
 
     on("tool_call_completed", (raw) => {
@@ -186,10 +192,16 @@ export function useSessionChannel() {
       store.incrementToolCallsForExtraction();
 
       // Run PostToolUse hooks (fire-and-forget)
+      const postToolUseId = payload.tool_call.id;
+      useSessionStore.getState().hookStarted(postToolUseId);
       runHooks("PostToolUse", {
         tool: payload.tool_call.name,
         output: payload.tool_call.output,
-      }).catch(() => {});
+      }).then(() => {
+        useSessionStore.getState().hookCompleted(postToolUseId);
+      }).catch(() => {
+        useSessionStore.getState().hookCompleted(postToolUseId);
+      });
     });
 
     on("permission_request", (raw) => {

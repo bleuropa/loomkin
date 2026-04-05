@@ -43,15 +43,6 @@ export interface ToolCall {
   messageId?: string;
 }
 
-// ── Grouped Tool Display ──────────────────────────────────────────────────
-
-export interface GroupedToolCall {
-  toolUseIds: string[]
-  label: string          // e.g. "3 tools running in parallel"
-  isComplete: boolean
-  hasError: boolean
-}
-
 export interface PermissionRequest {
   id: string;
   tool_name: string;

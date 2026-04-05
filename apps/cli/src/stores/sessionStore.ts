@@ -15,6 +15,7 @@ export interface SessionState {
   messages: Message[];
   isStreaming: boolean;
   isPendingResponse: boolean;
+  currentStreamingMessageId: string | null;
   pendingToolCalls: ToolCall[];
   pendingPermissions: PermissionRequest[];
   pendingQuestions: AskUserQuestion[];
@@ -87,6 +88,7 @@ export const sessionStore = createStore<SessionState>((set, _get) => ({
   messages: [],
   isStreaming: false,
   isPendingResponse: false,
+  currentStreamingMessageId: null,
   pendingToolCalls: [],
   pendingPermissions: [],
   pendingQuestions: [],
@@ -121,12 +123,14 @@ export const sessionStore = createStore<SessionState>((set, _get) => ({
 
   clearMessages: () => set({ messages: [], scrollOffset: 0 }),
 
-  setStreaming: (isStreaming) => set({ isStreaming }),
+  setStreaming: (isStreaming) =>
+    set(isStreaming ? { isStreaming } : { isStreaming, currentStreamingMessageId: null }),
 
   setPendingResponse: (isPendingResponse) => set({ isPendingResponse }),
 
   startStreamingMessage: (id) =>
     set((state) => ({
+      currentStreamingMessageId: id,
       messages: [
         ...state.messages,
         {
@@ -271,21 +275,5 @@ export const sessionStore = createStore<SessionState>((set, _get) => ({
       return { inProgressHookCounts: next };
     }),
 }));
-
-/** Returns a map of messageId → ToolCall[] for any messageId that has 2+ pending tool calls. */
-export function getParallelGroups(pendingToolCalls: import("../lib/types.js").ToolCall[]): Map<string, import("../lib/types.js").ToolCall[]> {
-  const byMessage = new Map<string, import("../lib/types.js").ToolCall[]>();
-  for (const tc of pendingToolCalls) {
-    if (!tc.messageId) continue;
-    const group = byMessage.get(tc.messageId) ?? [];
-    group.push(tc);
-    byMessage.set(tc.messageId, group);
-  }
-  const result = new Map<string, import("../lib/types.js").ToolCall[]>();
-  for (const [msgId, calls] of byMessage) {
-    if (calls.length >= 2) result.set(msgId, calls);
-  }
-  return result;
-}
 
 export const useSessionStore = sessionStore;
