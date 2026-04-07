@@ -28,6 +28,7 @@ defmodule Loomkin.AgentLoop do
                        "context_retrieve"
                      ])
   @coordination_warning_threshold 2
+  @coordination_abort_threshold 4
   @coordination_warning """
   You have spent multiple consecutive iterations on coordination/context tools.
   Stop planning and move the task forward. Either:
@@ -36,6 +37,11 @@ defmodule Loomkin.AgentLoop do
   - provide your best current answer.
 
   Do NOT call more coordination tools until new external input arrives.
+  """
+  @coordination_abort_message """
+  Agent stopped after repeated coordination-only iterations.
+  It kept using planning/context tools without moving the task forward.
+  Try again with a more specific ask, approve delegation, or provide fresh input.
   """
 
   @type on_event :: (atom(), map() -> :ok)
@@ -309,7 +315,13 @@ defmodule Loomkin.AgentLoop do
               |> maybe_inject_cycle_warning(classified.tool_calls, config)
               |> maybe_inject_coordination_warning(classified.tool_calls, config)
 
-            do_loop(messages, config, iteration + 1)
+            case maybe_stop_coordination_loop(messages, config, response) do
+              {:stop, response_text, messages, metadata} ->
+                {:ok, response_text, messages, metadata}
+
+              {:continue, messages} ->
+                do_loop(messages, config, iteration + 1)
+            end
 
           {:paused, reason, messages} ->
             emit_usage(config, response)
@@ -904,6 +916,26 @@ defmodule Loomkin.AgentLoop do
   end
 
   def coordination_only_tool_calls?(_tool_calls), do: false
+
+  @doc false
+  def maybe_stop_coordination_loop(messages, config, response) do
+    streak = Process.get(:loomkin_coordination_streak, 0)
+
+    if streak >= @coordination_abort_threshold do
+      Logger.warning(
+        "[Kin:loop] coordination_abort agent=#{config.agent_name || "-"} team=#{config.team_id || "-"} streak=#{streak}"
+      )
+
+      assistant_msg = %{role: :assistant, content: String.trim(@coordination_abort_message)}
+      emit(config, :coordination_loop_stopped, %{streak: streak})
+      emit(config, :new_message, assistant_msg)
+
+      {:stop, assistant_msg.content, messages ++ [assistant_msg],
+       %{usage: extract_usage(response)}}
+    else
+      {:continue, messages}
+    end
+  end
 
   defp tool_call_signature(tool_calls) when is_list(tool_calls) do
     tool_calls

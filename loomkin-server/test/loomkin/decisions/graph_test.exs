@@ -2,9 +2,16 @@ defmodule Loomkin.Decisions.GraphTest do
   use Loomkin.DataCase, async: false
 
   alias Loomkin.Decisions.Graph
+  alias Loomkin.Schemas.Session
 
   defp node_attrs(overrides \\ %{}) do
     Map.merge(%{node_type: :goal, title: "Test goal"}, overrides)
+  end
+
+  defp create_session do
+    %Session{}
+    |> Session.changeset(%{model: "test-model", project_path: "/tmp/test"})
+    |> Repo.insert!()
   end
 
   describe "add_node/1" do
@@ -128,7 +135,7 @@ defmodule Loomkin.Decisions.GraphTest do
     end
   end
 
-  describe "active_goals/0" do
+  describe "active_goals/1" do
     test "returns only active goals" do
       {:ok, _} = Graph.add_node(node_attrs(%{node_type: :goal, status: :active}))
 
@@ -141,9 +148,23 @@ defmodule Loomkin.Decisions.GraphTest do
       assert length(goals) == 1
       assert hd(goals).node_type == :goal
     end
+
+    test "supports team_id scoping" do
+      team_a = Ecto.UUID.generate()
+      team_b = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Graph.add_node(node_attrs(%{title: "Team A goal", metadata: %{"team_id" => team_a}}))
+
+      {:ok, _} =
+        Graph.add_node(node_attrs(%{title: "Team B goal", metadata: %{"team_id" => team_b}}))
+
+      goals = Graph.active_goals(team_id: team_a)
+      assert Enum.map(goals, & &1.title) == ["Team A goal"]
+    end
   end
 
-  describe "recent_decisions/1" do
+  describe "recent_decisions/2" do
     test "returns recent decision and option nodes" do
       {:ok, _} = Graph.add_node(node_attrs(%{node_type: :decision, title: "D1"}))
       {:ok, _} = Graph.add_node(node_attrs(%{node_type: :option, title: "O1"}))
@@ -161,6 +182,24 @@ defmodule Loomkin.Decisions.GraphTest do
       end
 
       assert length(Graph.recent_decisions(3)) == 3
+    end
+
+    test "supports session_id scoping" do
+      session_a = create_session()
+      session_b = create_session()
+
+      {:ok, _} =
+        Graph.add_node(
+          node_attrs(%{node_type: :decision, title: "Session A", session_id: session_a.id})
+        )
+
+      {:ok, _} =
+        Graph.add_node(
+          node_attrs(%{node_type: :decision, title: "Session B", session_id: session_b.id})
+        )
+
+      results = Graph.recent_decisions(10, session_id: session_a.id)
+      assert Enum.map(results, & &1.title) == ["Session A"]
     end
   end
 

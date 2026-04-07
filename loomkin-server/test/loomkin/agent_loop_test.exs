@@ -420,6 +420,36 @@ defmodule Loomkin.AgentLoopTest do
 
       assert Process.get(:loomkin_coordination_streak) == 0
     end
+
+    test "stops the loop after too many consecutive coordination-only iterations" do
+      Process.put(:loomkin_coordination_streak, 4)
+      test_pid = self()
+
+      config = %{
+        agent_name: "concierge",
+        team_id: "team-123",
+        on_event: fn event_name, payload ->
+          send(test_pid, {:event, event_name, payload})
+          :ok
+        end
+      }
+
+      response = %Response{
+        id: "resp_123",
+        model: "openai:gpt-5.4",
+        context: ReqLLM.Context.new([]),
+        usage: %{input_tokens: 10, output_tokens: 20, total_cost: 0.12}
+      }
+
+      assert {:stop, message, messages, %{usage: usage}} =
+               AgentLoop.maybe_stop_coordination_loop([], config, response)
+
+      assert message =~ "Agent stopped after repeated coordination-only iterations"
+      assert [%{role: :assistant, content: ^message}] = messages
+      assert usage.input_tokens == 10
+
+      assert_received {:event, :coordination_loop_stopped, %{streak: 4}}
+    end
   end
 
   describe "max_iterations" do

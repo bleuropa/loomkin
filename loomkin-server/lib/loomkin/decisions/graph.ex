@@ -84,6 +84,10 @@ defmodule Loomkin.Decisions.Graph do
     query |> where([n], n.status == ^status) |> apply_node_filters(rest)
   end
 
+  defp apply_node_filters(query, [{:title, title} | rest]) do
+    query |> where([n], n.title == ^title) |> apply_node_filters(rest)
+  end
+
   defp apply_node_filters(query, [{:session_id, sid} | rest]) do
     # session_id is a :binary_id (UUID) — skip filter if the value isn't a valid UUID
     if valid_uuid?(sid) do
@@ -168,25 +172,44 @@ defmodule Loomkin.Decisions.Graph do
 
   # --- Convenience ---
 
-  def active_goals do
-    list_nodes(node_type: :goal, status: :active)
+  def active_goals(opts \\ []) do
+    opts
+    |> Keyword.merge(node_type: :goal, status: :active)
+    |> list_nodes()
   end
 
   def recent_decisions(limit \\ 10, opts \\ []) do
     query =
       DecisionNode
       |> where([n], n.node_type in [:decision, :option])
+      |> maybe_scope_decision_nodes(opts)
       |> order_by([n], desc: n.inserted_at)
       |> limit(^limit)
 
-    query =
-      case Keyword.get(opts, :team_id) do
-        nil -> query
-        team_id -> where(query, [n], fragment("? ->> 'team_id' = ?", n.metadata, ^team_id))
-      end
-
     Repo.all(query)
   end
+
+  defp maybe_scope_decision_nodes(query, opts) do
+    query
+    |> maybe_filter_team(Keyword.get(opts, :team_id))
+    |> maybe_filter_session(Keyword.get(opts, :session_id))
+  end
+
+  defp maybe_filter_team(query, nil), do: query
+
+  defp maybe_filter_team(query, team_id) do
+    where(query, [n], fragment("? ->> 'team_id' = ?", n.metadata, ^team_id))
+  end
+
+  defp maybe_filter_session(query, session_id) when is_binary(session_id) do
+    if valid_uuid?(session_id) do
+      where(query, [n], n.session_id == ^session_id)
+    else
+      query
+    end
+  end
+
+  defp maybe_filter_session(query, _session_id), do: query
 
   def supersede(old_node_id, new_node_id, rationale) do
     Repo.transaction(fn ->
