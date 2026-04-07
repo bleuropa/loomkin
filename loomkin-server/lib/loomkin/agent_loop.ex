@@ -29,6 +29,8 @@ defmodule Loomkin.AgentLoop do
                      ])
   @coordination_warning_threshold 2
   @coordination_abort_threshold 4
+  @concierge_coordination_warning_threshold 1
+  @concierge_coordination_abort_threshold 3
   @coordination_warning """
   You have spent multiple consecutive iterations on coordination/context tools.
   Stop planning and move the task forward. Either:
@@ -38,9 +40,26 @@ defmodule Loomkin.AgentLoop do
 
   Do NOT call more coordination tools until new external input arrives.
   """
+  @concierge_coordination_warning """
+  You are the concierge. Stay available for the human instead of sinking into research or planning.
+  You have already done enough orientation.
+
+  Your next step must be one of:
+  - spawn a specialist or team to do the actual research/work,
+  - ask the human one focused question, or
+  - give the user your best current synthesis.
+
+  Do NOT run more coordination/context tools right now.
+  Do NOT become the deepest worker in the loop.
+  """
   @coordination_abort_message """
   Agent stopped after repeated coordination-only iterations.
   It kept using planning/context tools without moving the task forward.
+  Try again with a more specific ask, approve delegation, or provide fresh input.
+  """
+  @concierge_coordination_abort_message """
+  Concierge stopped after repeated coordination-only iterations.
+  It was staying busy on planning/context work instead of delegating and staying available for the user.
   Try again with a more specific ask, approve delegation, or provide fresh input.
   """
 
@@ -882,10 +901,12 @@ defmodule Loomkin.AgentLoop do
       prev_streak = Process.get(:loomkin_coordination_streak, 0)
       streak = prev_streak + 1
       Process.put(:loomkin_coordination_streak, streak)
+      role = Map.get(config, :role)
+      threshold = coordination_warning_threshold(role)
 
-      if prev_streak < @coordination_warning_threshold and
-           streak >= @coordination_warning_threshold do
+      if prev_streak < threshold and streak >= threshold do
         tools = tool_calls |> Enum.map(&tool_name/1) |> Enum.uniq()
+        warning_content = coordination_warning_message(role)
 
         Logger.warning(
           "[Kin:loop] coordination_streak agent=#{config.agent_name || "-"} team=#{config.team_id || "-"} streak=#{streak} tools=#{Enum.join(tools, ",")}"
@@ -893,7 +914,7 @@ defmodule Loomkin.AgentLoop do
 
         warning_msg = %{
           role: :user,
-          content: @coordination_warning
+          content: warning_content
         }
 
         emit(config, :coordination_loop_detected, %{streak: streak, tools: tools})
@@ -920,13 +941,19 @@ defmodule Loomkin.AgentLoop do
   @doc false
   def maybe_stop_coordination_loop(messages, config, response) do
     streak = Process.get(:loomkin_coordination_streak, 0)
+    role = Map.get(config, :role)
+    threshold = coordination_abort_threshold(role)
 
-    if streak >= @coordination_abort_threshold do
+    if streak >= threshold do
       Logger.warning(
         "[Kin:loop] coordination_abort agent=#{config.agent_name || "-"} team=#{config.team_id || "-"} streak=#{streak}"
       )
 
-      assistant_msg = %{role: :assistant, content: String.trim(@coordination_abort_message)}
+      assistant_msg = %{
+        role: :assistant,
+        content: coordination_abort_message(role)
+      }
+
       emit(config, :coordination_loop_stopped, %{streak: streak})
       emit(config, :new_message, assistant_msg)
 
@@ -936,6 +963,20 @@ defmodule Loomkin.AgentLoop do
       {:continue, messages}
     end
   end
+
+  defp coordination_warning_threshold(:concierge), do: @concierge_coordination_warning_threshold
+  defp coordination_warning_threshold(_role), do: @coordination_warning_threshold
+
+  defp coordination_abort_threshold(:concierge), do: @concierge_coordination_abort_threshold
+  defp coordination_abort_threshold(_role), do: @coordination_abort_threshold
+
+  defp coordination_warning_message(:concierge), do: String.trim(@concierge_coordination_warning)
+  defp coordination_warning_message(_role), do: String.trim(@coordination_warning)
+
+  defp coordination_abort_message(:concierge),
+    do: String.trim(@concierge_coordination_abort_message)
+
+  defp coordination_abort_message(_role), do: String.trim(@coordination_abort_message)
 
   defp tool_call_signature(tool_calls) when is_list(tool_calls) do
     tool_calls

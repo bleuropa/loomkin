@@ -402,6 +402,24 @@ defmodule Loomkin.AgentLoopTest do
                        %{streak: 2, tools: ["decision_query"]}}
     end
 
+    test "concierge gets the stronger warning after a single repeated coordination turn" do
+      Process.put(:loomkin_coordination_streak, 0)
+
+      config = %{
+        role: :concierge,
+        agent_name: "concierge",
+        team_id: "team-123",
+        on_event: fn _, _ -> :ok end
+      }
+
+      tools = [%{name: "decision_query", arguments: %{"query_type" => "pulse"}}]
+
+      messages = AgentLoop.maybe_inject_coordination_warning([], tools, config)
+      assert [%{role: :user, content: content}] = messages
+      assert content =~ "Stay available for the human"
+      assert content =~ "spawn a specialist or team"
+    end
+
     test "resets coordination streak when non-coordination work appears" do
       Process.put(:loomkin_coordination_streak, 1)
 
@@ -449,6 +467,30 @@ defmodule Loomkin.AgentLoopTest do
       assert usage.input_tokens == 10
 
       assert_received {:event, :coordination_loop_stopped, %{streak: 4}}
+    end
+
+    test "concierge stops earlier than other roles" do
+      Process.put(:loomkin_coordination_streak, 3)
+
+      config = %{
+        role: :concierge,
+        agent_name: "concierge",
+        team_id: "team-123",
+        on_event: fn _, _ -> :ok end
+      }
+
+      response = %Response{
+        id: "resp_123",
+        model: "openai:gpt-5.4",
+        context: ReqLLM.Context.new([]),
+        usage: %{input_tokens: 10, output_tokens: 20, total_cost: 0.12}
+      }
+
+      assert {:stop, message, _messages, _meta} =
+               AgentLoop.maybe_stop_coordination_loop([], config, response)
+
+      assert message =~ "Concierge stopped after repeated coordination-only iterations"
+      assert message =~ "staying available for the user"
     end
   end
 

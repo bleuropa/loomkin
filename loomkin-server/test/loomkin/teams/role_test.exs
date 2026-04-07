@@ -213,11 +213,14 @@ defmodule Loomkin.Teams.RoleTest do
     test "concierge prompt emphasizes convergence over coordination loops" do
       {:ok, %Role{system_prompt: prompt}} = Role.get(:concierge)
       assert prompt =~ "## Convergence Discipline"
+      assert prompt =~ "## Availability Contract"
 
       assert prompt =~
                "Do NOT keep cycling through decision_query, query_backlog, search_keepers, and decision_log"
 
       assert prompt =~ "spawn a specialist instead of doing more coordination scans yourself"
+      assert prompt =~ "Stay free for the user."
+      assert prompt =~ "If a task looks like it could keep you busy for multiple iterations"
     end
   end
 
