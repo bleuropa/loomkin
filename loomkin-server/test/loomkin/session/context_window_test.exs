@@ -130,6 +130,21 @@ defmodule Loomkin.Session.ContextWindowTest do
       assert hd(result).role == :system
     end
 
+    test "retains the latest non-system message even when budget is exhausted" do
+      messages = [%{role: :user, content: "digest this repo into the vault"}]
+
+      result =
+        ContextWindow.build_messages(
+          messages,
+          String.duplicate("system context ", 200),
+          max_tokens: 20,
+          reserved_output: 10
+        )
+
+      assert [%{role: :system}, %{role: :user, content: "digest this repo into the vault"}] =
+               result
+    end
+
     test "respects reserved_output option" do
       messages = [%{role: :user, content: String.duplicate("a", 4000)}]
 

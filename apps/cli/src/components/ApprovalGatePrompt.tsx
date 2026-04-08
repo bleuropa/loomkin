@@ -7,11 +7,13 @@ type Props =
   | {
       type: "approval";
       gate: ApprovalRequest;
+      queueCount?: number;
       onRespond: (gateId: string, outcome: "approved" | "denied", context?: string, reason?: string) => void;
     }
   | {
       type: "spawn_gate";
       gate: SpawnGateRequest;
+      queueCount?: number;
       onRespond: (gateId: string, outcome: "approved" | "denied", reason?: string) => void;
     };
 
@@ -120,6 +122,9 @@ export function ApprovalGatePrompt(props: Props) {
       )}
 
       <Text color={timeColor}>{remaining}s remaining</Text>
+      {props.queueCount && props.queueCount > 1 && (
+        <Text dimColor>Showing 1 of {props.queueCount} pending requests</Text>
+      )}
 
       {mode === "choose" && (
         <Box marginTop={1}>

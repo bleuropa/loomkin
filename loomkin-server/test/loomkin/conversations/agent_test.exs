@@ -100,6 +100,70 @@ defmodule Loomkin.Conversations.AgentTest do
     end
   end
 
+  describe "build_messages/4" do
+    test "seeds an opening user turn when history is empty", ctx do
+      state = %Agent{
+        conversation_id: ctx.conv_id,
+        team_id: ctx.team_id,
+        name: @persona.name,
+        persona: @persona,
+        model: "openai:gpt-5.4-mini",
+        topic: "Test topic"
+      }
+
+      messages = Agent.build_messages([], "Test topic", "Background", state)
+
+      assert Enum.at(messages, 0) == %{
+               role: "system",
+               content: Persona.system_prompt(@persona, "Test topic", "Background")
+             }
+
+      assert Enum.at(messages, 1).role == "user"
+      assert Enum.at(messages, 1).content =~ "It is your turn to open the discussion"
+    end
+
+    test "maps prior conversation entries into assistant and user messages", ctx do
+      state = %Agent{
+        conversation_id: ctx.conv_id,
+        team_id: ctx.team_id,
+        name: @persona.name,
+        persona: @persona,
+        model: "openai:gpt-5.4-mini",
+        topic: "Test topic"
+      }
+
+      history = [
+        %{speaker: "Expert", content: "My point", type: :speech},
+        %{speaker: "Critic", content: "Counterpoint", type: :speech},
+        %{speaker: "Critic", content: "yielded", type: :yield},
+        %{speaker: "Observer", content: "ignore me", type: :reaction}
+      ]
+
+      messages = Agent.build_messages(history, "Test topic", nil, state)
+
+      assert Enum.at(messages, 1) == %{role: "assistant", content: "My point"}
+      assert Enum.at(messages, 2) == %{role: "user", content: "[Critic]: Counterpoint"}
+      assert Enum.at(messages, 3) == %{role: "user", content: "[Critic]: yielded"}
+      assert length(messages) == 4
+    end
+  end
+
+  describe "extract_tool_calls/1" do
+    test "extracts tool calls from ReqLLM.Response" do
+      response = %ReqLLM.Response{
+        id: "resp_123",
+        model: "openai:gpt-5.4-mini",
+        context: ReqLLM.Context.new([]),
+        message:
+          ReqLLM.Context.assistant("",
+            tool_calls: [{"speak", %{content: "hello"}, id: "call_123"}]
+          )
+      }
+
+      assert Agent.extract_tool_calls(response) == [{"speak", %{"content" => "hello"}}]
+    end
+  end
+
   describe "turn handling" do
     test "agent receives turn notification and yields on llm error", ctx do
       # Start agent first so it's subscribed before the server emits :your_turn

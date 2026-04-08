@@ -29,20 +29,47 @@ defmodule Loomkin.Providers.OpenAIOAuth do
   startup (after TokenStore is started).
   """
 
+  require Logger
+
   use ReqLLM.Provider,
     id: :openai_oauth,
     default_base_url: "https://chatgpt.com/backend-api"
 
   alias Loomkin.Auth.TokenStore
   alias Loomkin.Auth.Providers.OpenAI, as: OpenAIAuth
+  alias Loomkin.Providers.OpenAICodexModels
 
   @openai ReqLLM.Providers.OpenAI
   @responses_api ReqLLM.Providers.OpenAI.ResponsesAPI
 
   @provider_schema [
+    openai_parallel_tool_calls: [
+      type: :boolean,
+      doc: "Override parallel tool call behavior for OpenAI responses requests"
+    ],
+    openai_structured_output_mode: [
+      type: {:in, [:auto, :json_schema, :tool_strict]},
+      doc: "Structured output mode for OpenAI responses requests"
+    ],
+    openai_json_schema_strict: [
+      type: :boolean,
+      doc: "Whether structured JSON schema output should be strict"
+    ],
     max_completion_tokens: [
       type: :integer,
       doc: "Maximum completion tokens (required for reasoning models)"
+    ],
+    response_format: [
+      type: :map,
+      doc: "Response format configuration for structured output"
+    ],
+    previous_response_id: [
+      type: :string,
+      doc: "Previous response id for responses-api resume flows"
+    ],
+    tool_outputs: [
+      type: {:list, :any},
+      doc: "Tool outputs for responses-api resume flows"
     ],
     service_tier: [
       type: {:or, [:atom, :string]},
@@ -99,6 +126,7 @@ defmodule Loomkin.Providers.OpenAIOAuth do
             :max_completion_tokens,
             :reasoning_effort,
             :service_tier,
+            :response_format,
             :compiled_schema,
             :temperature,
             :max_tokens,
@@ -176,6 +204,7 @@ defmodule Loomkin.Providers.OpenAIOAuth do
         :provider_options,
         :reasoning_effort,
         :service_tier,
+        :response_format,
         :fixture,
         :on_unsupported,
         :n,
@@ -190,7 +219,10 @@ defmodule Loomkin.Providers.OpenAIOAuth do
       ] ++
         supported_provider_options()
 
-    req_opts = ReqLLM.Provider.Defaults.filter_req_opts(user_opts)
+    req_opts =
+      user_opts
+      |> ReqLLM.Provider.Defaults.filter_req_opts()
+      |> Keyword.delete(:base_url)
 
     request
     |> Req.Request.register_options(extra_option_keys)
@@ -200,7 +232,9 @@ defmodule Loomkin.Providers.OpenAIOAuth do
     |> Req.Request.put_header("openai-beta", "responses=experimental")
     |> Req.Request.put_header("originator", "opencode")
     |> Req.Request.put_header("accept", "text/event-stream")
-    |> Req.Request.merge_options([model: get_api_model_id(model)] ++ req_opts)
+    |> Req.Request.merge_options(
+      [model: get_api_model_id(model), base_url: base_url()] ++ req_opts
+    )
     |> Req.Request.put_private(:req_llm_model, model)
     |> ReqLLM.Step.Error.attach()
     |> ReqLLM.Step.Retry.attach(user_opts)
@@ -216,12 +250,7 @@ defmodule Loomkin.Providers.OpenAIOAuth do
 
     case Jason.decode(encoded.body) do
       {:ok, body_map} ->
-        patched =
-          body_map
-          |> inject_instructions_from_input()
-          |> Map.put("store", false)
-          |> Map.put("stream", true)
-
+        patched = patch_codex_body(body_map, request.options[:model])
         Map.put(encoded, :body, Jason.encode!(patched))
 
       _ ->
@@ -345,7 +374,13 @@ defmodule Loomkin.Providers.OpenAIOAuth do
         {:error, :no_oauth_token}
 
       token ->
-        account_id = OpenAIAuth.extract_account_id(token)
+        status = TokenStore.get_status(:openai) || %{}
+        stored_account_id = Map.get(status, :account_id) || Map.get(status, "account_id")
+        derived_account_id = OpenAIAuth.extract_account_id(token)
+
+        maybe_log_token_diagnostics(token, derived_account_id, stored_account_id, status)
+
+        account_id = derived_account_id || stored_account_id
 
         {:ok, {token, account_id}}
     end
@@ -356,7 +391,10 @@ defmodule Loomkin.Providers.OpenAIOAuth do
       model_spec
       |> String.replace_prefix("openai_oauth:", "openai:")
 
-    ReqLLM.model(canonical)
+    case ReqLLM.model(canonical) do
+      {:error, :not_found} -> OpenAICodexModels.resolve_model(canonical)
+      result -> result
+    end
   end
 
   defp resolve_model(model_spec), do: ReqLLM.model(model_spec)
@@ -375,7 +413,63 @@ defmodule Loomkin.Providers.OpenAIOAuth do
          String.contains?(haystack, "usage limit") do
       {request, %{response | status: 429}}
     else
+      Logger.warning(
+        "[Kin:openai_oauth] upstream 404 model=#{inspect(request.options[:model])} body=#{preview_body(body_str)}"
+      )
+
       @openai.decode_response({request, response})
+    end
+  end
+
+  defp preview_body(body) when is_binary(body) and byte_size(body) > 220 do
+    binary_part(body, 0, 220) <> "..."
+  end
+
+  defp preview_body(body), do: body
+
+  defp maybe_log_token_diagnostics(token, derived_account_id, stored_account_id, status)
+       when is_binary(token) do
+    scopes = Map.get(status, :scopes) || Map.get(status, "scopes")
+    segment_count = token |> String.split(".") |> length()
+
+    if is_nil(derived_account_id) and not is_nil(stored_account_id) do
+      Logger.debug(
+        "[Kin:openai_oauth] using stored account id because token claims were unavailable token_segments=#{segment_count} stored_account_id=#{inspect(stored_account_id)}"
+      )
+    end
+
+    if suspicious_test_token?(token, stored_account_id, scopes) do
+      Logger.warning(
+        "[Kin:openai_oauth] suspicious oauth token detected len=#{byte_size(token)} token_segments=#{segment_count} stored_account_id=#{inspect(stored_account_id)} scopes=#{inspect(scopes)} reconnect_openai=true"
+      )
+    end
+  end
+
+  defp suspicious_test_token?(token, stored_account_id, scopes) do
+    String.starts_with?(token, "test-") or scopes == "test" or
+      (is_binary(stored_account_id) and String.contains?(stored_account_id, "test"))
+  end
+
+  defp log_tool_resume_shape(model_label, body_map, original_previous_response_id)
+       when is_map(body_map) do
+    input = Map.get(body_map, "input", [])
+
+    function_call_count =
+      Enum.count(input, &(is_map(&1) and Map.get(&1, "type") == "function_call"))
+
+    function_output_count =
+      Enum.count(input, &(is_map(&1) and Map.get(&1, "type") == "function_call_output"))
+
+    if original_previous_response_id || function_call_count > 0 || function_output_count > 0 do
+      Logger.debug(
+        "[Kin:openai_oauth] resume_shape model=#{inspect(model_label)} dropped_previous_response_id=#{inspect(original_previous_response_id)} function_calls=#{function_call_count} function_outputs=#{function_output_count}"
+      )
+    end
+
+    if function_call_count > 0 and function_output_count == 0 do
+      Logger.warning(
+        "[Kin:openai_oauth] function calls present without tool outputs model=#{inspect(model_label)}"
+      )
     end
   end
 
@@ -400,13 +494,85 @@ defmodule Loomkin.Providers.OpenAIOAuth do
     case Jason.decode(body_str) do
       {:ok, body_map} ->
         body_map
-        |> inject_instructions_from_input()
-        |> Map.put("store", false)
-        |> Map.put("stream", true)
+        |> patch_codex_body(get_api_model_id(model))
         |> Jason.encode!()
 
       _ ->
         body_str
+    end
+  end
+
+  defp patch_codex_body(body_map, model_label) when is_map(body_map) do
+    previous_response_id = Map.get(body_map, "previous_response_id")
+
+    patched =
+      body_map
+      |> inject_instructions_from_input()
+      |> Map.delete("previous_response_id")
+      |> drop_stale_function_calls(model_label)
+      |> Map.put("store", false)
+      |> Map.put("stream", true)
+
+    log_tool_resume_shape(model_label, patched, previous_response_id)
+    log_empty_input_shape(model_label, patched)
+    patched
+  end
+
+  defp drop_stale_function_calls(body_map, model_label) when is_map(body_map) do
+    input = Map.get(body_map, "input", [])
+
+    output_call_ids =
+      input
+      |> Enum.flat_map(fn
+        %{"type" => "function_call_output", "call_id" => call_id} when is_binary(call_id) ->
+          [call_id]
+
+        _ ->
+          []
+      end)
+      |> MapSet.new()
+
+    {filtered_input, dropped_count} =
+      Enum.reduce(input, {[], 0}, fn
+        %{"type" => "function_call", "call_id" => call_id} = item, {acc, dropped}
+        when is_binary(call_id) ->
+          if MapSet.member?(output_call_ids, call_id) do
+            {[item | acc], dropped}
+          else
+            {acc, dropped + 1}
+          end
+
+        item, {acc, dropped} ->
+          {[item | acc], dropped}
+      end)
+
+    if dropped_count > 0 do
+      Logger.debug(
+        "[Kin:openai_oauth] dropped stale function calls model=#{inspect(model_label)} count=#{dropped_count}"
+      )
+    end
+
+    Map.put(body_map, "input", Enum.reverse(filtered_input))
+  end
+
+  defp log_empty_input_shape(model_label, body_map) when is_map(body_map) do
+    input = Map.get(body_map, "input", [])
+
+    cond do
+      input == [] ->
+        Logger.warning(
+          "[Kin:openai_oauth] codex request has empty input model=#{inspect(model_label)} instructions_present=#{Map.has_key?(body_map, "instructions")}"
+        )
+
+      Enum.all?(input, fn item ->
+        is_map(item) and Map.get(item, "type") == "function_call_output"
+      end) ->
+        Logger.warning(
+          "[Kin:openai_oauth] codex request has tool-output-only input model=#{inspect(model_label)} count=#{length(input)}"
+        )
+
+      true ->
+        :ok
     end
   end
 

@@ -8,12 +8,17 @@ export interface AgentInfo {
   teamId?: string;
   currentTool?: string;
   currentTask?: string;
+  currentThought?: string;
+  lastThought?: string;
   tokensUsed?: number;
   costUsd?: number;
   lastError?: string;
   pauseQueued?: boolean;
   worktreePath?: string;
   parentAgent?: string;
+  publishedFindingsCount?: number;
+  lastPublishedAt?: string;
+  lastPublishedTopic?: string;
   updatedAt: string;
 }
 

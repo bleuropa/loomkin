@@ -23,6 +23,8 @@ defmodule Loomkin.Tools.DecisionLog do
 
   alias Loomkin.Decisions.Graph
 
+  require Logger
+
   @valid_node_types ~w(goal decision option action outcome observation revisit)
   @valid_edge_types ~w(leads_to chosen rejected requires blocks enables supersedes supports revises summarizes)
 
@@ -67,14 +69,48 @@ defmodule Loomkin.Tools.DecisionLog do
       metadata: metadata
     }
 
-    case Graph.add_node(attrs) do
-      {:ok, node} ->
-        maybe_create_edge(node, params)
+    case maybe_find_existing_goal(node_type, title, metadata, session_id) do
+      {:ok, existing} ->
+        Logger.info(
+          "[Kin:decision_log] reusing active goal id=#{existing.id} title=#{inspect(title)} team=#{metadata["team_id"] || "-"} session=#{session_id || "-"}"
+        )
 
-      {:error, changeset} ->
-        {:error, "Failed to log decision: #{inspect(changeset.errors)}"}
+        {:ok, %{result: "Reused active goal: #{existing.title} (id: #{existing.id})"}}
+
+      :none ->
+        case Graph.add_node(attrs) do
+          {:ok, node} ->
+            maybe_create_edge(node, params)
+
+          {:error, changeset} ->
+            {:error, "Failed to log decision: #{inspect(changeset.errors)}"}
+        end
     end
   end
+
+  defp maybe_find_existing_goal(:goal, title, metadata, session_id) do
+    filters =
+      [limit: 1, node_type: :goal, status: :active, title: title]
+      |> maybe_add_scope_filter(metadata["team_id"], session_id)
+
+    case Graph.list_nodes(filters) do
+      [existing | _] -> {:ok, existing}
+      [] -> :none
+    end
+  end
+
+  defp maybe_find_existing_goal(_node_type, _title, _metadata, _session_id), do: :none
+
+  defp maybe_add_scope_filter(filters, team_id, _session_id)
+       when is_binary(team_id) and team_id != "" do
+    Keyword.put(filters, :team_id, team_id)
+  end
+
+  defp maybe_add_scope_filter(filters, _team_id, session_id) when is_binary(session_id) do
+    Keyword.put(filters, :session_id, session_id)
+  end
+
+  defp maybe_add_scope_filter(filters, _team_id, _session_id), do: filters
 
   defp maybe_create_edge(node, params) do
     case param(params, :parent_id) do

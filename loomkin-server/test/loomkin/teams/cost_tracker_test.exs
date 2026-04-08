@@ -224,6 +224,25 @@ defmodule Loomkin.Teams.CostTrackerTest do
       [call] = CostTracker.get_call_history(team_id, "coder")
       assert %DateTime{} = call.timestamp
     end
+
+    test "preserves trigger metadata for debugging", %{team_id: team_id} do
+      :ok =
+        CostTracker.record_call(team_id, "coder", %{
+          model: "zai:glm-5",
+          input_tokens: 100,
+          output_tokens: 50,
+          trigger_source: :peer_message,
+          trigger_from: "researcher",
+          trigger_fingerprint: 12345,
+          trigger_coalesced_count: 3
+        })
+
+      [call] = CostTracker.get_call_history(team_id, "coder")
+      assert call.trigger_source == :peer_message
+      assert call.trigger_from == "researcher"
+      assert call.trigger_fingerprint == 12345
+      assert call.trigger_coalesced_count == 3
+    end
   end
 
   describe "get_call_history/2" do

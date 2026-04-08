@@ -1,6 +1,12 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import type { ModelProvider } from "../lib/types.js";
+import {
+  buildModelOptions,
+  getCenteredWindowStart,
+  getInitialModelIndex,
+  getWindowStartForSelection,
+} from "./modelPickerState.js";
 
 const VISIBLE_COUNT = 12;
 
@@ -10,10 +16,6 @@ const OAUTH_PROVIDERS = [
   { id: "openai", name: "OpenAI" },
 ] as const;
 
-type FlatItem =
-  | { kind: "separator"; label: string }
-  | { kind: "model"; id: string; label: string; context?: string };
-
 interface Props {
   providers: ModelProvider[];
   currentModel: string;
@@ -22,57 +24,28 @@ interface Props {
   onOAuth: (id: string, name: string) => void;
 }
 
-function buildFlatItems(providers: ModelProvider[]): FlatItem[] {
-  const items: FlatItem[] = [];
-  for (const provider of providers) {
-    if (provider.models.length === 0) continue;
-    items.push({ kind: "separator", label: `── ${provider.name} ──` });
-    for (const model of provider.models) {
-      items.push({ kind: "model", id: model.id, label: model.label, context: model.context ?? undefined });
-    }
-  }
-  return items;
-}
-
-function firstModelIndex(items: FlatItem[]): number {
-  return items.findIndex((item) => item.kind === "model");
-}
-
-function prevModelIndex(items: FlatItem[], from: number): number {
-  for (let i = from - 1; i >= 0; i--) {
-    if (items[i].kind === "model") return i;
-  }
-  return from;
-}
-
-function nextModelIndex(items: FlatItem[], from: number): number {
-  for (let i = from + 1; i < items.length; i++) {
-    if (items[i].kind === "model") return i;
-  }
-  return from;
-}
-
 export function ModelPicker({ providers, currentModel, onSelect, onCancel, onOAuth }: Props) {
-  const flatItems = useMemo(() => buildFlatItems(providers), [providers]);
+  const modelOptions = useMemo(() => buildModelOptions(providers), [providers]);
 
   const initialIndex = useMemo(() => {
-    const currentIdx = flatItems.findIndex(
-      (item) => item.kind === "model" && item.id === currentModel,
-    );
-    return currentIdx !== -1 ? currentIdx : firstModelIndex(flatItems);
-  }, [flatItems, currentModel]);
+    return getInitialModelIndex(modelOptions, currentModel);
+  }, [modelOptions, currentModel]);
 
   const [selectedIndex, setSelectedIndex] = useState(initialIndex);
-  const [windowStart, setWindowStart] = useState(() => Math.max(0, initialIndex - Math.floor(VISIBLE_COUNT / 2)));
+  const [windowStart, setWindowStart] = useState(() =>
+    getCenteredWindowStart(initialIndex, VISIBLE_COUNT),
+  );
   const [oauthView, setOauthView] = useState(false);
   const [oauthIndex, setOauthIndex] = useState(0);
 
-  // Keep selected item within the visible window
+  useEffect(() => {
+    setSelectedIndex(initialIndex);
+    setWindowStart(getCenteredWindowStart(initialIndex, VISIBLE_COUNT));
+  }, [initialIndex]);
+
   useEffect(() => {
     setWindowStart((ws) => {
-      if (selectedIndex < ws) return selectedIndex;
-      if (selectedIndex >= ws + VISIBLE_COUNT) return selectedIndex - VISIBLE_COUNT + 1;
-      return ws;
+      return getWindowStartForSelection(ws, selectedIndex, VISIBLE_COUNT);
     });
   }, [selectedIndex]);
 
@@ -106,16 +79,16 @@ export function ModelPicker({ providers, currentModel, onSelect, onCancel, onOAu
     }
 
     if (key.upArrow) {
-      setSelectedIndex((i) => prevModelIndex(flatItems, i));
+      setSelectedIndex((i) => Math.max(0, i - 1));
       return;
     }
     if (key.downArrow) {
-      setSelectedIndex((i) => nextModelIndex(flatItems, i));
+      setSelectedIndex((i) => Math.min(modelOptions.length - 1, i + 1));
       return;
     }
     if (key.return) {
-      const item = flatItems[selectedIndex];
-      if (item?.kind === "model") {
+      const item = modelOptions[selectedIndex];
+      if (item) {
         onSelect(item.id, item.label);
       }
       return;
@@ -144,7 +117,7 @@ export function ModelPicker({ providers, currentModel, onSelect, onCancel, onOAu
     );
   }
 
-  if (flatItems.length === 0) {
+  if (modelOptions.length === 0) {
     return (
       <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1}>
         <Text dimColor>No models available — connect a provider first</Text>
@@ -162,34 +135,31 @@ export function ModelPicker({ providers, currentModel, onSelect, onCancel, onOAu
       {windowStart > 0 && (
         <Text dimColor>  ▲ {windowStart} more above</Text>
       )}
-      {flatItems.slice(windowStart, windowStart + VISIBLE_COUNT).map((item, offset) => {
+      {modelOptions.slice(windowStart, windowStart + VISIBLE_COUNT).map((item, offset) => {
         const i = windowStart + offset;
-        if (item.kind === "separator") {
-          return (
-            <Text key={i} dimColor>
-              {item.label}
-            </Text>
-          );
-        }
-
         const isSelected = i === selectedIndex;
         const isCurrent = item.id === currentModel;
+        const previous = modelOptions[i - 1];
+        const showProviderHeader = i === 0 || previous?.providerId !== item.providerId;
 
         return (
-          <Box key={item.id} gap={1}>
-            <Text color={isSelected ? "blue" : undefined} bold={isSelected}>
-              {isSelected ? "▸" : " "}
-              {isCurrent ? "✔" : " "}
-              {item.label}
-            </Text>
-            {item.context && (
-              <Text dimColor>{item.context}</Text>
+          <React.Fragment key={`${item.providerId}:${item.id}`}>
+            {showProviderHeader && (
+              <Text dimColor>── {item.providerName} ──</Text>
             )}
-          </Box>
+            <Box gap={1}>
+              <Text color={isSelected ? "blue" : undefined} bold={isSelected}>
+                {isSelected ? "▸" : " "}
+                {isCurrent ? "✔" : " "}
+                {item.label}
+              </Text>
+              {item.context && <Text dimColor>{item.context}</Text>}
+            </Box>
+          </React.Fragment>
         );
       })}
-      {windowStart + VISIBLE_COUNT < flatItems.length && (
-        <Text dimColor>  ▼ {flatItems.length - windowStart - VISIBLE_COUNT} more below</Text>
+      {windowStart + VISIBLE_COUNT < modelOptions.length && (
+        <Text dimColor>  ▼ {modelOptions.length - windowStart - VISIBLE_COUNT} more below</Text>
       )}
     </Box>
   );

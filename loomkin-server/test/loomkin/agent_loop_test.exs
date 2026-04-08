@@ -2,6 +2,8 @@ defmodule Loomkin.AgentLoopTest do
   use ExUnit.Case, async: true
 
   alias Loomkin.AgentLoop
+  alias ReqLLM.Message
+  alias ReqLLM.Response
 
   describe "format_tool_result/1" do
     test "extracts text from {:ok, %{result: text}}" do
@@ -28,6 +30,53 @@ defmodule Loomkin.AgentLoopTest do
     test "inspects other errors" do
       result = AgentLoop.format_tool_result({:error, :timeout})
       assert result == "Error: :timeout"
+    end
+  end
+
+  describe "assistant_message_from_response/2" do
+    test "preserves response metadata for tool-call turns" do
+      classified = %{
+        type: :tool_calls,
+        text: "",
+        tool_calls: [%{id: "call_123", name: "echo", arguments: %{"text" => "hi"}}]
+      }
+
+      response = %Response{
+        id: "resp_123",
+        model: "openai:gpt-5.4",
+        context: ReqLLM.Context.new([]),
+        message: %Message{
+          role: :assistant,
+          content: [],
+          metadata: %{response_id: "resp_123"}
+        }
+      }
+
+      assistant_msg = AgentLoop.assistant_message_from_response(classified, response)
+
+      assert assistant_msg.metadata[:response_id] == "resp_123"
+      assert [%{id: "call_123"}] = assistant_msg.tool_calls
+    end
+  end
+
+  describe "to_req_message/1" do
+    test "preserves assistant metadata and tool call ids" do
+      req_message =
+        AgentLoop.to_req_message(%{
+          role: :assistant,
+          content: "",
+          tool_calls: [%{id: "call_123", name: "echo", arguments: %{"text" => "hi"}}],
+          metadata: %{response_id: "resp_123"}
+        })
+
+      assert req_message.metadata[:response_id] == "resp_123"
+      assert [%ReqLLM.ToolCall{id: "call_123"}] = req_message.tool_calls
+    end
+
+    test "returns nil for malformed messages instead of crashing" do
+      assert AgentLoop.to_req_message(nil) == nil
+      assert AgentLoop.to_req_message(%{content: "missing role"}) == nil
+      assert AgentLoop.to_req_message("not a map") == nil
     end
   end
 
@@ -204,10 +253,6 @@ defmodule Loomkin.AgentLoopTest do
     end
 
     test "tool_call_signature produces deterministic, order-independent signatures" do
-      # Access the private function indirectly by testing the process dict behavior.
-      # We verify that the signature mechanism works by running two loops and
-      # checking the process dictionary state.
-
       # Two calls with same tools in different order should produce same signature
       calls_a = [
         %{name: "file_read", arguments: %{"path" => "/a.txt"}},
@@ -226,17 +271,17 @@ defmodule Loomkin.AgentLoopTest do
       config = %{on_event: fn _, _ -> :ok end}
 
       # First call sets the signature
-      messages = apply_cycle_check(calls_a, [], config)
+      messages = AgentLoop.maybe_inject_cycle_warning([], calls_a, config)
       sig_a = Process.get(:loomkin_prev_tool_signature)
       assert messages == []
 
       # Second call with reordered tools should detect a cycle
-      messages = apply_cycle_check(calls_b, [], config)
+      messages = AgentLoop.maybe_inject_cycle_warning([], calls_b, config)
       sig_b = Process.get(:loomkin_prev_tool_signature)
 
       assert sig_a == sig_b
       assert length(messages) == 1
-      assert hd(messages).role == :user
+      assert hd(messages).role == :system
       assert hd(messages).content =~ "Do NOT repeat"
     end
 
@@ -245,16 +290,16 @@ defmodule Loomkin.AgentLoopTest do
       config = %{on_event: fn _, _ -> :ok end}
 
       _messages =
-        apply_cycle_check(
-          [%{name: "file_read", arguments: %{"path" => "/a.txt"}}],
+        AgentLoop.maybe_inject_cycle_warning(
           [],
+          [%{name: "file_read", arguments: %{"path" => "/a.txt"}}],
           config
         )
 
       messages =
-        apply_cycle_check(
-          [%{name: "file_read", arguments: %{"path" => "/b.txt"}}],
+        AgentLoop.maybe_inject_cycle_warning(
           [],
+          [%{name: "file_read", arguments: %{"path" => "/b.txt"}}],
           config
         )
 
@@ -275,48 +320,316 @@ defmodule Loomkin.AgentLoopTest do
       calls = [%{name: "grep", arguments: %{"pattern" => "foo"}}]
 
       # First call — no cycle
-      apply_cycle_check(calls, [], config)
+      AgentLoop.maybe_inject_cycle_warning([], calls, config)
       refute_received {:event, :cycle_detected, _}
 
       # Second call — cycle detected
-      apply_cycle_check(calls, [], config)
+      AgentLoop.maybe_inject_cycle_warning([], calls, config)
       assert_received {:event, :cycle_detected, %{signature: sig}}
       assert is_binary(sig)
       assert sig =~ "grep"
     end
 
-    # Helper that mirrors the private maybe_inject_cycle_warning logic
-    defp apply_cycle_check(tool_calls, messages, config) do
-      prev_sig = Process.get(:loomkin_prev_tool_signature)
+    test "cycle warning preserves existing history instead of replacing it" do
+      Process.put(:loomkin_prev_tool_signature, nil)
 
-      current_sig =
-        tool_calls
-        |> Enum.map(fn tc ->
-          name = tc[:name] || tc["name"] || ""
-          args = tc[:arguments] || tc["arguments"] || %{}
-          "#{name}:#{inspect(args)}"
-        end)
-        |> Enum.sort()
-        |> Enum.join("|")
+      existing_messages = [
+        %{role: :user, content: "Please investigate vault ingestion"},
+        %{
+          role: :assistant,
+          content: "",
+          tool_calls: [%{id: "call_1", name: "search_keepers", arguments: %{}}]
+        },
+        %{role: :tool, content: "found prior work", tool_call_id: "call_1"}
+      ]
 
-      Process.put(:loomkin_prev_tool_signature, current_sig)
+      repeated_tools = [
+        %{name: "search_keepers", arguments: %{"query" => "vault ingestion"}}
+      ]
 
-      if prev_sig == current_sig and prev_sig != nil do
-        warning_msg = %{
-          role: :user,
-          content:
-            "You already called the same tool(s) with identical arguments " <>
-              "in the previous iteration and got the same results. Do NOT repeat " <>
-              "the same calls. Either use the results you already have to form a " <>
-              "final answer, or try a different approach."
-        }
+      config = %{on_event: fn _, _ -> :ok end}
 
-        config.on_event.(:cycle_detected, %{signature: current_sig})
-        config.on_event.(:new_message, warning_msg)
-        messages ++ [warning_msg]
-      else
-        messages
-      end
+      assert existing_messages ==
+               AgentLoop.maybe_inject_cycle_warning(existing_messages, repeated_tools, config)
+
+      updated_messages =
+        AgentLoop.maybe_inject_cycle_warning(existing_messages, repeated_tools, config)
+
+      assert length(updated_messages) == length(existing_messages) + 1
+      assert Enum.take(updated_messages, length(existing_messages)) == existing_messages
+      assert List.last(updated_messages).role == :system
+      assert List.last(updated_messages).content =~ "Do NOT repeat"
+    end
+  end
+
+  describe "coordination loop detection" do
+    test "coordination-only tool sets are detected" do
+      assert AgentLoop.coordination_only_tool_calls?([
+               %{name: "decision_query", arguments: %{"query_type" => "pulse"}},
+               %{name: "query_backlog", arguments: %{"query_type" => "summary"}}
+             ])
+
+      refute AgentLoop.coordination_only_tool_calls?([
+               %{name: "decision_query", arguments: %{"query_type" => "pulse"}},
+               %{name: "team_spawn", arguments: %{"roles" => []}}
+             ])
+    end
+
+    test "injects a warning after consecutive coordination-only iterations" do
+      Process.put(:loomkin_coordination_streak, 0)
+      test_pid = self()
+
+      config = %{
+        agent_name: "concierge",
+        team_id: "team-123",
+        on_event: fn event_name, payload ->
+          send(test_pid, {:event, event_name, payload})
+          :ok
+        end
+      }
+
+      tools = [%{name: "decision_query", arguments: %{"query_type" => "pulse"}}]
+
+      assert [] == AgentLoop.maybe_inject_coordination_warning([], tools, config)
+      refute_received {:event, :coordination_loop_detected, _}
+
+      messages = AgentLoop.maybe_inject_coordination_warning([], tools, config)
+      assert [%{role: :system, content: content}] = messages
+      assert content =~ "Stop planning and move the task forward"
+
+      assert_received {:event, :coordination_loop_detected,
+                       %{streak: 2, tools: ["decision_query"]}}
+    end
+
+    test "concierge gets the stronger warning after a single repeated coordination turn" do
+      Process.put(:loomkin_coordination_streak, 0)
+
+      config = %{
+        role: :concierge,
+        agent_name: "concierge",
+        team_id: "team-123",
+        on_event: fn _, _ -> :ok end
+      }
+
+      tools = [%{name: "decision_query", arguments: %{"query_type" => "pulse"}}]
+
+      messages = AgentLoop.maybe_inject_coordination_warning([], tools, config)
+      assert [%{role: :system, content: content}] = messages
+      assert content =~ "Stay available for the human"
+      assert content =~ "spawn a specialist or team"
+      assert content =~ "do NOT ask what they want next"
+      assert content =~ "do NOT ask them to restate the task"
+    end
+
+    test "resets coordination streak when non-coordination work appears" do
+      Process.put(:loomkin_coordination_streak, 1)
+
+      config = %{
+        agent_name: "concierge",
+        team_id: "team-123",
+        on_event: fn _, _ -> :ok end
+      }
+
+      assert [] ==
+               AgentLoop.maybe_inject_coordination_warning(
+                 [],
+                 [%{name: "team_spawn", arguments: %{"roles" => []}}],
+                 config
+               )
+
+      assert Process.get(:loomkin_coordination_streak) == 0
+    end
+
+    test "stops the loop after too many consecutive coordination-only iterations" do
+      Process.put(:loomkin_coordination_streak, 6)
+      test_pid = self()
+
+      config = %{
+        agent_name: "concierge",
+        team_id: "team-123",
+        on_event: fn event_name, payload ->
+          send(test_pid, {:event, event_name, payload})
+          :ok
+        end
+      }
+
+      response = %Response{
+        id: "resp_123",
+        model: "openai:gpt-5.4",
+        context: ReqLLM.Context.new([]),
+        usage: %{input_tokens: 10, output_tokens: 20, total_cost: 0.12}
+      }
+
+      assert {:stop, message, messages, %{usage: usage}} =
+               AgentLoop.maybe_stop_coordination_loop([], config, response)
+
+      assert message =~ "Agent stopped after repeated coordination-only iterations"
+      assert [%{role: :assistant, content: ^message}] = messages
+      assert usage.input_tokens == 10
+
+      assert_received {:event, :coordination_loop_stopped, %{streak: 6}}
+    end
+
+    test "concierge gets more room before the hard stop" do
+      Process.put(:loomkin_coordination_streak, 6)
+
+      config = %{
+        role: :concierge,
+        agent_name: "concierge",
+        team_id: "team-123",
+        on_event: fn _, _ -> :ok end
+      }
+
+      response = %Response{
+        id: "resp_123",
+        model: "openai:gpt-5.4",
+        context: ReqLLM.Context.new([]),
+        usage: %{input_tokens: 10, output_tokens: 20, total_cost: 0.12}
+      }
+
+      assert {:continue, []} =
+               AgentLoop.maybe_stop_coordination_loop([], config, response)
+    end
+
+    test "concierge still stops after an extended coordination streak" do
+      Process.put(:loomkin_coordination_streak, 7)
+
+      config = %{
+        role: :concierge,
+        agent_name: "concierge",
+        team_id: "team-123",
+        on_event: fn _, _ -> :ok end
+      }
+
+      response = %Response{
+        id: "resp_123",
+        model: "openai:gpt-5.4",
+        context: ReqLLM.Context.new([]),
+        usage: %{input_tokens: 10, output_tokens: 20, total_cost: 0.12}
+      }
+
+      assert {:stop, message, _messages, _meta} =
+               AgentLoop.maybe_stop_coordination_loop([], config, response)
+
+      assert message =~ "Concierge stopped after repeated coordination-only iterations"
+      assert message =~ "staying available for the user"
+    end
+  end
+
+  describe "research loop detection" do
+    test "research-only tool sets are detected" do
+      assert AgentLoop.research_scan_only_tool_calls?([
+               %{name: "file_search", arguments: %{"pattern" => "AgentLoop"}},
+               %{name: "file_read", arguments: %{"file_path" => "lib/foo.ex"}}
+             ])
+
+      refute AgentLoop.research_scan_only_tool_calls?([
+               %{name: "file_search", arguments: %{"pattern" => "AgentLoop"}},
+               %{name: "peer_discovery", arguments: %{"discoveries" => ["x"]}}
+             ])
+    end
+
+    test "warns researchers after repeated scan-only iterations" do
+      Process.put(:loomkin_research_scan_streak, 0)
+      test_pid = self()
+
+      config = %{
+        role: :researcher,
+        agent_name: "researcher-1",
+        team_id: "team-123",
+        on_event: fn event_name, payload ->
+          send(test_pid, {:event, event_name, payload})
+          :ok
+        end
+      }
+
+      tools = [%{name: "file_search", arguments: %{"pattern" => "AgentLoop"}}]
+
+      assert [] == AgentLoop.maybe_inject_research_warning([], tools, config)
+      assert [] == AgentLoop.maybe_inject_research_warning([], tools, config)
+
+      messages = AgentLoop.maybe_inject_research_warning([], tools, config)
+      assert [%{role: :system, content: content}] = messages
+      assert content =~ "You are a researcher"
+      assert content =~ "context_offload"
+      assert content =~ "peer_complete_task"
+
+      assert_received {:event, :research_loop_detected, %{streak: 3, tools: ["file_search"]}}
+    end
+
+    test "resets research scan streak when the researcher starts publishing" do
+      Process.put(:loomkin_research_scan_streak, 2)
+
+      config = %{
+        role: :researcher,
+        agent_name: "researcher-1",
+        team_id: "team-123",
+        on_event: fn _, _ -> :ok end
+      }
+
+      assert [] ==
+               AgentLoop.maybe_inject_research_warning(
+                 [],
+                 [%{name: "peer_discovery", arguments: %{"discoveries" => ["x"]}}],
+                 config
+               )
+
+      assert Process.get(:loomkin_research_scan_streak) == 0
+    end
+  end
+
+  describe "history normalization" do
+    test "reattaches orphan tool-call maps to the previous assistant message" do
+      messages = [
+        %{role: :user, content: "Please assess vault ingestion"},
+        %{role: :assistant, content: ""},
+        %{
+          id: "call_123",
+          name: "team_spawn",
+          arguments: %{"team_name" => "vault-ingestion-assessment"}
+        },
+        %{role: :tool, content: "spawned", tool_call_id: "call_123"}
+      ]
+
+      assert [
+               %{role: :user},
+               %{role: :assistant, tool_calls: [tool_call]},
+               %{role: :tool, tool_call_id: "call_123"}
+             ] = AgentLoop.normalize_history_messages(messages)
+
+      assert tool_call.id == "call_123"
+      assert tool_call.name == "team_spawn"
+      assert tool_call.arguments == %{"team_name" => "vault-ingestion-assessment"}
+    end
+
+    test "rebuilds orphan tool-call maps into a synthetic assistant when a tool result exists" do
+      messages = [
+        %{role: :user, content: "Please assess vault ingestion"},
+        %{id: "call_123", name: "team_spawn", arguments: %{"team_name" => "vault"}},
+        %{id: "call_456", name: "decision_log", arguments: %{"title" => "Delegate"}},
+        %{role: :tool, content: "spawn failed", tool_call_id: "call_123"},
+        %{role: :tool, content: "logged", tool_call_id: "call_456"}
+      ]
+
+      assert [
+               %{role: :user},
+               %{role: :assistant, tool_calls: [first_call, second_call]},
+               %{role: :tool, tool_call_id: "call_123"},
+               %{role: :tool, tool_call_id: "call_456"}
+             ] = AgentLoop.normalize_history_messages(messages)
+
+      assert first_call.id == "call_123"
+      assert first_call.name == "team_spawn"
+      assert second_call.id == "call_456"
+      assert second_call.name == "decision_log"
+    end
+
+    test "drops unrepairable orphan tool-call maps" do
+      messages = [
+        %{id: "call_123", name: "team_spawn", arguments: %{"team_name" => "vault"}}
+      ]
+
+      assert [] == AgentLoop.normalize_history_messages(messages)
     end
   end
 

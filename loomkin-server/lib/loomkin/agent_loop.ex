@@ -19,6 +19,83 @@ defmodule Loomkin.AgentLoop do
 
   @default_max_rate_limit_retries 3
   @default_max_iterations 30
+  @orientation_tools MapSet.new([
+                       "decision_query",
+                       "query_backlog",
+                       "search_keepers",
+                       "decision_log",
+                       "team_progress",
+                       "context_retrieve"
+                     ])
+  @research_scan_tools MapSet.new([
+                         "file_read",
+                         "file_search",
+                         "content_search",
+                         "directory_list",
+                         "decision_query",
+                         "search_keepers",
+                         "context_retrieve",
+                         "introspect_decision_history",
+                         "introspect_failure_patterns"
+                       ])
+  @coordination_warning_threshold 2
+  @coordination_abort_threshold 6
+  @concierge_coordination_warning_threshold 1
+  @concierge_coordination_abort_threshold 7
+  @research_warning_threshold 3
+  @coordination_warning """
+  You have spent multiple consecutive iterations on coordination/context tools.
+  Stop planning and move the task forward. Either:
+  - delegate to a specialist,
+  - ask the human one focused question, or
+  - provide your best current answer.
+
+  Do NOT call more coordination tools until new external input arrives.
+  """
+  @concierge_coordination_warning """
+  You are the concierge. Stay available for the human instead of sinking into research or planning.
+  You have already done enough orientation.
+
+  Your next step must be one of:
+  - spawn a specialist or team to do the actual research/work,
+  - ask the human one focused question, or
+  - give the user your best current synthesis.
+
+  If the latest user message already gave you a concrete task, do NOT ask what they want next
+  and do NOT ask them to restate the task. Route it now.
+  If clarification is truly required, ask only for the one missing detail.
+
+  Do NOT run more coordination/context tools right now.
+  Do NOT become the deepest worker in the loop.
+  """
+  @coordination_abort_message """
+  Agent stopped after repeated coordination-only iterations.
+  It kept using planning/context tools without moving the task forward.
+  Try again with a more specific ask, approve delegation, or provide fresh input.
+  """
+  @concierge_coordination_abort_message """
+  Concierge stopped after repeated coordination-only iterations.
+  It was staying busy on planning/context work instead of delegating and staying available for the user.
+  Try again with a more specific ask, approve delegation, or provide fresh input.
+  """
+  @research_warning """
+  You are a researcher. You have already spent multiple iterations scanning and reading.
+  If you can answer the assigned research questions, stop exploring and publish what you found now.
+
+  Next step:
+  - summarize the concrete findings,
+  - persist them with context_offload,
+  - broadcast the key points with peer_discovery or peer_message,
+  - then finish with peer_complete_task.
+
+  Do NOT keep researching just to be thorough if you already have enough to answer.
+  """
+  @empty_publication_state %{
+    offloaded: false,
+    discovery_shared: false,
+    published_count: 0,
+    last_topic: nil
+  }
 
   @type on_event :: (atom(), map() -> :ok)
 
@@ -60,6 +137,12 @@ defmodule Loomkin.AgentLoop do
     Process.put(:loomkin_read_files, MapSet.new())
     # Initialize cycle detection tracker (previous tool-call signature)
     Process.put(:loomkin_prev_tool_signature, nil)
+    # Track repeated coordination-only turns so we can steer agents out of planning loops.
+    Process.put(:loomkin_coordination_streak, 0)
+    # Track researchers who keep scanning without publishing findings.
+    Process.put(:loomkin_research_scan_streak, 0)
+    # Track whether this loop has already published durable findings.
+    Process.put(:loomkin_publication_state, @empty_publication_state)
 
     # Bootstrap failure memory: inject lessons from past errors
     messages = bootstrap_failure_memory(messages, config)
@@ -174,6 +257,8 @@ defmodule Loomkin.AgentLoop do
   end
 
   defp do_loop(messages, config, iteration) do
+    messages = normalize_history_messages(messages)
+
     # Auto-offload context if agent is above threshold
     messages = maybe_auto_offload(messages, config)
 
@@ -254,17 +339,15 @@ defmodule Loomkin.AgentLoop do
          config,
          iteration
        ) do
+    log_tool_plan(config, iteration, classified.tool_calls)
+
     emit(config, :tool_calls_received, %{
       tool_calls: classified.tool_calls,
       text: classified.text
     })
 
     # Build assistant message with tool calls
-    assistant_msg = %{
-      role: :assistant,
-      content: classified.text,
-      tool_calls: classified.tool_calls
-    }
+    assistant_msg = assistant_message_from_response(classified, response)
 
     messages = messages ++ [assistant_msg]
     emit(config, :new_message, assistant_msg)
@@ -285,8 +368,20 @@ defmodule Loomkin.AgentLoop do
         case execute_tool_calls(classified.tool_calls, messages, config, iteration) do
           {:ok, messages} ->
             emit_usage(config, response)
-            messages = maybe_inject_cycle_warning(classified.tool_calls, messages, config)
-            do_loop(messages, config, iteration + 1)
+
+            messages =
+              messages
+              |> maybe_inject_cycle_warning(classified.tool_calls, config)
+              |> maybe_inject_coordination_warning(classified.tool_calls, config)
+              |> maybe_inject_research_warning(classified.tool_calls, config)
+
+            case maybe_stop_coordination_loop(messages, config, response) do
+              {:stop, response_text, messages, metadata} ->
+                {:ok, response_text, messages, metadata}
+
+              {:continue, messages} ->
+                do_loop(messages, config, iteration + 1)
+            end
 
           {:paused, reason, messages} ->
             emit_usage(config, response)
@@ -320,7 +415,7 @@ defmodule Loomkin.AgentLoop do
        ) do
     response_text = classified.text
 
-    assistant_msg = %{role: :assistant, content: response_text}
+    assistant_msg = assistant_message_from_response(classified, response)
     messages = messages ++ [assistant_msg]
     emit(config, :new_message, assistant_msg)
 
@@ -380,7 +475,9 @@ defmodule Loomkin.AgentLoop do
       agent_name: config.agent_name,
       team_id: config.team_id,
       parent_team_id: parent_team_id,
-      model: config.model
+      model: config.model,
+      role: config.role,
+      publication_state: current_publication_state()
     }
 
     emit(config, :tool_executing, %{tool_name: tool_name, tool_target: tool_path})
@@ -490,6 +587,7 @@ defmodule Loomkin.AgentLoop do
 
                   # Track successful file_read calls
                   maybe_track_read_file(tool_name, tool_args, effective_path, result_text)
+                  maybe_track_findings_publication(tool_name, tool_args, result_text, config)
 
                   messages =
                     record_tool_result(messages, config, tool_name, tool_call_id, result_text)
@@ -764,20 +862,110 @@ defmodule Loomkin.AgentLoop do
 
   defp maybe_track_read_file(_tool_name, _tool_args, _project_path, _result_text), do: :ok
 
+  defp maybe_track_findings_publication(tool_name, tool_args, result_text, config) do
+    cond do
+      tool_name in ["context_offload", :context_offload] and
+          String.starts_with?(result_text, "Offloaded ") ->
+        topic = tool_args["topic"] || tool_args[:topic]
+
+        update_publication_state(fn state ->
+          state
+          |> Map.put(:offloaded, true)
+          |> Map.put(:last_topic, topic || state.last_topic)
+          |> Map.update!(:published_count, &(&1 + 1))
+        end)
+
+        emit(config, :context_offloaded, %{topic: topic, source: "context_offload"})
+
+      tool_name in ["peer_discovery", :peer_discovery] and
+          String.starts_with?(result_text, "Discovery broadcast") ->
+        update_publication_state(fn state ->
+          Map.put(state, :discovery_shared, true)
+        end)
+
+      true ->
+        :ok
+    end
+  end
+
+  defp current_publication_state do
+    Process.get(:loomkin_publication_state, @empty_publication_state)
+  end
+
+  defp update_publication_state(updater) when is_function(updater, 1) do
+    Process.put(:loomkin_publication_state, updater.(current_publication_state()))
+  end
+
   # -- Cycle detection ---------------------------------------------------------
+
+  defp log_tool_plan(config, iteration, tool_calls) do
+    summaries =
+      tool_calls
+      |> Enum.map(&summarize_tool_call/1)
+      |> Enum.join(" | ")
+
+    Logger.info(
+      "[Kin:loop] tool_plan agent=#{config.agent_name || "-"} team=#{config.team_id || "-"} iteration=#{iteration} count=#{length(tool_calls)} tools=#{summaries}"
+    )
+  end
+
+  defp summarize_tool_call(tool_call) do
+    name = tool_call[:name] || tool_call["name"] || "unknown"
+    args = tool_call[:arguments] || tool_call["arguments"] || %{}
+    "#{name}(#{tool_arg_preview(args)})"
+  end
+
+  defp tool_arg_preview(args) when is_map(args) do
+    interesting_keys =
+      ~w(query query_type search_term title topic node_type purpose team_name limit)a
+
+    preview_parts =
+      args
+      |> Enum.filter(fn {key, _value} ->
+        key in interesting_keys or to_string(key) in Enum.map(interesting_keys, &to_string/1)
+      end)
+      |> Enum.take(3)
+      |> Enum.map(fn {key, value} -> "#{key}=#{preview_tool_value(value)}" end)
+
+    case preview_parts do
+      [] ->
+        args
+        |> Map.keys()
+        |> Enum.map(&to_string/1)
+        |> Enum.sort()
+        |> Enum.take(3)
+        |> Enum.join(",")
+
+      parts ->
+        Enum.join(parts, ", ")
+    end
+  end
+
+  defp tool_arg_preview(_args), do: "-"
+
+  defp preview_tool_value(value) when is_binary(value) do
+    value
+    |> String.replace(~r/\s+/, " ")
+    |> String.slice(0, 40)
+  end
+
+  defp preview_tool_value(value) when is_list(value), do: "list[#{length(value)}]"
+  defp preview_tool_value(value) when is_map(value), do: "map(keys=#{map_size(value)})"
+  defp preview_tool_value(value), do: inspect(value, limit: 20)
 
   @cycle_warning "You already called the same tool(s) with identical arguments " <>
                    "in the previous iteration and got the same results. Do NOT repeat " <>
                    "the same calls. Either use the results you already have to form a " <>
                    "final answer, or try a different approach."
 
-  defp maybe_inject_cycle_warning(tool_calls, messages, config) do
+  @doc false
+  def maybe_inject_cycle_warning(messages, tool_calls, config) do
     prev_sig = Process.get(:loomkin_prev_tool_signature)
     current_sig = tool_call_signature(tool_calls)
     Process.put(:loomkin_prev_tool_signature, current_sig)
 
     if prev_sig == current_sig and prev_sig != nil do
-      warning_msg = %{role: :user, content: @cycle_warning}
+      warning_msg = %{role: :system, content: @cycle_warning}
       emit(config, :cycle_detected, %{signature: current_sig})
       emit(config, :new_message, warning_msg)
       messages ++ [warning_msg]
@@ -785,6 +973,129 @@ defmodule Loomkin.AgentLoop do
       messages
     end
   end
+
+  @doc false
+  def maybe_inject_coordination_warning(messages, tool_calls, config) do
+    if coordination_only_tool_calls?(tool_calls) do
+      prev_streak = Process.get(:loomkin_coordination_streak, 0)
+      streak = prev_streak + 1
+      Process.put(:loomkin_coordination_streak, streak)
+      role = Map.get(config, :role)
+      threshold = coordination_warning_threshold(role)
+
+      if prev_streak < threshold and streak >= threshold do
+        tools = tool_calls |> Enum.map(&tool_name/1) |> Enum.uniq()
+        warning_content = coordination_warning_message(role)
+
+        Logger.warning(
+          "[Kin:loop] coordination_streak agent=#{config.agent_name || "-"} team=#{config.team_id || "-"} streak=#{streak} tools=#{Enum.join(tools, ",")}"
+        )
+
+        warning_msg = %{
+          role: :system,
+          content: warning_content
+        }
+
+        emit(config, :coordination_loop_detected, %{streak: streak, tools: tools})
+        emit(config, :new_message, warning_msg)
+        messages ++ [warning_msg]
+      else
+        messages
+      end
+    else
+      Process.put(:loomkin_coordination_streak, 0)
+      messages
+    end
+  end
+
+  @doc false
+  def coordination_only_tool_calls?(tool_calls) when is_list(tool_calls) and tool_calls != [] do
+    Enum.all?(tool_calls, fn tool_call ->
+      MapSet.member?(@orientation_tools, tool_name(tool_call))
+    end)
+  end
+
+  def coordination_only_tool_calls?(_tool_calls), do: false
+
+  @doc false
+  def maybe_inject_research_warning(messages, tool_calls, config) do
+    if Map.get(config, :role) == :researcher and research_scan_only_tool_calls?(tool_calls) do
+      prev_streak = Process.get(:loomkin_research_scan_streak, 0)
+      streak = prev_streak + 1
+      Process.put(:loomkin_research_scan_streak, streak)
+
+      if prev_streak < @research_warning_threshold and streak >= @research_warning_threshold do
+        tools = tool_calls |> Enum.map(&tool_name/1) |> Enum.uniq()
+
+        Logger.warning(
+          "[Kin:loop] research_scan_streak agent=#{config.agent_name || "-"} team=#{config.team_id || "-"} streak=#{streak} tools=#{Enum.join(tools, ",")}"
+        )
+
+        warning_msg = %{
+          role: :system,
+          content: String.trim(@research_warning)
+        }
+
+        emit(config, :research_loop_detected, %{streak: streak, tools: tools})
+        emit(config, :new_message, warning_msg)
+        messages ++ [warning_msg]
+      else
+        messages
+      end
+    else
+      Process.put(:loomkin_research_scan_streak, 0)
+      messages
+    end
+  end
+
+  @doc false
+  def research_scan_only_tool_calls?(tool_calls) when is_list(tool_calls) and tool_calls != [] do
+    Enum.all?(tool_calls, fn tool_call ->
+      MapSet.member?(@research_scan_tools, tool_name(tool_call))
+    end)
+  end
+
+  def research_scan_only_tool_calls?(_tool_calls), do: false
+
+  @doc false
+  def maybe_stop_coordination_loop(messages, config, response) do
+    streak = Process.get(:loomkin_coordination_streak, 0)
+    role = Map.get(config, :role)
+    threshold = coordination_abort_threshold(role)
+
+    if streak >= threshold do
+      Logger.warning(
+        "[Kin:loop] coordination_abort agent=#{config.agent_name || "-"} team=#{config.team_id || "-"} streak=#{streak}"
+      )
+
+      assistant_msg = %{
+        role: :assistant,
+        content: coordination_abort_message(role)
+      }
+
+      emit(config, :coordination_loop_stopped, %{streak: streak})
+      emit(config, :new_message, assistant_msg)
+
+      {:stop, assistant_msg.content, messages ++ [assistant_msg],
+       %{usage: extract_usage(response)}}
+    else
+      {:continue, messages}
+    end
+  end
+
+  defp coordination_warning_threshold(:concierge), do: @concierge_coordination_warning_threshold
+  defp coordination_warning_threshold(_role), do: @coordination_warning_threshold
+
+  defp coordination_abort_threshold(:concierge), do: @concierge_coordination_abort_threshold
+  defp coordination_abort_threshold(_role), do: @coordination_abort_threshold
+
+  defp coordination_warning_message(:concierge), do: String.trim(@concierge_coordination_warning)
+  defp coordination_warning_message(_role), do: String.trim(@coordination_warning)
+
+  defp coordination_abort_message(:concierge),
+    do: String.trim(@concierge_coordination_abort_message)
+
+  defp coordination_abort_message(_role), do: String.trim(@coordination_abort_message)
 
   defp tool_call_signature(tool_calls) when is_list(tool_calls) do
     tool_calls
@@ -795,6 +1106,10 @@ defmodule Loomkin.AgentLoop do
     end)
     |> Enum.sort()
     |> Enum.join("|")
+  end
+
+  defp tool_name(tool_call) do
+    tool_call[:name] || tool_call["name"] || "unknown"
   end
 
   # -- Helpers -----------------------------------------------------------------
@@ -881,35 +1196,246 @@ defmodule Loomkin.AgentLoop do
   end
 
   defp build_req_messages(windowed_messages) do
-    Enum.map(windowed_messages, fn msg ->
-      case msg.role do
-        :system ->
-          ReqLLM.Context.system(msg.content)
-
-        :user ->
-          ReqLLM.Context.user(msg.content)
-
-        :assistant ->
-          if msg[:tool_calls] && msg[:tool_calls] != [] do
-            tool_calls =
-              Enum.map(msg.tool_calls, fn tc ->
-                {tc[:name] || tc["name"], tc[:arguments] || tc["arguments"] || %{},
-                 id: tc[:id] || tc["id"]}
-              end)
-
-            ReqLLM.Context.assistant(msg.content || "", tool_calls: tool_calls)
-          else
-            ReqLLM.Context.assistant(msg.content || "")
-          end
-
-        :tool ->
-          ReqLLM.Context.tool_result(
-            msg[:tool_call_id] || "",
-            msg.content || ""
-          )
+    windowed_messages
+    |> normalize_history_messages()
+    |> Enum.reduce([], fn msg, acc ->
+      case to_req_message(msg) do
+        nil -> acc
+        req_msg -> [req_msg | acc]
       end
     end)
+    |> Enum.reverse()
   end
+
+  @doc false
+  def normalize_history_messages(messages) when is_list(messages) do
+    tool_result_ids = extract_tool_result_ids(messages)
+
+    messages
+    |> Enum.reduce([], fn msg, acc ->
+      normalize_history_message(msg, acc, tool_result_ids)
+    end)
+    |> Enum.reverse()
+  end
+
+  def normalize_history_messages(messages), do: messages
+
+  @doc false
+  def assistant_message_from_response(classified, response) when is_map(classified) do
+    base = %{
+      role: :assistant,
+      content: classified[:text] || classified["text"] || ""
+    }
+
+    base =
+      case classified[:tool_calls] || classified["tool_calls"] do
+        tool_calls when is_list(tool_calls) and tool_calls != [] ->
+          Map.put(base, :tool_calls, tool_calls)
+
+        _ ->
+          base
+      end
+
+    case response do
+      %{message: %{metadata: metadata}} when is_map(metadata) and map_size(metadata) > 0 ->
+        Map.put(base, :metadata, metadata)
+
+      _ ->
+        base
+    end
+  end
+
+  def to_req_message(nil) do
+    Logger.warning("[Kin:data] dropping nil message from llm context window")
+    nil
+  end
+
+  @doc false
+  def to_req_message(msg) when is_map(msg) do
+    role = msg[:role] || msg["role"]
+    content = msg[:content] || msg["content"] || ""
+    metadata = msg[:metadata] || msg["metadata"] || %{}
+    tool_calls = msg[:tool_calls] || msg["tool_calls"]
+
+    case role do
+      role when role in [:system, "system"] ->
+        ReqLLM.Context.system(content)
+
+      role when role in [:user, "user"] ->
+        ReqLLM.Context.user(content)
+
+      role when role in [:assistant, "assistant"] ->
+        if is_list(tool_calls) and tool_calls != [] do
+          tool_calls =
+            Enum.map(tool_calls, fn tc ->
+              {tc[:name] || tc["name"], tc[:arguments] || tc["arguments"] || %{},
+               id: tc[:id] || tc["id"]}
+            end)
+
+          ReqLLM.Context.assistant(content, tool_calls: tool_calls, metadata: metadata)
+        else
+          ReqLLM.Context.assistant(content, metadata: metadata)
+        end
+
+      role when role in [:tool, "tool"] ->
+        ReqLLM.Context.tool_result(
+          msg[:tool_call_id] || msg["tool_call_id"] || "",
+          content
+        )
+
+      other ->
+        Logger.warning(
+          "[Kin:data] dropping malformed message from llm context window role=#{inspect(other)} payload=#{inspect(msg, limit: 120)}"
+        )
+
+        nil
+    end
+  end
+
+  def to_req_message(msg) do
+    Logger.warning(
+      "[Kin:data] dropping non-map message from llm context window payload=#{inspect(msg, limit: 120)}"
+    )
+
+    nil
+  end
+
+  defp normalize_history_message(nil, acc, _tool_result_ids) do
+    Logger.warning("[Kin:data] dropping nil message from agent history")
+    acc
+  end
+
+  defp normalize_history_message(%{} = msg, acc, tool_result_ids) do
+    cond do
+      valid_history_role?(msg[:role] || msg["role"]) ->
+        [normalize_regular_history_message(msg) | acc]
+
+      raw_tool_call_message?(msg) ->
+        attach_or_rebuild_or_drop_orphan_tool_call(msg, acc, tool_result_ids)
+
+      true ->
+        Logger.warning(
+          "[Kin:data] dropping malformed message from agent history role=#{inspect(msg[:role] || msg["role"])} payload=#{inspect(msg, limit: 120)}"
+        )
+
+        acc
+    end
+  end
+
+  defp normalize_history_message(msg, acc, _tool_result_ids) do
+    Logger.warning(
+      "[Kin:data] dropping non-map message from agent history payload=#{inspect(msg, limit: 120)}"
+    )
+
+    acc
+  end
+
+  defp normalize_regular_history_message(msg) do
+    role = msg[:role] || msg["role"]
+    content = msg[:content] || msg["content"] || ""
+    metadata = msg[:metadata] || msg["metadata"]
+    tool_call_id = msg[:tool_call_id] || msg["tool_call_id"]
+    tool_calls = normalize_tool_calls(msg[:tool_calls] || msg["tool_calls"] || [])
+
+    %{}
+    |> Map.put(:role, role)
+    |> Map.put(:content, content)
+    |> maybe_put_non_empty(:metadata, metadata)
+    |> maybe_put_non_empty(:tool_call_id, tool_call_id)
+    |> maybe_put_non_empty(:tool_calls, tool_calls)
+    |> maybe_copy_history_key(msg, :priority)
+    |> maybe_copy_history_key(msg, "priority")
+  end
+
+  defp maybe_copy_history_key(map, source, key) do
+    case Map.fetch(source, key) do
+      {:ok, value} -> Map.put_new(map, :priority, value)
+      :error -> map
+    end
+  end
+
+  defp maybe_put_non_empty(map, _key, nil), do: map
+  defp maybe_put_non_empty(map, _key, []), do: map
+  defp maybe_put_non_empty(map, key, value), do: Map.put(map, key, value)
+
+  defp raw_tool_call_message?(msg) when is_map(msg) do
+    (is_binary(msg[:name] || msg["name"]) or is_atom(msg[:name])) and
+      is_map(msg[:arguments] || msg["arguments"] || %{}) and
+      not valid_history_role?(msg[:role] || msg["role"])
+  end
+
+  defp raw_tool_call_message?(_), do: false
+
+  defp attach_or_rebuild_or_drop_orphan_tool_call(
+         msg,
+         [%{role: role} = assistant | rest],
+         _tool_result_ids
+       )
+       when role in [:assistant, "assistant"] do
+    normalized_tool_call = normalize_tool_call(msg)
+    tool_calls = normalize_tool_calls(assistant[:tool_calls] || assistant["tool_calls"] || [])
+
+    Logger.warning(
+      "[Kin:data] repaired orphan tool_call in agent history id=#{inspect(normalized_tool_call[:id])} name=#{inspect(normalized_tool_call[:name])}"
+    )
+
+    [Map.put(assistant, :tool_calls, tool_calls ++ [normalized_tool_call]) | rest]
+  end
+
+  defp attach_or_rebuild_or_drop_orphan_tool_call(msg, acc, tool_result_ids) do
+    normalized_tool_call = normalize_tool_call(msg)
+    tool_call_id = normalized_tool_call[:id]
+
+    if is_binary(tool_call_id) and MapSet.member?(tool_result_ids, tool_call_id) do
+      Logger.warning(
+        "[Kin:data] rebuilt orphan tool_call with synthetic assistant id=#{inspect(tool_call_id)} name=#{inspect(normalized_tool_call[:name])}"
+      )
+
+      [%{role: :assistant, content: "", tool_calls: [normalized_tool_call]} | acc]
+    else
+      Logger.warning(
+        "[Kin:data] dropping orphan tool_call from agent history payload=#{inspect(msg, limit: 120)}"
+      )
+
+      acc
+    end
+  end
+
+  defp normalize_tool_calls(tool_calls) when is_list(tool_calls) do
+    tool_calls
+    |> Enum.filter(&raw_tool_call_message?/1)
+    |> Enum.map(&normalize_tool_call/1)
+  end
+
+  defp normalize_tool_calls(_), do: []
+
+  defp normalize_tool_call(tool_call) do
+    %{
+      id: tool_call[:id] || tool_call["id"] || "call_#{Ecto.UUID.generate()}",
+      name: tool_call[:name] || tool_call["name"],
+      arguments: tool_call[:arguments] || tool_call["arguments"] || %{}
+    }
+  end
+
+  defp extract_tool_result_ids(messages) when is_list(messages) do
+    messages
+    |> Enum.flat_map(fn
+      %{role: role, tool_call_id: tool_call_id}
+      when role in [:tool, "tool"] and is_binary(tool_call_id) ->
+        [tool_call_id]
+
+      %{"role" => role, "tool_call_id" => tool_call_id}
+      when role in [:tool, "tool"] and is_binary(tool_call_id) ->
+        [tool_call_id]
+
+      _ ->
+        []
+    end)
+    |> MapSet.new()
+  end
+
+  defp valid_history_role?(role),
+    do: role in [:system, "system", :user, "user", :assistant, "assistant", :tool, "tool"]
 
   defp emit(config, event_name, payload) do
     config.on_event.(event_name, payload)

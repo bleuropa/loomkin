@@ -268,6 +268,7 @@ export function App() {
           messages={messages}
           pendingToolCalls={pendingToolCalls}
           isStreaming={isStreaming}
+          termWidth={termWidth}
         />
       ) : (
         <MessageList
@@ -276,6 +277,7 @@ export function App() {
           isStreaming={isStreaming}
           maxLines={termHeight - 6}
           scrollOffset={sessionState.scrollOffset}
+          estimatedWidth={termWidth - 4}
         />
       )}
       {latestError && <ErrorBanner error={latestError} />}
@@ -298,6 +300,7 @@ export function App() {
             key={pendingApprovals[0].gate_id}
             type="approval"
             gate={pendingApprovals[0]}
+            queueCount={pendingApprovals.length}
             onRespond={respondApproval}
           />
         )}
@@ -309,6 +312,7 @@ export function App() {
             key={pendingSpawnGates[0].gate_id}
             type="spawn_gate"
             gate={pendingSpawnGates[0]}
+            queueCount={pendingSpawnGates.length}
             onRespond={respondSpawnGate}
           />
         )}

@@ -2,6 +2,7 @@ defmodule Loomkin.LLMTest do
   use ExUnit.Case, async: true
 
   alias Loomkin.LLM
+  alias Loomkin.Providers.OpenAIOAuth
 
   describe "oauth_providers/0" do
     test "returns a map of base provider to oauth provider" do
@@ -31,6 +32,16 @@ defmodule Loomkin.LLMTest do
       # In test, TokenStore may or may not have tokens
       result = LLM.oauth_active?("anthropic")
       assert is_boolean(result)
+    end
+  end
+
+  describe "stream_backed_generate?/1" do
+    test "uses stream-backed generate for openai codex oauth" do
+      assert LLM.stream_backed_generate?(OpenAIOAuth)
+    end
+
+    test "does not force stream-backed generate for other providers" do
+      refute LLM.stream_backed_generate?(ReqLLM.Providers.OpenAI)
     end
   end
 end

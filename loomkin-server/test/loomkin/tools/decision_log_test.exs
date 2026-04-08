@@ -3,6 +3,13 @@ defmodule Loomkin.Tools.DecisionLogTest do
 
   alias Loomkin.Tools.DecisionLog
   alias Loomkin.Decisions.Graph
+  alias Loomkin.Schemas.Session
+
+  defp create_session do
+    %Session{}
+    |> Session.changeset(%{model: "test-model", project_path: "/tmp/test"})
+    |> Repo.insert!()
+  end
 
   test "action metadata is correct" do
     assert DecisionLog.name() == "decision_log"
@@ -40,6 +47,30 @@ defmodule Loomkin.Tools.DecisionLogTest do
 
     assert {:ok, %{result: msg}} = DecisionLog.run(params, %{})
     assert msg =~ "decision: Use JWT"
+  end
+
+  test "reuses an existing active goal for the same team" do
+    team_id = Ecto.UUID.generate()
+    session = create_session()
+
+    params = %{"node_type" => "goal", "title" => "Build auth system"}
+    context = %{team_id: team_id, session_id: session.id}
+
+    assert {:ok, %{result: first_msg}} = DecisionLog.run(params, context)
+    assert first_msg =~ "Logged goal: Build auth system"
+
+    assert {:ok, %{result: second_msg}} = DecisionLog.run(params, context)
+    assert second_msg =~ "Reused active goal: Build auth system"
+
+    nodes =
+      Graph.list_nodes(
+        node_type: :goal,
+        status: :active,
+        title: "Build auth system",
+        team_id: team_id
+      )
+
+    assert length(nodes) == 1
   end
 
   test "returns error for invalid node_type" do

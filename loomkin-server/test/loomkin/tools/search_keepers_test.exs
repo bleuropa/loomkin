@@ -103,5 +103,19 @@ defmodule Loomkin.Tools.SearchKeepersTest do
       assert first_entry =~ "relevance=2"
       assert second_entry =~ "relevance=1"
     end
+
+    test "prefers the context team id over a hallucinated param team id", %{team_id: team_id} do
+      %{id: keeper_id} =
+        spawn_keeper(team_id,
+          topic: "vault repo ingestion notes",
+          source_agent: "researcher"
+        )
+
+      params = %{query: "vault repo", team_id: "concierge"}
+      assert {:ok, %{result: result}} = SearchKeepers.run(params, context(team_id))
+
+      assert result =~ "Keeper:#{keeper_id}"
+      refute result =~ "No keepers found"
+    end
   end
 end

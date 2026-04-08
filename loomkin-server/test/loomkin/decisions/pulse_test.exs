@@ -75,6 +75,37 @@ defmodule Loomkin.Decisions.PulseTest do
       assert length(report_default.low_confidence) == 0
       assert length(report_high.low_confidence) == 1
     end
+
+    test "scopes report content to the requested team" do
+      team_a = Ecto.UUID.generate()
+      team_b = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Graph.add_node(
+          node_attrs(%{node_type: :goal, title: "Team A goal", metadata: %{"team_id" => team_a}})
+        )
+
+      {:ok, goal_b} =
+        Graph.add_node(
+          node_attrs(%{node_type: :goal, title: "Team B goal", metadata: %{"team_id" => team_b}})
+        )
+
+      {:ok, action_b} =
+        Graph.add_node(
+          node_attrs(%{
+            node_type: :action,
+            title: "Team B action",
+            metadata: %{"team_id" => team_b}
+          })
+        )
+
+      {:ok, _} = Graph.add_edge(goal_b.id, action_b.id, :leads_to)
+
+      report = Pulse.generate(team_id: team_b)
+
+      assert Enum.map(report.active_goals, & &1.title) == ["Team B goal"]
+      assert report.coverage_gaps == []
+    end
   end
 
   describe "compute_health/1" do

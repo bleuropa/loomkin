@@ -157,6 +157,20 @@ defmodule Loomkin.Teams.AgentTest do
     end
   end
 
+  describe "add_briefing/2" do
+    test "stores a system message without waking an idle agent" do
+      %{pid: pid} = start_agent()
+
+      Agent.add_briefing(pid, "Team briefing")
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      assert state.status == :idle
+      assert state.wake_ref == nil
+      assert [%{role: :system, content: "Team briefing"}] = state.messages
+    end
+  end
+
   describe "assign_task/2" do
     test "stores the task in state" do
       %{pid: pid} = start_agent()

@@ -218,6 +218,10 @@ defmodule Loomkin.Tools.SpawnConversation do
     conversation_id = Ecto.UUID.generate()
     facilitator_name = Map.get(config, :facilitator)
 
+    Logger.debug(
+      "[Kin:spawn_conversation] start team=#{team_id} conversation=#{conversation_id} model=#{inspect(model)} participants=#{length(config.personas)} max_rounds=#{config.max_rounds} potential_turns=#{length(config.personas) * config.max_rounds}"
+    )
+
     # Build participant list with proper structure for ConversationServer
     participants =
       Enum.map(config.personas, fn persona ->

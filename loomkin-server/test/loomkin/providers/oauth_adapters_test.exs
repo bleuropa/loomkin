@@ -9,7 +9,7 @@ defmodule Loomkin.Providers.OAuthAdaptersTest do
   use Loomkin.DataCase, async: false
 
   alias Loomkin.Auth.TokenStore
-  alias Loomkin.Providers.{AnthropicOAuth, OpenAIOAuth, GoogleOAuth}
+  alias Loomkin.Providers.{AnthropicOAuth, OpenAICodexModels, OpenAIOAuth, GoogleOAuth}
 
   setup do
     # Ensure no stale tokens leak between tests
@@ -146,6 +146,144 @@ defmodule Loomkin.Providers.OAuthAdaptersTest do
   end
 
   describe "OpenAIOAuth codex request shaping" do
+    test "builds a request for gpt-5.4 when ReqLLM catalog is stale" do
+      store_test_token(:openai, "test-openai-token")
+
+      assert {:ok, %Req.Request{} = request} =
+               OpenAIOAuth.prepare_request(:chat, "openai:gpt-5.4", "hello", [])
+
+      assert request.options[:model] == "gpt-5.4"
+      assert request.options[:base_url] == "https://chatgpt.com/backend-api"
+    end
+
+    test "falls back to stored account id when token claims are unavailable" do
+      store_test_token(:openai, "test-openai-token")
+
+      assert {:ok, %Req.Request{} = request} =
+               OpenAIOAuth.prepare_request(:chat, "openai:gpt-5.4", "hello", [])
+
+      assert request.headers["chatgpt-account-id"] == ["test-account-openai"]
+    end
+
+    test "replays tool call and output without previous_response_id for codex resume flow" do
+      store_test_token(:openai, "test-openai-token")
+
+      messages = [
+        ReqLLM.Context.assistant("",
+          tool_calls: [{"echo", %{text: "hi"}, id: "call_123"}],
+          metadata: %{response_id: "resp_123"}
+        ),
+        ReqLLM.Context.tool_result("call_123", "done")
+      ]
+
+      assert {:ok, %Req.Request{} = request} =
+               OpenAIOAuth.prepare_request(:chat, "openai:gpt-5.4", messages, [])
+
+      encoded = OpenAIOAuth.encode_body(request)
+      body = Jason.decode!(encoded.body)
+
+      refute Map.has_key?(body, "previous_response_id")
+
+      assert Enum.any?(body["input"], fn item ->
+               item["type"] == "function_call" and item["call_id"] == "call_123" and
+                 item["name"] == "echo"
+             end)
+
+      assert Enum.any?(body["input"], fn item ->
+               item["type"] == "function_call_output" and item["call_id"] == "call_123" and
+                 item["output"] == "done"
+             end)
+    end
+
+    test "stream requests also drop previous_response_id for codex resume flow" do
+      store_test_token(:openai, "test-openai-token")
+
+      messages = [
+        ReqLLM.Context.assistant("",
+          tool_calls: [{"echo", %{text: "hi"}, id: "call_123"}],
+          metadata: %{response_id: "resp_123"}
+        ),
+        ReqLLM.Context.tool_result("call_123", "done")
+      ]
+
+      {:ok, model} = OpenAICodexModels.resolve_model("openai:gpt-5.4")
+
+      context = ReqLLM.Context.new(messages)
+
+      assert {:ok, %Finch.Request{body: body}} =
+               OpenAIOAuth.attach_stream(model, context, [], nil)
+
+      decoded = Jason.decode!(body)
+
+      refute Map.has_key?(decoded, "previous_response_id")
+
+      assert Enum.any?(decoded["input"], fn item ->
+               item["type"] == "function_call" and item["call_id"] == "call_123"
+             end)
+
+      assert Enum.any?(decoded["input"], fn item ->
+               item["type"] == "function_call_output" and item["call_id"] == "call_123"
+             end)
+    end
+
+    test "drops stale historical function calls on follow-up turns" do
+      store_test_token(:openai, "test-openai-token")
+
+      messages = [
+        ReqLLM.Context.user("first question"),
+        ReqLLM.Context.assistant("",
+          tool_calls: [{"echo", %{text: "hi"}, id: "call_123"}],
+          metadata: %{response_id: "resp_123"}
+        ),
+        ReqLLM.Context.tool_result("call_123", "done"),
+        ReqLLM.Context.assistant("All set.", metadata: %{response_id: "resp_124"}),
+        ReqLLM.Context.user("second question")
+      ]
+
+      assert {:ok, %Req.Request{} = request} =
+               OpenAIOAuth.prepare_request(:chat, "openai:gpt-5.4", messages, [])
+
+      encoded = OpenAIOAuth.encode_body(request)
+      body = Jason.decode!(encoded.body)
+
+      refute Enum.any?(body["input"], &(&1["type"] == "function_call"))
+      refute Enum.any?(body["input"], &(&1["type"] == "function_call_output"))
+
+      assert Enum.any?(body["input"], fn item ->
+               item["role"] == "user"
+             end)
+    end
+
+    test "stream follow-up turns also drop stale historical function calls" do
+      store_test_token(:openai, "test-openai-token")
+
+      messages = [
+        ReqLLM.Context.user("first question"),
+        ReqLLM.Context.assistant("",
+          tool_calls: [{"echo", %{text: "hi"}, id: "call_123"}],
+          metadata: %{response_id: "resp_123"}
+        ),
+        ReqLLM.Context.tool_result("call_123", "done"),
+        ReqLLM.Context.assistant("All set.", metadata: %{response_id: "resp_124"}),
+        ReqLLM.Context.user("second question")
+      ]
+
+      {:ok, model} = OpenAICodexModels.resolve_model("openai:gpt-5.4")
+      context = ReqLLM.Context.new(messages)
+
+      assert {:ok, %Finch.Request{body: body}} =
+               OpenAIOAuth.attach_stream(model, context, [], nil)
+
+      decoded = Jason.decode!(body)
+
+      refute Enum.any?(decoded["input"], &(&1["type"] == "function_call"))
+      refute Enum.any?(decoded["input"], &(&1["type"] == "function_call_output"))
+
+      assert Enum.any?(decoded["input"], fn item ->
+               item["role"] == "user"
+             end)
+    end
+
     test "moves system input text into instructions" do
       body = %{
         "input" => [

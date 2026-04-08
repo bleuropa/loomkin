@@ -22,6 +22,8 @@ defmodule Loomkin.LLM do
 
   alias Loomkin.Auth.ProviderRegistry
   alias Loomkin.Auth.TokenStore
+  alias Loomkin.Providers.OpenAIOAuth
+  alias Loomkin.Providers.OpenAICodexModels
 
   @doc """
   Stream text from an LLM provider, transparently using OAuth when available.
@@ -50,7 +52,15 @@ defmodule Loomkin.LLM do
             end
 
           :passthrough ->
-            ReqLLM.stream_text(model_spec, messages, opts)
+            case maybe_resolve_openai_catalog_gap(model_spec) do
+              {:resolved, model, provider_module} ->
+                with {:ok, context} <- ReqLLM.Context.normalize(messages, opts) do
+                  ReqLLM.Streaming.start_stream(provider_module, model, context, opts)
+                end
+
+              :passthrough ->
+                ReqLLM.stream_text(model_spec, messages, opts)
+            end
         end
     end
   end
@@ -64,47 +74,22 @@ defmodule Loomkin.LLM do
           {:ok, ReqLLM.Response.t()} | {:error, term()}
   def generate_text(model_spec, messages, opts \\ []) do
     case maybe_resolve_local(model_spec) do
-      {:local, model, provider_module} ->
-        with {:ok, request} <- provider_module.prepare_request(:chat, model, messages, opts),
-             {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-
-               Req.request(request) do
-          {:ok, body}
-        else
-          {:ok, %Req.Response{status: status, body: body}} ->
-            {:error,
-             ReqLLM.Error.API.Request.exception(
-               reason: "HTTP #{status}: Request failed",
-               status: status,
-               response_body: body
-             )}
-
-          {:error, error} ->
-            {:error, error}
-        end
+      {kind, model, provider_module} when kind in [:local, :endpoint] ->
+        generate_with_provider(provider_module, model, messages, opts)
 
       :not_local ->
         case maybe_resolve_oauth(model_spec) do
           {:oauth, model, provider_module} ->
-            with {:ok, request} <-
-                   provider_module.prepare_request(:chat, model, messages, opts),
-                 {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-
-                   Req.request(request) do
-              {:ok, body}
-            else
-              {:ok, %Req.Response{status: status, body: body}} ->
-                {:error,
-                 ReqLLM.Error.API.Request.exception(
-                   reason: "HTTP #{status}: Request failed",
-                   status: status,
-                   response_body: body
-                 )}
-
-              {:error, error} ->
-                {:error, error}
-            end
+            generate_with_provider(provider_module, model, messages, opts)
 
           :passthrough ->
-            ReqLLM.generate_text(model_spec, messages, opts)
+            case maybe_resolve_openai_catalog_gap(model_spec) do
+              {:resolved, model, provider_module} ->
+                generate_with_provider(provider_module, model, messages, opts)
+
+              :passthrough ->
+                ReqLLM.generate_text(model_spec, messages, opts)
+            end
         end
     end
   end
@@ -198,7 +183,7 @@ defmodule Loomkin.LLM do
             if TokenStore.get_access_token(provider_atom) != nil do
               oauth_atom = String.to_existing_atom(oauth_provider)
 
-              with {:ok, model} <- ReqLLM.model(model_spec),
+              with {:ok, model} <- resolve_oauth_model(provider, model_spec),
                    {:ok, provider_module} <- ReqLLM.provider(oauth_atom) do
                 {:oauth, model, provider_module}
               else
@@ -217,4 +202,62 @@ defmodule Loomkin.LLM do
   end
 
   defp maybe_resolve_oauth(_model_spec), do: :passthrough
+
+  defp resolve_oauth_model("openai", model_spec) do
+    case ReqLLM.model(model_spec) do
+      {:error, :not_found} -> OpenAICodexModels.resolve_model(model_spec)
+      result -> result
+    end
+  end
+
+  defp resolve_oauth_model(_provider, model_spec), do: ReqLLM.model(model_spec)
+
+  defp maybe_resolve_openai_catalog_gap(model_spec) when is_binary(model_spec) do
+    case String.split(model_spec, ":", parts: 2) do
+      ["openai", _model_id] ->
+        with {:ok, model} <- OpenAICodexModels.resolve_model(model_spec),
+             {:ok, provider_module} <- ReqLLM.provider(:openai) do
+          {:resolved, model, provider_module}
+        else
+          _ -> :passthrough
+        end
+
+      _ ->
+        :passthrough
+    end
+  rescue
+    _ -> :passthrough
+  end
+
+  defp maybe_resolve_openai_catalog_gap(_model_spec), do: :passthrough
+
+  defp generate_with_provider(provider_module, model, messages, opts) do
+    if stream_backed_generate?(provider_module) do
+      with {:ok, context} <- ReqLLM.Context.normalize(messages, opts),
+           {:ok, stream_response} <-
+             ReqLLM.Streaming.start_stream(provider_module, model, context, opts) do
+        ReqLLM.StreamResponse.process_stream(stream_response)
+      end
+    else
+      with {:ok, request} <- provider_module.prepare_request(:chat, model, messages, opts),
+           {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-
+             Req.request(request) do
+        {:ok, body}
+      else
+        {:ok, %Req.Response{status: status, body: body}} ->
+          {:error,
+           ReqLLM.Error.API.Request.exception(
+             reason: "HTTP #{status}: Request failed",
+             status: status,
+             response_body: body
+           )}
+
+        {:error, error} ->
+          {:error, error}
+      end
+    end
+  end
+
+  @doc false
+  def stream_backed_generate?(provider_module), do: provider_module == OpenAIOAuth
 end

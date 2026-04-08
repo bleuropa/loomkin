@@ -439,6 +439,7 @@ defmodule Loomkin.Session.ContextWindow do
 
     high_indices = high_indexed |> Enum.map(fn {_, i} -> i end) |> MapSet.new()
     selected_indices = MapSet.union(high_indices, kept_normal_indices)
+    selected_indices = ensure_latest_non_system_retained(indexed, selected_indices)
 
     # Split into kept and evicted, both in original order.
     # Evicted = normal messages not selected (high-priority are never evicted).
@@ -452,6 +453,30 @@ defmodule Loomkin.Session.ContextWindow do
       end)
 
     {Enum.reverse(kept), Enum.reverse(evicted)}
+  end
+
+  defp ensure_latest_non_system_retained(indexed, selected_indices) do
+    has_non_system_selected? =
+      Enum.any?(indexed, fn {msg, idx} ->
+        MapSet.member?(selected_indices, idx) and msg[:role] not in [:system, "system"]
+      end)
+
+    if has_non_system_selected? do
+      selected_indices
+    else
+      case latest_non_system_index(indexed) do
+        nil -> selected_indices
+        idx -> MapSet.put(selected_indices, idx)
+      end
+    end
+  end
+
+  defp latest_non_system_index(indexed) do
+    indexed
+    |> Enum.reverse()
+    |> Enum.find_value(fn {msg, idx} ->
+      if msg[:role] in [:system, "system"], do: nil, else: idx
+    end)
   end
 
   defp high_priority?(%{priority: :high}), do: true

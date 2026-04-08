@@ -194,11 +194,41 @@ defmodule Loomkin.Teams.RoleTest do
       assert prompt =~ "team_dissolve"
     end
 
+    test "lead prompt emphasizes convergence over repeated coordination scans" do
+      {:ok, %Role{system_prompt: prompt}} = Role.get(:lead)
+      assert prompt =~ "## Convergence Discipline"
+      assert prompt =~ "Do one quick coordination pass, then delegate or answer."
+
+      assert prompt =~
+               "Do NOT keep alternating between decision_query, query_backlog, search_keepers, or decision_log"
+    end
+
     test "researcher role system_prompt contains structured findings format" do
       {:ok, %Role{system_prompt: prompt}} = Role.get(:researcher)
       assert prompt =~ "## Research Findings"
       assert prompt =~ "## Recommendation"
       assert prompt =~ "peer_message"
+      assert prompt =~ "## Research Budget Discipline"
+      assert prompt =~ "Persist before you disappear"
+    end
+
+    test "concierge prompt emphasizes convergence over coordination loops" do
+      {:ok, %Role{system_prompt: prompt}} = Role.get(:concierge)
+      assert prompt =~ "## Convergence Discipline"
+      assert prompt =~ "## Availability Contract"
+      assert prompt =~ "## Concrete Request Fast Path"
+
+      assert prompt =~
+               "Do NOT keep cycling through decision_query, query_backlog, search_keepers, and decision_log"
+
+      assert prompt =~ "spawn a specialist instead of doing more coordination scans yourself"
+      assert prompt =~ "Stay free for the user."
+      assert prompt =~ "If a task looks like it could keep you busy for multiple iterations"
+      assert prompt =~ "do NOT ask \"what would you like me to move on right now?\""
+      assert prompt =~ "do NOT reply with a generic options menu"
+
+      assert prompt =~
+               "Do NOT automatically run query_backlog or decision scans at the start of every turn"
     end
   end
 

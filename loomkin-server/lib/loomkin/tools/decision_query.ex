@@ -15,32 +15,35 @@ defmodule Loomkin.Tools.DecisionQuery do
       limit: [type: :integer, doc: "Maximum results to return (default 10)"]
     ]
 
-  import Loomkin.Tool, only: [param!: 2, param: 3]
+  import Ecto.Query
+  import Loomkin.Tool, only: [param!: 2, param: 2, param: 3]
 
   alias Loomkin.Decisions.Graph
   alias Loomkin.Decisions.Pulse
+  alias Loomkin.Schemas.DecisionNode
 
   @impl true
-  def run(params, _context) do
+  def run(params, context) do
     query_type = param!(params, :query_type)
     limit = param(params, :limit, 10)
+    scope = scope_filters(context)
 
     case query_type do
       "active_goals" ->
-        goals = Graph.active_goals()
+        goals = Graph.active_goals(scope)
         {:ok, %{result: format_nodes("Active Goals", goals)}}
 
       "recent_decisions" ->
-        decisions = Graph.recent_decisions(limit)
+        decisions = Graph.recent_decisions(limit, scope)
         {:ok, %{result: format_nodes("Recent Decisions", decisions)}}
 
       "pulse" ->
-        report = Pulse.generate()
+        report = Pulse.generate(scope)
         {:ok, %{result: "#{report.summary} Health: #{report.health_score}/100."}}
 
       "search" ->
         search_term = param(params, :search_term, "")
-        results = search_nodes(search_term, limit)
+        results = search_nodes(search_term, limit, scope)
         {:ok, %{result: format_nodes("Search Results for '#{search_term}'", results)}}
 
       other ->
@@ -49,18 +52,48 @@ defmodule Loomkin.Tools.DecisionQuery do
     end
   end
 
-  defp search_nodes(term, limit) do
-    import Ecto.Query
-    alias Loomkin.Schemas.DecisionNode
-
+  defp search_nodes(term, limit, scope) do
     pattern = "%#{term}%"
 
     DecisionNode
-    |> where([n], like(n.title, ^pattern) or like(n.description, ^pattern))
+    |> maybe_apply_scope(scope)
+    |> where(
+      [n],
+      ilike(n.title, ^pattern) or ilike(fragment("coalesce(?, '')", n.description), ^pattern)
+    )
     |> limit(^limit)
     |> order_by([n], desc: n.inserted_at)
     |> Loomkin.Repo.all()
   end
+
+  defp scope_filters(context) do
+    team_id = param(context, :team_id)
+    session_id = param(context, :session_id)
+
+    cond do
+      is_binary(team_id) and team_id != "" ->
+        [team_id: team_id]
+
+      valid_uuid?(session_id) ->
+        [session_id: session_id]
+
+      true ->
+        []
+    end
+  end
+
+  defp maybe_apply_scope(query, []), do: query
+
+  defp maybe_apply_scope(query, team_id: team_id) do
+    where(query, [n], fragment("? ->> 'team_id' = ?", n.metadata, ^team_id))
+  end
+
+  defp maybe_apply_scope(query, session_id: session_id) do
+    where(query, [n], n.session_id == ^session_id)
+  end
+
+  defp valid_uuid?(value) when is_binary(value), do: match?({:ok, _}, Ecto.UUID.cast(value))
+  defp valid_uuid?(_value), do: false
 
   defp format_nodes(heading, []) do
     "#{heading}: None found."

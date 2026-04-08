@@ -134,6 +134,10 @@ defmodule Loomkin.Conversations.Agent do
     messages = build_messages(history, topic, context, state)
     tool_defs = Jido.AI.ToolAdapter.from_actions(@conversation_tools)
 
+    Logger.debug(
+      "[Kin:conversation_agent] turn_start conversation=#{state.conversation_id} agent=#{state.name} model=#{inspect(state.model)} history_entries=#{length(history)} prompt_messages=#{length(messages)} opening_turn=#{history == []}"
+    )
+
     exec_context = %{
       conversation_id: state.conversation_id,
       agent_name: state.name,
@@ -147,6 +151,12 @@ defmodule Loomkin.Conversations.Agent do
          end) do
       {:ok, response} ->
         tokens = extract_token_count(response)
+        tool_calls = extract_tool_calls(response)
+
+        Logger.debug(
+          "[Kin:conversation_agent] turn_done conversation=#{state.conversation_id} agent=#{state.name} tokens=#{tokens} tool_calls=#{length(tool_calls)}"
+        )
+
         execute_tool_calls(response, exec_context)
         {:ok, tokens}
 
@@ -157,7 +167,8 @@ defmodule Loomkin.Conversations.Agent do
     end
   end
 
-  defp build_messages(history, topic, context, state) do
+  @doc false
+  def build_messages(history, topic, context, state) do
     system = Persona.system_prompt(state.persona, topic, context)
 
     conversation_msgs =
@@ -171,7 +182,20 @@ defmodule Loomkin.Conversations.Agent do
         end
       end)
 
-    [%{role: "system", content: system} | conversation_msgs]
+    seeded_msgs =
+      if conversation_msgs == [] do
+        [
+          %{
+            role: "user",
+            content:
+              "It is your turn to open the discussion on #{topic}. Share your perspective in 2-4 sentences, or use one of the conversation tools if that fits better."
+          }
+        ]
+      else
+        conversation_msgs
+      end
+
+    [%{role: "system", content: system} | seeded_msgs]
   end
 
   defp execute_tool_calls(response, exec_context) do
@@ -194,7 +218,17 @@ defmodule Loomkin.Conversations.Agent do
     end)
   end
 
-  defp extract_tool_calls(response) when is_map(response) do
+  @doc false
+  def extract_tool_calls(%ReqLLM.Response{} = response) do
+    response
+    |> ReqLLM.Response.tool_calls()
+    |> Enum.map(fn tool_call ->
+      tool_call = ReqLLM.ToolCall.from_map(tool_call)
+      {tool_call.name, tool_call.arguments}
+    end)
+  end
+
+  def extract_tool_calls(response) when is_map(response) do
     content = Map.get(response, "content", Map.get(response, :content, []))
 
     content
@@ -211,7 +245,7 @@ defmodule Loomkin.Conversations.Agent do
     end)
   end
 
-  defp extract_tool_calls(_), do: []
+  def extract_tool_calls(_), do: []
 
   defp extract_token_count(response) when is_map(response) do
     usage = Map.get(response, "usage", Map.get(response, :usage, %{}))

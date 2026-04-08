@@ -9,6 +9,8 @@ defmodule Loomkin.Models do
   Users can also type any `provider:model` string directly.
   """
 
+  alias Loomkin.Providers.OpenAICodexModels
+
   # Provider atom → {display name, env var name}
   @providers %{
     anthropic: {"Anthropic", "ANTHROPIC_API_KEY"},
@@ -48,7 +50,7 @@ defmodule Loomkin.Models do
         provider_available?(provider)
       end)
       |> Enum.map(fn {provider, {display_name, _env_var}} ->
-        models = fetch_provider_models(provider)
+        models = fetch_provider_models(provider, api_key_status(provider))
         {display_name, models}
       end)
       |> Enum.reject(fn {_name, models} -> models == [] end)
@@ -134,7 +136,7 @@ defmodule Loomkin.Models do
         provider_available?(provider)
       end)
       |> Enum.map(fn {provider, {display_name, _env_var}} ->
-        models = fetch_provider_models_enriched(provider)
+        models = fetch_provider_models_enriched(provider, api_key_status(provider))
         {display_name, models}
       end)
       |> Enum.reject(fn {_name, models} -> models == [] end)
@@ -159,8 +161,8 @@ defmodule Loomkin.Models do
 
         models =
           case status do
-            {:set, _} -> fetch_provider_models_enriched(provider)
-            {:oauth, :connected} -> fetch_provider_models_enriched(provider)
+            {:set, _} -> fetch_provider_models_enriched(provider, status)
+            {:oauth, :connected} -> fetch_provider_models_enriched(provider, status)
             _ -> []
           end
 
@@ -195,29 +197,51 @@ defmodule Loomkin.Models do
     end
   end
 
-  defp fetch_provider_models(provider) do
-    LLMDB.models(provider)
-    |> Enum.filter(&chat_capable?/1)
-    |> Enum.reject(fn m -> m.deprecated || m.retired end)
-    |> Enum.sort_by(&model_sort_key/1, :desc)
+  defp fetch_provider_models(provider, status) do
+    provider
+    |> fetch_catalog_models(status)
     |> Enum.map(fn m ->
       {m.name || m.id, "#{provider}:#{m.id}"}
     end)
-  rescue
-    _ -> []
   end
 
-  defp fetch_provider_models_enriched(provider) do
-    LLMDB.models(provider)
-    |> Enum.filter(&chat_capable?/1)
-    |> Enum.reject(fn m -> m.deprecated || m.retired end)
-    |> Enum.sort_by(&model_sort_key/1, :desc)
+  defp fetch_provider_models_enriched(provider, status) do
+    provider
+    |> fetch_catalog_models(status)
     |> Enum.map(fn m ->
       ctx_label = format_context_window(m)
       {m.name || m.id, "#{provider}:#{m.id}", ctx_label}
     end)
+  end
+
+  defp fetch_catalog_models(:openai, {:oauth, :connected}) do
+    OpenAICodexModels.list_models()
+  end
+
+  defp fetch_catalog_models(:openai, {:set, _env_var}) do
+    merge_models(OpenAICodexModels.list_models(), fetch_catalog_models_from_llmdb(:openai))
+  end
+
+  defp fetch_catalog_models(provider, _status) do
+    fetch_catalog_models_from_llmdb(provider)
+  end
+
+  defp fetch_catalog_models_from_llmdb(provider) do
+    LLMDB.models(provider)
+    |> Enum.filter(&chat_capable?/1)
+    |> Enum.reject(fn m -> m.deprecated || m.retired end)
+    |> Enum.sort_by(&model_sort_key/1, :desc)
   rescue
     _ -> []
+  end
+
+  defp merge_models(primary, secondary) do
+    seen_ids = MapSet.new(primary, & &1.id)
+
+    primary ++
+      Enum.reject(secondary, fn model ->
+        MapSet.member?(seen_ids, model.id)
+      end)
   end
 
   defp chat_capable?(%{capabilities: %{chat: true}}), do: true
@@ -307,18 +331,11 @@ defmodule Loomkin.Models do
     Loomkin.Providers.OpenAICompatibleProvider.get_all_endpoints()
     |> Enum.reject(&(&1 == "ollama"))
     |> Enum.flat_map(fn provider ->
-      base_url =
-        case Loomkin.Config.get_provider_endpoint(provider) do
-          %{url: url} when is_binary(url) and url != "" -> String.trim_trailing(url, "/")
-          %{"url" => url} when is_binary(url) and url != "" -> String.trim_trailing(url, "/")
-          _ -> nil
-        end
+      base_url = endpoint_base_url(provider)
 
       if base_url do
-        url = "#{base_url}/models"
-
-        case Req.get(url, receive_timeout: 5_000, retry: false) do
-          {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
+        case fetch_endpoint_model_list(provider, base_url) do
+          {:ok, data} ->
             entries =
               data
               |> Enum.map(fn m ->
@@ -361,18 +378,11 @@ defmodule Loomkin.Models do
   end
 
   defp fetch_openai_compat_models(provider) do
-    base_url =
-      case Loomkin.Config.get_provider_endpoint(provider) do
-        %{url: url} when is_binary(url) and url != "" -> String.trim_trailing(url, "/")
-        %{"url" => url} when is_binary(url) and url != "" -> String.trim_trailing(url, "/")
-        _ -> nil
-      end
+    base_url = endpoint_base_url(provider)
 
     if base_url do
-      url = "#{base_url}/models"
-
-      case Req.get(url, receive_timeout: 5_000, retry: false) do
-        {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
+      case fetch_endpoint_model_list(provider, base_url) do
+        {:ok, data} ->
           entries =
             data
             |> Enum.map(fn m ->
@@ -391,4 +401,42 @@ defmodule Loomkin.Models do
       []
     end
   end
+
+  defp endpoint_base_url(provider) do
+    case Loomkin.Config.get_provider_endpoint(provider) do
+      %{url: url} when is_binary(url) and url != "" -> String.trim_trailing(url, "/")
+      %{"url" => url} when is_binary(url) and url != "" -> String.trim_trailing(url, "/")
+      _ -> nil
+    end
+  end
+
+  defp endpoint_auth_headers(provider) do
+    case Loomkin.Config.get_provider_endpoint(provider) do
+      %{auth_key: key} when is_binary(key) and key != "" ->
+        [{"authorization", "Bearer #{key}"}]
+
+      %{"auth_key" => key} when is_binary(key) and key != "" ->
+        [{"authorization", "Bearer #{key}"}]
+
+      _ ->
+        []
+    end
+  end
+
+  defp fetch_endpoint_model_list(provider, base_url) do
+    request_opts =
+      [receive_timeout: 5_000, retry: false]
+      |> maybe_put_headers(endpoint_auth_headers(provider))
+
+    case Req.get("#{base_url}/models", request_opts) do
+      {:ok, %Req.Response{status: 200, body: %{"data" => data}}} ->
+        {:ok, data}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp maybe_put_headers(opts, []), do: opts
+  defp maybe_put_headers(opts, headers), do: Keyword.put(opts, :headers, headers)
 end
