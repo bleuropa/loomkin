@@ -42,6 +42,13 @@ export function StatusBar() {
     }
     return count;
   });
+  const agentsWithPublishedFindingsCount = useStore(useAgentStore, (s) => {
+    let count = 0;
+    for (const agent of s.agents.values()) {
+      if ((agent.publishedFindingsCount ?? 0) > 0) count++;
+    }
+    return count;
+  });
   const splitMode = useStore(usePaneStore, (s) => s.splitMode);
   const selectedAgent = useStore(usePaneStore, (s) => s.selectedAgent);
   const focusedTarget = useStore(usePaneStore, (s) => s.focusedTarget);
@@ -137,6 +144,13 @@ export function StatusBar() {
           <Text dimColor>
             agents:<Text bold color={workingCount > 0 ? "green" : undefined}>
               {workingCount}/{agentCount}
+            </Text>
+          </Text>
+        )}
+        {agentCount > 0 && agentsWithPublishedFindingsCount > 0 && (
+          <Text dimColor>
+            pub:<Text bold color="cyan">
+              {agentsWithPublishedFindingsCount}/{agentCount}
             </Text>
           </Text>
         )}

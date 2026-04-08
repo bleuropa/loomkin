@@ -47,7 +47,12 @@ function formatAgent(agent: AgentInfo, indent = ""): string {
     worktree = pc.dim(` [wt:${agent.worktreePath}]`);
   }
 
-  return `${indent}${icon} ${name} ${pc.dim(`[${status}]`)} ${role}  ${pc.dim(modelDisplay)}${detail}${cost}${worktree}`;
+  let published = "";
+  if ((agent.publishedFindingsCount ?? 0) > 0) {
+    published = pc.green(` · pub:${agent.publishedFindingsCount}`);
+  }
+
+  return `${indent}${icon} ${name} ${pc.dim(`[${status}]`)} ${role}  ${pc.dim(modelDisplay)}${detail}${cost}${worktree}${published}`;
 }
 
 register({

@@ -557,6 +557,22 @@ defmodule LoomkinWeb.SessionChannel do
     {:noreply, socket}
   end
 
+  def handle_info(%Jido.Signal{type: "context.offloaded"} = sig, socket) do
+    if sig.data[:team_id] == socket.assigns[:team_id] do
+      payload = sig.data[:payload] || %{}
+
+      push(socket, "agent_findings_published", %{
+        agent_name: sig.data[:agent_name],
+        team_id: sig.data[:team_id],
+        topic: payload[:topic] || payload["topic"],
+        source: to_string(payload[:source] || payload["source"] || "context_offload"),
+        task_id: payload[:task_id] || payload["task_id"]
+      })
+    end
+
+    {:noreply, socket}
+  end
+
   def handle_info(%Jido.Signal{type: "team.task." <> _} = sig, socket) do
     push(socket, "team_task_update", %{
       type: sig.type,

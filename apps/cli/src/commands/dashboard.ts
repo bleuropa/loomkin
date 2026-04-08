@@ -43,7 +43,11 @@ async function renderDashboard(ctx: CommandContext) {
     lines.push(pc.bold(pc.cyan("┃")) + noAgentsLine + " ".repeat(78 - stripAnsi(noAgentsLine).length) + pc.bold(pc.cyan("┃")));
   } else {
     Array.from(agents.values()).forEach(agent => {
-      const agentLine = `  ${agent.status === 'working' ? pc.green('●') : pc.dim('○')} ${pc.bold(agent.name)} ${pc.cyan(`[${agent.role}]`)} ${pc.dim(agent.currentTask ? `— ${agent.currentTask.slice(0, 40)}...` : 'Idle')}`;
+      const published =
+        (agent.publishedFindingsCount ?? 0) > 0
+          ? ` ${pc.green(`[pub:${agent.publishedFindingsCount}]`)}`
+          : "";
+      const agentLine = `  ${agent.status === 'working' ? pc.green('●') : pc.dim('○')} ${pc.bold(agent.name)} ${pc.cyan(`[${agent.role}]`)}${published} ${pc.dim(agent.currentTask ? `— ${agent.currentTask.slice(0, 40)}...` : 'Idle')}`;
       lines.push(pc.bold(pc.cyan("┃")) + agentLine + " ".repeat(78 - stripAnsi(agentLine).length) + pc.bold(pc.cyan("┃")));
     });
   }

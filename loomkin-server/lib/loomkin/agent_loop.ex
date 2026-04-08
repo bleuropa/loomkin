@@ -86,6 +86,12 @@ defmodule Loomkin.AgentLoop do
 
   Do NOT keep researching just to be thorough if you already have enough to answer.
   """
+  @empty_publication_state %{
+    offloaded: false,
+    discovery_shared: false,
+    published_count: 0,
+    last_topic: nil
+  }
 
   @type on_event :: (atom(), map() -> :ok)
 
@@ -131,6 +137,8 @@ defmodule Loomkin.AgentLoop do
     Process.put(:loomkin_coordination_streak, 0)
     # Track researchers who keep scanning without publishing findings.
     Process.put(:loomkin_research_scan_streak, 0)
+    # Track whether this loop has already published durable findings.
+    Process.put(:loomkin_publication_state, @empty_publication_state)
 
     # Bootstrap failure memory: inject lessons from past errors
     messages = bootstrap_failure_memory(messages, config)
@@ -461,7 +469,9 @@ defmodule Loomkin.AgentLoop do
       agent_name: config.agent_name,
       team_id: config.team_id,
       parent_team_id: parent_team_id,
-      model: config.model
+      model: config.model,
+      role: config.role,
+      publication_state: current_publication_state()
     }
 
     emit(config, :tool_executing, %{tool_name: tool_name, tool_target: tool_path})
@@ -571,6 +581,7 @@ defmodule Loomkin.AgentLoop do
 
                   # Track successful file_read calls
                   maybe_track_read_file(tool_name, tool_args, effective_path, result_text)
+                  maybe_track_findings_publication(tool_name, tool_args, result_text, config)
 
                   messages =
                     record_tool_result(messages, config, tool_name, tool_call_id, result_text)
@@ -844,6 +855,40 @@ defmodule Loomkin.AgentLoop do
   end
 
   defp maybe_track_read_file(_tool_name, _tool_args, _project_path, _result_text), do: :ok
+
+  defp maybe_track_findings_publication(tool_name, tool_args, result_text, config) do
+    cond do
+      tool_name in ["context_offload", :context_offload] and
+          String.starts_with?(result_text, "Offloaded ") ->
+        topic = tool_args["topic"] || tool_args[:topic]
+
+        update_publication_state(fn state ->
+          state
+          |> Map.put(:offloaded, true)
+          |> Map.put(:last_topic, topic || state.last_topic)
+          |> Map.update!(:published_count, &(&1 + 1))
+        end)
+
+        emit(config, :context_offloaded, %{topic: topic, source: "context_offload"})
+
+      tool_name in ["peer_discovery", :peer_discovery] and
+          String.starts_with?(result_text, "Discovery broadcast") ->
+        update_publication_state(fn state ->
+          Map.put(state, :discovery_shared, true)
+        end)
+
+      true ->
+        :ok
+    end
+  end
+
+  defp current_publication_state do
+    Process.get(:loomkin_publication_state, @empty_publication_state)
+  end
+
+  defp update_publication_state(updater) when is_function(updater, 1) do
+    Process.put(:loomkin_publication_state, updater.(current_publication_state()))
+  end
 
   # -- Cycle detection ---------------------------------------------------------
 

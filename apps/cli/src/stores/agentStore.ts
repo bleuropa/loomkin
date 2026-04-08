@@ -14,6 +14,9 @@ export interface AgentInfo {
   pauseQueued?: boolean;
   worktreePath?: string;
   parentAgent?: string;
+  publishedFindingsCount?: number;
+  lastPublishedAt?: string;
+  lastPublishedTopic?: string;
   updatedAt: string;
 }
 

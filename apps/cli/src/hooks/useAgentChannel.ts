@@ -131,6 +131,23 @@ export function useAgentChannel() {
       },
     );
 
+    on<{ agent_name: string; topic?: string | null; source?: string; team_id: string }>(
+      "agent_findings_published",
+      (payload) => {
+        const existing = useAgentStore.getState().agents.get(payload.agent_name);
+        const nextCount = (existing?.publishedFindingsCount ?? 0) + 1;
+
+        useAgentStore.getState().upsertAgent(payload.agent_name, {
+          publishedFindingsCount: nextCount,
+          lastPublishedAt: new Date().toISOString(),
+          lastPublishedTopic: payload.topic ?? existing?.lastPublishedTopic,
+        });
+
+        const topicSuffix = payload.topic ? `: ${payload.topic}` : "";
+        notify(`📚 ${payload.agent_name} published findings${topicSuffix}`);
+      },
+    );
+
     on<{ agent_name: string; role: string; team_id: string; worktree_path?: string; parent_agent?: string }>("agent_spawned", (payload) => {
       useAgentStore.getState().upsertAgent(payload.agent_name, {
         role: payload.role,

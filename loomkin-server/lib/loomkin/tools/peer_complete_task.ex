@@ -23,6 +23,7 @@ defmodule Loomkin.Tools.PeerCompleteTask do
 
   import Loomkin.Tool, only: [param!: 2, param: 2]
 
+  alias Loomkin.Teams.ContextOffload
   alias Loomkin.Teams.Tasks
 
   @impl true
@@ -45,7 +46,7 @@ defmodule Loomkin.Tools.PeerCompleteTask do
       :ok ->
         # Verify claimed files actually exist on disk
         file_warnings = verify_files_changed(completion_attrs.files_changed, project_path)
-        do_complete(team_id, task_id, completion_attrs, file_warnings)
+        do_complete(team_id, task_id, completion_attrs, file_warnings, context)
 
       {:error, reason} ->
         {:error, reason}
@@ -102,7 +103,7 @@ defmodule Loomkin.Tools.PeerCompleteTask do
     end)
   end
 
-  defp do_complete(team_id, task_id, completion_attrs, file_warnings) do
+  defp do_complete(team_id, task_id, completion_attrs, file_warnings, context) do
     case Tasks.get_task(task_id) do
       {:error, :not_found} ->
         {:error, "Task not found: #{task_id}"}
@@ -114,43 +115,179 @@ defmodule Loomkin.Tools.PeerCompleteTask do
           "[PeerCompleteTask] Cross-team completion: agent team=#{team_id}, task team=#{task.team_id}, task=#{task_id}"
         )
 
-        do_complete_task(task_id, completion_attrs, file_warnings)
+        do_complete_task(task, completion_attrs, file_warnings, context)
 
-      {:ok, _task} ->
-        do_complete_task(task_id, completion_attrs, file_warnings)
+      {:ok, task} ->
+        do_complete_task(task, completion_attrs, file_warnings, context)
     end
   end
 
-  defp do_complete_task(task_id, completion_attrs, file_warnings) do
-    case Tasks.complete_task(task_id, completion_attrs) do
-      {:ok, task} ->
-        artifact_count =
-          length(completion_attrs.actions_taken) +
-            length(completion_attrs.discoveries) +
-            length(completion_attrs.files_changed)
+  defp do_complete_task(task, completion_attrs, file_warnings, context) do
+    case maybe_persist_research_findings(task, completion_attrs, context) do
+      {:error, reason} ->
+        {:error, reason}
 
-        warning_section =
-          if file_warnings != [] do
-            "\n  ⚠ File verification warnings: #{Enum.join(file_warnings, ", ")}"
-          else
-            ""
-          end
+      {:ok, publication_note} ->
+        case Tasks.complete_task(task.id, completion_attrs) do
+          {:ok, task} ->
+            artifact_count =
+              length(completion_attrs.actions_taken) +
+                length(completion_attrs.discoveries) +
+                length(completion_attrs.files_changed)
 
-        verified_count = length(completion_attrs.files_changed) - length(file_warnings)
+            warning_section =
+              if file_warnings != [] do
+                "\n  ⚠ File verification warnings: #{Enum.join(file_warnings, ", ")}"
+              else
+                ""
+              end
 
-        summary = """
-        Task completed:
-          ID: #{task.id}
-          Title: #{task.title}
-          Status: #{task.status}
-          Artifacts: #{artifact_count} (#{length(completion_attrs.actions_taken)} actions, #{length(completion_attrs.discoveries)} discoveries, #{length(completion_attrs.files_changed)} files)
-          Files verified: #{verified_count}/#{length(completion_attrs.files_changed)}#{warning_section}
-        """
+            publication_section =
+              case publication_note do
+                "" -> ""
+                note -> "\n  Findings published: #{note}"
+              end
 
-        {:ok, %{result: String.trim(summary), task_id: task.id}}
+            verified_count = length(completion_attrs.files_changed) - length(file_warnings)
+
+            summary = """
+            Task completed:
+              ID: #{task.id}
+              Title: #{task.title}
+              Status: #{task.status}
+              Artifacts: #{artifact_count} (#{length(completion_attrs.actions_taken)} actions, #{length(completion_attrs.discoveries)} discoveries, #{length(completion_attrs.files_changed)} files)
+              Files verified: #{verified_count}/#{length(completion_attrs.files_changed)}#{warning_section}#{publication_section}
+            """
+
+            {:ok, %{result: String.trim(summary), task_id: task.id}}
+
+          {:error, reason} ->
+            {:error, "Failed to complete task: #{inspect(reason)}"}
+        end
+    end
+  end
+
+  defp maybe_persist_research_findings(task, completion_attrs, context) do
+    if researcher_role?(context) do
+      publication_state = param(context, :publication_state) || %{}
+
+      if publication_state[:offloaded] do
+        {:ok, ""}
+      else
+        auto_publish_research_findings(task, completion_attrs, context)
+      end
+    else
+      {:ok, ""}
+    end
+  end
+
+  defp auto_publish_research_findings(task, completion_attrs, context) do
+    team_id = task.team_id
+    agent_name = param(context, :agent_name) || task.owner || "researcher"
+    topic = build_research_topic(task)
+
+    metadata = %{
+      "source" => "peer_complete_task",
+      "task_id" => task.id,
+      "task_title" => task.title,
+      "kind" => "research_findings"
+    }
+
+    case ContextOffload.offload_to_keeper(
+           team_id,
+           agent_name,
+           build_research_offload_messages(task, completion_attrs, agent_name),
+           topic: topic,
+           metadata: metadata
+         ) do
+      {:ok, _pid, index_entry} ->
+        publish_findings_offloaded(agent_name, team_id, %{
+          topic: topic,
+          source: "peer_complete_task",
+          task_id: task.id,
+          index_entry: index_entry
+        })
+
+        {:ok, "#{topic} (auto-offloaded from task completion)"}
 
       {:error, reason} ->
-        {:error, "Failed to complete task: #{inspect(reason)}"}
+        {:error,
+         "Task completion rejected: failed to persist research findings before completion. " <>
+           "Try again after context_offload succeeds. Reason: #{inspect(reason)}"}
     end
+  end
+
+  defp build_research_topic(task) do
+    title =
+      task.title
+      |> to_string()
+      |> String.trim()
+
+    "research: #{title}"
+    |> String.slice(0, 80)
+  end
+
+  defp build_research_offload_messages(task, attrs, agent_name) do
+    body = """
+    Task: #{task.title}
+    Researcher: #{agent_name}
+    Completed at: #{DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()}
+
+    Result
+    #{attrs.result}
+
+    Discoveries
+    #{format_bullet_list(attrs.discoveries)}
+
+    Actions Taken
+    #{format_bullet_list(attrs.actions_taken)}
+
+    Decisions Made
+    #{format_bullet_list(attrs.decisions_made)}
+
+    Open Questions
+    #{format_bullet_list(attrs.open_questions)}
+
+    Files Changed
+    #{format_bullet_list(attrs.files_changed)}
+    """
+
+    [
+      %{
+        role: :system,
+        content: "Research findings persisted from peer_complete_task for later retrieval."
+      },
+      %{role: :assistant, content: String.trim(body)}
+    ]
+  end
+
+  defp format_bullet_list([]), do: "- none"
+
+  defp format_bullet_list(items) do
+    items
+    |> Enum.map(&"- #{&1}")
+    |> Enum.join("\n")
+  end
+
+  defp researcher_role?(context) do
+    case param(context, :role) do
+      :researcher -> true
+      "researcher" -> true
+      _ -> false
+    end
+  end
+
+  defp publish_findings_offloaded(agent_name, team_id, payload) do
+    signal =
+      Loomkin.Signals.Context.Offloaded.new!(
+        %{agent_name: to_string(agent_name), team_id: team_id},
+        subject: "payload"
+      )
+      |> Map.put(
+        :data,
+        Map.put(%{agent_name: to_string(agent_name), team_id: team_id}, :payload, payload)
+      )
+
+    Loomkin.Signals.publish(signal)
   end
 end

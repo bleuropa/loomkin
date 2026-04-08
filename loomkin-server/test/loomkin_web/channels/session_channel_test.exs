@@ -106,4 +106,56 @@ defmodule LoomkinWeb.SessionChannelTest do
       error: "Exceeded max iterations (30)"
     }
   end
+
+  test "forwards findings publication events for cli agent indicators", %{
+    user: user,
+    scope: scope
+  } do
+    {:ok, session} =
+      Persistence.create_session(%{
+        model: "anthropic:claude-sonnet-4-5",
+        project_path: "/tmp",
+        team_id: "team-123",
+        user_id: user.id
+      })
+
+    socket = socket(LoomkinWeb.UserSocket, "user_socket:#{user.id}", %{current_scope: scope})
+
+    {:ok, _, socket} =
+      subscribe_and_join(socket, SessionChannel, "session:#{session.id}")
+
+    receive do
+      {:email, _email} -> :ok
+    after
+      0 -> :ok
+    end
+
+    signal =
+      Loomkin.Signals.Context.Offloaded.new!(%{
+        agent_name: "researcher-1",
+        team_id: "team-123"
+      })
+
+    signal = %{
+      signal
+      | data:
+          Map.merge(signal.data, %{
+            payload: %{
+              topic: "research: cli layout audit",
+              source: "peer_complete_task",
+              task_id: "task-123"
+            }
+          })
+    }
+
+    send(socket.channel_pid, signal)
+
+    assert_push "agent_findings_published", %{
+      agent_name: "researcher-1",
+      team_id: "team-123",
+      topic: "research: cli layout audit",
+      source: "peer_complete_task",
+      task_id: "task-123"
+    }
+  end
 end
