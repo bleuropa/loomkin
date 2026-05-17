@@ -3,6 +3,8 @@ import { Box, Text } from "ink";
 import type { ConversationInfo, ConversationTurn } from "../lib/types.js";
 import { OrchestrationEpicCard } from "./OrchestrationEpicCard.js";
 import { useEpicCardStore } from "../stores/epicCardStore.js";
+import { OnboardingTourOverlay } from "./OnboardingTour.js";
+import { useChannelStore } from "../stores/channelStore.js";
 
 interface Props {
   conversation: ConversationInfo;
@@ -134,6 +136,12 @@ export function ConversationFeed({ conversation, maxLines = 100 }: Props) {
 
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1}>
+      <OnboardingTourOverlay
+        onMarkSeen={() => {
+          const ch = useChannelStore.getState().getChannel();
+          ch?.push("mark_tour_seen", {});
+        }}
+      />
       <EpicCardStack />
       <Box>
         <Text bold color="magenta">

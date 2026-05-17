@@ -9,6 +9,7 @@ import { loadAllMemories, formatMemoriesForPrompt } from "../lib/memory.js";
 import { runHooks } from "../lib/hooks.js";
 import { formatOrchestrationPhase } from "../lib/orchestrationFeedRenderer.js";
 import { epicCardStore, type CostPayload, type PhasePayload } from "../stores/epicCardStore.js";
+import { useTourStore, type TourPhase, type TourPersona } from "../stores/tourStore.js";
 import { formatSummary as formatDiffSummary, type DiffPayload } from "../components/DiffPreview.js";
 import type {
   Message,
@@ -143,6 +144,20 @@ export function useSessionChannel() {
           },
         } as PhasePayload);
       }
+    });
+
+    // First-time orchestration tour. Server emits this push when a user
+    // dispatches their first `:complex_task` and they haven't seen the
+    // walkthrough yet. We open the overlay; dismissal acknowledges back to
+    // the server via `mark_tour_seen` so the user never sees it again
+    // automatically.
+    on("orchestration_tour", (raw) => {
+      const payload = raw as { phases?: TourPhase[]; personas?: TourPersona[] };
+      useTourStore.getState().openTour({
+        phases: payload.phases ?? [],
+        personas: payload.personas ?? [],
+        mark_seen_on_close: true,
+      });
     });
 
     on("stream_start", (raw) => {
@@ -579,6 +594,12 @@ export function useSessionChannel() {
     [],
   );
 
+  const markTourSeen = useCallback(() => {
+    const ch = useChannelStore.getState().getChannel();
+    if (!ch) return;
+    ch.push("mark_tour_seen", {});
+  }, []);
+
   return {
     messages,
     isStreaming,
@@ -593,5 +614,6 @@ export function useSessionChannel() {
     respondApproval,
     respondSpawnGate,
     respondPlan,
+    markTourSeen,
   };
 }

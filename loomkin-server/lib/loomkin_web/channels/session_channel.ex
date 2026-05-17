@@ -34,6 +34,7 @@ defmodule LoomkinWeb.SessionChannel do
         Loomkin.Signals.subscribe("agent.**")
         Loomkin.Signals.subscribe("context.**")
         Loomkin.Signals.subscribe("collaboration.**")
+        Loomkin.Signals.subscribe("session.orchestration.tour_needed")
 
         {:ok, %{model: session.model},
          socket
@@ -118,6 +119,21 @@ defmodule LoomkinWeb.SessionChannel do
       {:error, :invalid_role} ->
         valid = @valid_roles |> Enum.map(&to_string/1) |> Enum.join(", ")
         {:reply, {:error, %{reason: "invalid role: #{role}. Valid roles: #{valid}"}}, socket}
+    end
+  end
+
+  def handle_in("mark_tour_seen", _params, socket) do
+    session = Persistence.get_session(socket.assigns.session_id)
+
+    case fetch_session_user(session) do
+      nil ->
+        {:reply, :ok, socket}
+
+      user ->
+        case Loomkin.Accounts.mark_orchestration_tour_seen(user) do
+          {:ok, _user} -> {:reply, :ok, socket}
+          {:error, _changeset} -> {:reply, {:error, %{reason: "mark_failed"}}, socket}
+        end
     end
   end
 
@@ -409,6 +425,25 @@ defmodule LoomkinWeb.SessionChannel do
     if sig.data[:session_id] == socket.assigns.session_id do
       msg = Map.get(sig.data, :message, sig.data)
       push(socket, "new_message", %{message: serialize_signal_message(msg)})
+    end
+
+    {:noreply, socket}
+  end
+
+  # First-time orchestration tour signal. Emitted by SessionBridge before the
+  # first `:complex_task` dispatch for a user who has not yet seen the
+  # walkthrough. Forwarded only to channels whose session belongs to that
+  # user so we don't push the overlay into someone else's CLI feed.
+  def handle_info(%Jido.Signal{type: "session.orchestration.tour_needed"} = sig, socket) do
+    target_user_id = sig.data[:user_id] || sig.data["user_id"]
+    session = Persistence.get_session(socket.assigns.session_id)
+    session_user_id = session && session.user_id
+
+    if is_binary(target_user_id) and target_user_id == session_user_id do
+      push(socket, "orchestration_tour", %{
+        phases: sig.data[:phases] || sig.data["phases"] || [],
+        personas: sig.data[:personas] || sig.data["personas"] || []
+      })
     end
 
     {:noreply, socket}

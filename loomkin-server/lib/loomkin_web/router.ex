@@ -202,6 +202,7 @@ defmodule LoomkinWeb.Router do
       live "/", OrchestrationIndexLive, :index
       live "/knowledge", OrchestrationKnowledgeLive, :index
       live "/metrics", OrchestrationMetricsLive, :index
+      live "/tour", OrchestrationTourLive, :index
       live "/:id", OrchestrationShowLive, :show
     end
   end

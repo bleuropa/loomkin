@@ -8,7 +8,8 @@ defmodule LoomkinWeb.OrchestrationLiveTest do
   test "GET /orchestration renders the empty state", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/orchestration")
 
-    assert html =~ "Orchestration epics"
+    assert html =~ "Orchestration"
+    assert html =~ "Active epics"
     assert html =~ "Start a new epic"
   end
 

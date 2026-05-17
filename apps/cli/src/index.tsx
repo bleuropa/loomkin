@@ -34,6 +34,7 @@ import {
   runOrchestrationShow,
   runOrchestrationStatus,
 } from "./lib/orchestration.js";
+import { OnboardingTour, STATIC_TOUR_PAYLOAD } from "./components/OnboardingTour.js";
 
 const cli = meow(
   `
@@ -288,6 +289,23 @@ async function resolveSessionId(): Promise<string | null> {
   return createNewSession();
 }
 
+async function runOrchestrationTour(): Promise<number> {
+  // Render the rich walkthrough using the static (mirror-of-server) payload.
+  // The TUI exits cleanly when the user presses Enter / q / Escape.
+  return new Promise((resolve) => {
+    const { unmount, waitUntilExit } = render(
+      <OnboardingTour
+        payload={STATIC_TOUR_PAYLOAD}
+        onClose={() => {
+          unmount();
+        }}
+      />,
+      { exitOnCtrlC: true, patchConsole: false },
+    );
+    waitUntilExit().then(() => resolve(0));
+  });
+}
+
 async function dispatchOrchestration(sub: string, rest: string[]): Promise<number> {
   if (sub === "orchestrate") {
     const spec = rest.join(" ").trim();
@@ -297,6 +315,7 @@ async function dispatchOrchestration(sub: string, rest: string[]): Promise<numbe
 
   const verb = rest[0] ?? "status";
   if (verb === "status") return runOrchestrationStatus();
+  if (verb === "tour") return runOrchestrationTour();
 
   if (verb === "show") {
     const id = rest[1];
@@ -308,7 +327,7 @@ async function dispatchOrchestration(sub: string, rest: string[]): Promise<numbe
   }
 
   console.error(`unknown orchestration subcommand: ${verb}`);
-  console.error("usage: loomkin orchestration [status|show <id>]");
+  console.error("usage: loomkin orchestration [status|show <id>|tour]");
   return 1;
 }
 

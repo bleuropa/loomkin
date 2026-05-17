@@ -20,7 +20,9 @@ defmodule Loomkin.Orchestration.SessionBridge do
 
   require Logger
 
-  alias Loomkin.Orchestration.{Context, IntentClassifier, SwarmCoordinator}
+  alias Loomkin.Accounts
+  alias Loomkin.Orchestration
+  alias Loomkin.Orchestration.{Context, IntentClassifier, Personas, SwarmCoordinator}
   alias Loomkin.Orchestration.Pipelines.{LitePipeline, ShortPipeline}
 
   @doc """
@@ -76,8 +78,104 @@ defmodule Loomkin.Orchestration.SessionBridge do
             run_pipeline(ShortPipeline, session_state, message, opts)
 
           :complex_task ->
+            maybe_broadcast_tour(session_state)
             submit_complex_task(session_state, message, opts)
         end
+    end
+  end
+
+  ## ─── Onboarding tour broadcast ────────────────────────────────────────
+
+  # First `:complex_task` for a user who has not yet seen the orchestration
+  # onboarding tour publishes `session.orchestration.tour_needed` so the CLI
+  # / LiveView surface can render the walkthrough card. The user record's
+  # `has_seen_orchestration_tour` flag is the source of truth — once true,
+  # we never broadcast again.
+  #
+  # Lookup safety: we tolerate missing session_id / user_id and any DB
+  # error. The tour is purely an enhancement; failure here must NEVER
+  # prevent the complex_task from dispatching.
+  defp maybe_broadcast_tour(session_state) do
+    with {:ok, user} <- fetch_session_user(session_state),
+         %{has_seen_orchestration_tour: false} <- user do
+      broadcast_tour_needed(user)
+    else
+      _ -> :ok
+    end
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp fetch_session_user(%{user_id: user_id}) when not is_nil(user_id) do
+    case safe_get_user(user_id) do
+      nil -> :error
+      user -> {:ok, user}
+    end
+  end
+
+  defp fetch_session_user(%{id: session_id}) when is_binary(session_id) and session_id != "" do
+    case Loomkin.Session.Persistence.get_session(session_id) do
+      %{user_id: user_id} when not is_nil(user_id) ->
+        case safe_get_user(user_id) do
+          nil -> :error
+          user -> {:ok, user}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp fetch_session_user(_), do: :error
+
+  defp safe_get_user(user_id) do
+    Accounts.get_user!(user_id)
+  rescue
+    Ecto.NoResultsError -> nil
+  end
+
+  defp broadcast_tour_needed(user) do
+    phases =
+      Enum.map(Orchestration.phases(), fn phase ->
+        persona = Personas.for_phase(phase)
+        %{phase: phase, name: persona.name, icon: persona.icon, role_blurb: persona.role_blurb}
+      end)
+
+    personas =
+      Personas.all()
+      |> Enum.map(fn {key, persona} ->
+        %{
+          key: key,
+          name: persona.name,
+          icon: persona.icon,
+          role_blurb: persona.role_blurb
+        }
+      end)
+
+    data = %{
+      user_id: user.id,
+      phases: phases,
+      personas: personas
+    }
+
+    signal = %Jido.Signal{
+      id: Ecto.UUID.generate(),
+      source: "loomkin.orchestration",
+      type: "session.orchestration.tour_needed",
+      datacontenttype: "application/json",
+      time: DateTime.utc_now() |> DateTime.to_iso8601(),
+      data: data,
+      specversion: "1.0.2"
+    }
+
+    try do
+      Loomkin.Signals.publish(signal)
+    rescue
+      _ -> :ok
+    catch
+      _, _ -> :ok
     end
   end
 
