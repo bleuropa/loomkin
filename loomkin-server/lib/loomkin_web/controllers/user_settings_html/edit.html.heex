@@ -46,4 +46,78 @@
       Save Password
     </.button>
   </.form>
+
+  <div class="divider" />
+
+  <section aria-labelledby="orch-prefs-h" class="text-left">
+    <h2 id="orch-prefs-h" class="text-lg font-medium mb-2">Orchestration approval</h2>
+    <p class="text-sm mb-4" style="color: var(--text-muted);">
+      Choose when the orchestrator pauses for human approval mid-flight. Auto
+      runs without interruption; Approve at commit pauses once before opening
+      a PR; Approve at every phase is the highest-friction setting and pauses
+      on every gate transition.
+    </p>
+    <.form for={@orchestration_form} action={~p"/users/settings"} id="update_orchestration">
+      <input type="hidden" name="action" value="update_orchestration_preferences" />
+
+      <fieldset
+        class="flex flex-col gap-2"
+        data-testid="orchestration-approval-mode-field"
+      >
+        <legend class="sr-only">Orchestration approval mode</legend>
+
+        <label class="flex items-start gap-3 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name={@orchestration_form[:orchestration_approval_mode].name}
+            value="auto"
+            checked={@orchestration_form[:orchestration_approval_mode].value in [nil, "auto"]}
+            class="mt-1"
+          />
+          <span>
+            <strong>Auto</strong>
+            <span class="block" style="color: var(--text-muted);">
+              Fully automatic; no prompts.
+            </span>
+          </span>
+        </label>
+
+        <label class="flex items-start gap-3 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name={@orchestration_form[:orchestration_approval_mode].name}
+            value="commit"
+            checked={@orchestration_form[:orchestration_approval_mode].value == "commit"}
+            class="mt-1"
+          />
+          <span>
+            <strong>Approve at commit</strong>
+            <span class="block" style="color: var(--text-muted);">
+              Prompts once before opening each PR.
+            </span>
+          </span>
+        </label>
+
+        <label class="flex items-start gap-3 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name={@orchestration_form[:orchestration_approval_mode].name}
+            value="every_phase"
+            checked={@orchestration_form[:orchestration_approval_mode].value == "every_phase"}
+            class="mt-1"
+          />
+          <span>
+            <strong>Approve at every phase</strong>
+            <span class="block" style="color: var(--text-muted);">
+              Prompts on every gate transition. More friction, more control.
+            </span>
+          </span>
+        </label>
+      </fieldset>
+
+      <.button variant="primary" phx-disable-with="Saving...">
+        Save Approval Mode
+      </.button>
+    </.form>
+  </section>
 </Layouts.app>

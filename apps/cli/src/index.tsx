@@ -29,6 +29,12 @@ import { loadAllMemories, formatMemoriesForPrompt } from "./lib/memory.js";
 import { loadSessionMemory } from "./lib/sessionExtractor.js";
 import { loadPlugins } from "./lib/plugins.js";
 import { runHooks } from "./lib/hooks.js";
+import {
+  runOrchestrate,
+  runOrchestrationShow,
+  runOrchestrationStatus,
+} from "./lib/orchestration.js";
+import { OnboardingTour, STATIC_TOUR_PAYLOAD } from "./components/OnboardingTour.js";
 
 const cli = meow(
   `
@@ -283,10 +289,64 @@ async function resolveSessionId(): Promise<string | null> {
   return createNewSession();
 }
 
+async function runOrchestrationTour(): Promise<number> {
+  // Render the rich walkthrough using the static (mirror-of-server) payload.
+  // The TUI exits cleanly when the user presses Enter / q / Escape.
+  return new Promise((resolve) => {
+    const { unmount, waitUntilExit } = render(
+      <OnboardingTour
+        payload={STATIC_TOUR_PAYLOAD}
+        onClose={() => {
+          unmount();
+        }}
+      />,
+      { exitOnCtrlC: true, patchConsole: false },
+    );
+    waitUntilExit().then(() => resolve(0));
+  });
+}
+
+async function dispatchOrchestration(sub: string, rest: string[]): Promise<number> {
+  if (sub === "orchestrate") {
+    const spec = rest.join(" ").trim();
+    const title = (cli.flags as Record<string, unknown>).title as string | undefined;
+    return runOrchestrate(spec, title);
+  }
+
+  const verb = rest[0] ?? "status";
+  if (verb === "status") return runOrchestrationStatus();
+  if (verb === "tour") return runOrchestrationTour();
+
+  if (verb === "show") {
+    const id = rest[1];
+    if (!id) {
+      console.error("usage: loomkin orchestration show <epic-id>");
+      return 1;
+    }
+    return runOrchestrationShow(id);
+  }
+
+  console.error(`unknown orchestration subcommand: ${verb}`);
+  console.error("usage: loomkin orchestration [status|show <id>|tour]");
+  return 1;
+}
+
 async function main() {
   // Apply --cwd before anything else
   if (cli.flags.cwd) {
     process.chdir(cli.flags.cwd);
+  }
+
+  // Orchestration subcommands — non-interactive, exit before the ink UI mounts.
+  // Usage:
+  //   loomkin orchestration status
+  //   loomkin orchestration show <epic-id>
+  //   loomkin orchestrate "<spec>" [--title "..."]
+  const sub = cli.input[0];
+  if (sub === "orchestration" || sub === "orchestrate") {
+    if (cli.flags.server) setConfig({ serverUrl: cli.flags.server });
+    const exit = await dispatchOrchestration(sub, cli.input.slice(1));
+    process.exit(exit);
   }
 
   // Apply CLI flags to config/store

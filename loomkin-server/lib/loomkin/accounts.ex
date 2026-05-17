@@ -189,6 +189,42 @@ defmodule Loomkin.Accounts do
   end
 
   @doc """
+  Returns an `%Ecto.Changeset{}` for editing per-user orchestration preferences
+  (currently only `:orchestration_approval_mode`).
+  """
+  def change_user_orchestration_preferences(%User{} = user, attrs \\ %{}) do
+    User.orchestration_preferences_changeset(user, attrs)
+  end
+
+  @doc """
+  Persists the orchestration-approval mode for a user.
+
+  Returns `{:ok, user}` or `{:error, changeset}`.
+  """
+  def update_user_orchestration_preferences(%User{} = user, attrs) do
+    user
+    |> User.orchestration_preferences_changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Marks the one-time orchestration onboarding tour as seen for the given
+  user. Idempotent: if `has_seen_orchestration_tour` is already `true`,
+  returns `{:ok, user}` without hitting the database.
+
+  Returns `{:ok, %User{}}` or `{:error, changeset}`.
+  """
+  def mark_orchestration_tour_seen(%User{has_seen_orchestration_tour: true} = user) do
+    {:ok, user}
+  end
+
+  def mark_orchestration_tour_seen(%User{} = user) do
+    user
+    |> User.orchestration_tour_seen_changeset()
+    |> Repo.update()
+  end
+
+  @doc """
   Updates the user password.
 
   Returns a tuple with the updated user, as well as a list of expired tokens.

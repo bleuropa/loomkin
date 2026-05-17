@@ -12,6 +12,8 @@ defmodule Loomkin.Accounts.User do
     field :display_name, :string
     field :avatar_url, :string
     field :cloud_user_id, :string
+    field :orchestration_approval_mode, :string, default: "auto"
+    field :has_seen_orchestration_tour, :boolean, default: false
 
     timestamps(type: :utc_datetime)
   end
@@ -63,6 +65,33 @@ defmodule Loomkin.Accounts.User do
     user
     |> cast(attrs, [:username, :display_name, :avatar_url])
     |> validate_username(opts)
+  end
+
+  @doc """
+  A user changeset for tuning per-user orchestration preferences.
+
+  Currently exposes `:orchestration_approval_mode`, which controls when the
+  orchestrator pauses for human approval. Valid values:
+
+    * `"auto"`        — never pauses (default)
+    * `"commit"`      — pauses once, before opening a PR
+    * `"every_phase"` — pauses on every gate transition + before opening a PR
+  """
+  def orchestration_preferences_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:orchestration_approval_mode])
+    |> validate_inclusion(:orchestration_approval_mode, ~w(auto commit every_phase),
+      message: "must be auto, commit, or every_phase"
+    )
+  end
+
+  @doc """
+  Marks the orchestration tour as seen for a given user. Used by the
+  one-time onboarding walkthrough so the CLI / LiveView guard never
+  shows it again automatically.
+  """
+  def orchestration_tour_seen_changeset(user) do
+    change(user, has_seen_orchestration_tour: true)
   end
 
   defp validate_email(changeset, opts) do

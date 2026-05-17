@@ -34,6 +34,7 @@ defmodule LoomkinWeb.SessionChannel do
         Loomkin.Signals.subscribe("agent.**")
         Loomkin.Signals.subscribe("context.**")
         Loomkin.Signals.subscribe("collaboration.**")
+        Loomkin.Signals.subscribe("session.orchestration.tour_needed")
 
         {:ok, %{model: session.model},
          socket
@@ -118,6 +119,21 @@ defmodule LoomkinWeb.SessionChannel do
       {:error, :invalid_role} ->
         valid = @valid_roles |> Enum.map(&to_string/1) |> Enum.join(", ")
         {:reply, {:error, %{reason: "invalid role: #{role}. Valid roles: #{valid}"}}, socket}
+    end
+  end
+
+  def handle_in("mark_tour_seen", _params, socket) do
+    session = Persistence.get_session(socket.assigns.session_id)
+
+    case fetch_session_user(session) do
+      nil ->
+        {:reply, :ok, socket}
+
+      user ->
+        case Loomkin.Accounts.mark_orchestration_tour_seen(user) do
+          {:ok, _user} -> {:reply, :ok, socket}
+          {:error, _changeset} -> {:reply, {:error, %{reason: "mark_failed"}}, socket}
+        end
     end
   end
 
@@ -409,6 +425,73 @@ defmodule LoomkinWeb.SessionChannel do
     if sig.data[:session_id] == socket.assigns.session_id do
       msg = Map.get(sig.data, :message, sig.data)
       push(socket, "new_message", %{message: serialize_signal_message(msg)})
+    end
+
+    {:noreply, socket}
+  end
+
+  # First-time orchestration tour signal. Emitted by SessionBridge before the
+  # first `:complex_task` dispatch for a user who has not yet seen the
+  # walkthrough. Forwarded only to channels whose session belongs to that
+  # user so we don't push the overlay into someone else's CLI feed.
+  def handle_info(%Jido.Signal{type: "session.orchestration.tour_needed"} = sig, socket) do
+    target_user_id = sig.data[:user_id] || sig.data["user_id"]
+    session = Persistence.get_session(socket.assigns.session_id)
+    session_user_id = session && session.user_id
+
+    if is_binary(target_user_id) and target_user_id == session_user_id do
+      push(socket, "orchestration_tour", %{
+        phases: sig.data[:phases] || sig.data["phases"] || [],
+        personas: sig.data[:personas] || sig.data["personas"] || []
+      })
+    end
+
+    {:noreply, socket}
+  end
+
+  # Orchestration framework phase events — translated from the
+  # orchestration.* PubSub topics by Loomkin.Orchestration.SignalBridge.
+  # See docs/orchestration/ARCHITECTURE.md.
+  def handle_info(%Jido.Signal{type: "session.orchestration.phase"} = sig, socket) do
+    if sig.data[:session_id] in [nil, socket.assigns.session_id] do
+      push(socket, "orchestration_phase", %{
+        subtype: sig.data[:subtype],
+        event: sig.data[:event],
+        epic_id: sig.data[:epic_id],
+        work_unit_id: sig.data[:work_unit_id]
+      })
+    end
+
+    {:noreply, socket}
+  end
+
+  # Per-epic cost + ETA updates. Emitted by `Loomkin.Orchestration.SignalBridge`
+  # whenever a cost-event is recorded, so CLI / mobile clients can surface
+  # the running spend and the projected time-to-finish on the live card.
+  def handle_info(%Jido.Signal{type: "session.orchestration.cost"} = sig, socket) do
+    if sig.data[:session_id] in [nil, socket.assigns.session_id] do
+      push(socket, "orchestration_cost", %{
+        epic_id: sig.data[:epic_id],
+        cost_usd: sig.data[:cost_usd],
+        eta_seconds: sig.data[:eta_seconds]
+      })
+    end
+
+    {:noreply, socket}
+  end
+
+  # Inline diff preview events. Emitted by SignalBridge after a successful
+  # work-unit commit so the CLI / mobile clients can surface a +N −M
+  # summary (and optionally an expandable patch excerpt) inline.
+  def handle_info(%Jido.Signal{type: "session.orchestration.diff"} = sig, socket) do
+    if sig.data[:session_id] in [nil, socket.assigns.session_id] do
+      push(socket, "orchestration_diff", %{
+        work_unit_id: sig.data[:work_unit_id],
+        sha: sig.data[:sha],
+        stats: sig.data[:stats],
+        files: sig.data[:files],
+        patch_excerpt: sig.data[:patch_excerpt]
+      })
     end
 
     {:noreply, socket}

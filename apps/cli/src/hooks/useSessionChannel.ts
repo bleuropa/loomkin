@@ -7,6 +7,10 @@ import { isMcpTool, truncateMcpOutput } from "../lib/mcpTruncation.js";
 import { shouldExtract, runBackgroundExtraction } from "../lib/sessionExtractor.js";
 import { loadAllMemories, formatMemoriesForPrompt } from "../lib/memory.js";
 import { runHooks } from "../lib/hooks.js";
+import { formatOrchestrationPhase } from "../lib/orchestrationFeedRenderer.js";
+import { epicCardStore, type CostPayload, type PhasePayload } from "../stores/epicCardStore.js";
+import { useTourStore, type TourPhase, type TourPersona } from "../stores/tourStore.js";
+import { formatSummary as formatDiffSummary, type DiffPayload } from "../components/DiffPreview.js";
 import type {
   Message,
   ToolCall,
@@ -64,6 +68,96 @@ export function useSessionChannel() {
     on("message_updated", (raw) => {
       const payload = raw as { message: Message };
       useSessionStore.getState().updateMessage(payload.message.id, payload.message);
+    });
+
+    // Orchestration framework phase events — translated server-side from
+    // orchestration.* PubSub topics. We funnel every recognised event into
+    // the live `epicCardStore` so a single sticky card per epic replaces
+    // the per-event firehose. Unknown subtypes still fall back to a terse
+    // system-role message for debugging / backward compat.
+    on("orchestration_phase", (raw) => {
+      const payload = raw as PhasePayload;
+      const subtype = payload.subtype;
+      const isKnown = subtype === "epic" || subtype === "work_unit" || subtype === "knowledge";
+
+      if (isKnown && payload.epic_id) {
+        epicCardStore.getState().applyEvent(payload);
+        return;
+      }
+
+      // Fallback: keep the legacy system-message rendering for any
+      // payload we don't yet route into the card store.
+      const text = formatOrchestrationPhase(payload);
+      if (!text) return;
+
+      const idSuffix = `${payload.subtype ?? "x"}-${payload.epic_id ?? payload.work_unit_id ?? "x"}-${Date.now()}-${Math.floor(Math.random() * 10_000)}`;
+
+      useSessionStore.getState().addMessage({
+        id: `orchestration-${idSuffix}`,
+        role: "system",
+        content: text,
+      } as Message);
+    });
+
+    // Per-epic cost + ETA event. Emitted by the server's SignalBridge
+    // whenever the orchestration epic fires a phase-level event. The
+    // payload carries the *running* cost in USD and the projected
+    // remaining time in seconds. Either may be null when the server has
+    // insufficient data — we just leave the fields untouched on the card.
+    on("orchestration_cost", (raw) => {
+      const payload = raw as unknown as CostPayload;
+      if (!payload.epic_id) return;
+      epicCardStore.getState().applyCost(payload);
+    });
+
+    // Inline diff preview event. Emitted by the server after every
+    // successful work-unit commit (see Loomkin.Orchestration.Diff).
+    //
+    // We always surface a one-line system message with the +/- summary so
+    // the user sees something in the conversation feed. When the payload
+    // (or a future server enrichment) carries an epic_id we also feed
+    // the epicCardStore so it can show the diff alongside the live card.
+    on("orchestration_diff", (raw) => {
+      const payload = raw as DiffPayload & {
+        epic_id?: string;
+        subtype?: string;
+      };
+
+      const summary = formatDiffSummary(payload);
+      const wuSuffix = payload.work_unit_id ? ` [wu:${payload.work_unit_id.slice(0, 6)}]` : "";
+
+      useSessionStore.getState().addMessage({
+        id: `orchestration-diff-${payload.sha ?? Date.now()}-${Math.floor(Math.random() * 10_000)}`,
+        role: "system",
+        content: `diff ${summary}${wuSuffix}`,
+      } as Message);
+
+      if (payload.epic_id) {
+        const stats = payload.stats ?? {};
+        epicCardStore.getState().applyEvent({
+          subtype: "orchestration_diff",
+          epic_id: payload.epic_id,
+          work_unit_id: payload.work_unit_id,
+          diff: {
+            work_unit_id: payload.work_unit_id,
+            stats: `+${stats.additions ?? 0} −${stats.deletions ?? 0} across ${stats.files ?? 0}`,
+          },
+        } as PhasePayload);
+      }
+    });
+
+    // First-time orchestration tour. Server emits this push when a user
+    // dispatches their first `:complex_task` and they haven't seen the
+    // walkthrough yet. We open the overlay; dismissal acknowledges back to
+    // the server via `mark_tour_seen` so the user never sees it again
+    // automatically.
+    on("orchestration_tour", (raw) => {
+      const payload = raw as { phases?: TourPhase[]; personas?: TourPersona[] };
+      useTourStore.getState().openTour({
+        phases: payload.phases ?? [],
+        personas: payload.personas ?? [],
+        mark_seen_on_close: true,
+      });
     });
 
     on("stream_start", (raw) => {
@@ -500,6 +594,12 @@ export function useSessionChannel() {
     [],
   );
 
+  const markTourSeen = useCallback(() => {
+    const ch = useChannelStore.getState().getChannel();
+    if (!ch) return;
+    ch.push("mark_tour_seen", {});
+  }, []);
+
   return {
     messages,
     isStreaming,
@@ -514,5 +614,6 @@ export function useSessionChannel() {
     respondApproval,
     respondSpawnGate,
     respondPlan,
+    markTourSeen,
   };
 }
