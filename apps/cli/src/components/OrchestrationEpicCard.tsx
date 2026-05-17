@@ -1,17 +1,38 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Box, Text, useInput } from "ink";
 import type { EpicCard } from "../stores/epicCardStore.js";
+import { useChannelStore } from "../stores/channelStore.js";
 
 /**
  * Sticky in-chat card for a single live epic. Replaces the per-event
- * system-message firehose with one card per epic. Pause/cancel/open
- * action-hints are static for now — wiring is r14's work.
+ * system-message firehose with one card per epic.
+ *
+ * Keyboard steering (r14):
+ *   p — pause   c — cancel   r — resume (only when paused)
+ *   a — approve x — reject   (only when awaiting_approval)
+ *   o — open dashboard (TODO: not wired yet)
+ *
+ * Each keystroke is sent as an inline CLI command through the active
+ * session channel. The `SessionBridge` on the server interprets it
+ * (e.g. `/orchestration pause <epic_id>`).
  */
 
 interface Props {
   card: EpicCard;
   /** Override "now" for stable test snapshots. */
   now?: number;
+  /**
+   * Only the focused card listens for keyboard input. Tests can leave this
+   * unset (defaults to false) to avoid raw-mode initialization in non-TTY
+   * environments — the keystroke handler under test is invoked directly.
+   */
+  isFocused?: boolean;
+  /**
+   * Override hook for tests — bypasses the live channel store and lets a
+   * test inject a spy. In production the default `defaultSendCommand` pushes
+   * onto the active session channel.
+   */
+  onCommand?: (command: string) => void;
 }
 
 const TOTAL_DOTS = 9;
@@ -55,13 +76,102 @@ function statusColor(status: EpicCard["status"]): string {
       return "red";
     case "escalated":
       return "yellow";
+    case "paused":
+      return "yellow";
+    case "cancelled":
+      return "gray";
+    case "awaiting_approval":
+      return "magenta";
     case "monitoring":
     default:
       return "cyan";
   }
 }
 
-export function OrchestrationEpicCard({ card, now = Date.now() }: Props) {
+/**
+ * Default command transport — pushes a `send_message` frame onto the
+ * active session channel so the server's SessionBridge parses it as a
+ * CLI command. We use the channel directly (instead of `useSessionChannel`)
+ * to keep this component decoupled from React-tree wiring.
+ */
+function defaultSendCommand(command: string): void {
+  const ch = useChannelStore.getState().getChannel();
+  if (!ch) return;
+  ch.push("send_message", { content: command });
+}
+
+/**
+ * Pure (test-friendly) translator from a key press + card state into the
+ * inline CLI command (or `null` if the key has no meaning in this state).
+ * Exported so tests can hammer it without mounting Ink.
+ */
+export function commandForKey(
+  key: string,
+  card: Pick<EpicCard, "epic_id" | "status">,
+): string | null {
+  switch (key) {
+    case "p":
+      if (card.status === "monitoring" || card.status === "awaiting_approval") {
+        return `/orchestration pause ${card.epic_id}`;
+      }
+      return null;
+    case "c":
+      if (card.status !== "closed" && card.status !== "failed" && card.status !== "cancelled") {
+        return `/orchestration cancel ${card.epic_id}`;
+      }
+      return null;
+    case "r":
+      if (card.status === "paused") {
+        return `/orchestration resume ${card.epic_id}`;
+      }
+      return null;
+    case "a":
+      if (card.status === "awaiting_approval") {
+        return `/orchestration approve ${card.epic_id}`;
+      }
+      return null;
+    case "x":
+      if (card.status === "awaiting_approval") {
+        return `/orchestration reject ${card.epic_id}`;
+      }
+      return null;
+    case "o":
+      // TODO(r14+): open the LiveView dashboard for this epic. Wire this
+      // once we agree on an OS-open helper (likely shells out to `open`
+      // on macOS / `xdg-open` on linux).
+      return null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Tiny sub-component that owns the `useInput` hook subscription. We isolate
+ * the hook in its own component (and only mount it when `isFocused` is true)
+ * so the parent card component remains a pure renderer — callers (including
+ * tests) can invoke `OrchestrationEpicCard(...)` as a function without
+ * dragging Ink's stdin context into the call.
+ */
+function SteeringInput({
+  card,
+  onCommand,
+}: {
+  card: EpicCard;
+  onCommand: (command: string) => void;
+}) {
+  useInput((input) => {
+    const command = commandForKey(input, card);
+    if (command) onCommand(command);
+  });
+  return null;
+}
+
+export function OrchestrationEpicCard({
+  card,
+  now = Date.now(),
+  isFocused = false,
+  onCommand,
+}: Props) {
   const persona = card.current_persona;
   const idx = progressIndex(card.current_phase);
   const dots = Array.from({ length: TOTAL_DOTS }, (_, i) => (i <= idx ? "●" : "○")).join(" ");
@@ -73,7 +183,15 @@ export function OrchestrationEpicCard({ card, now = Date.now() }: Props) {
         ? " — escalated (human attention needed)"
         : card.status === "closed"
           ? " — closed"
-          : "";
+          : card.status === "paused"
+            ? " — paused"
+            : card.status === "cancelled"
+              ? " — cancelled"
+              : card.status === "awaiting_approval"
+                ? " — awaiting approval"
+                : "";
+
+  const isAwaiting = card.status === "awaiting_approval";
 
   return (
     <Box
@@ -83,6 +201,7 @@ export function OrchestrationEpicCard({ card, now = Date.now() }: Props) {
       paddingX={1}
       marginBottom={1}
     >
+      {isFocused ? <SteeringInput card={card} onCommand={onCommand ?? defaultSendCommand} /> : null}
       <Box>
         <Text bold color={statusColor(card.status)}>
           {persona ? `${persona.icon} ${persona.name}` : "Orchestration"}
@@ -122,8 +241,20 @@ export function OrchestrationEpicCard({ card, now = Date.now() }: Props) {
         </Box>
       ) : null}
 
+      {isAwaiting ? (
+        <Box>
+          <Text color="magenta">[a] approve [x] reject</Text>
+        </Box>
+      ) : null}
+
       <Box>
-        <Text dimColor>[p] pause [c] cancel [o] open dashboard</Text>
+        <Text dimColor>
+          {card.status === "paused"
+            ? "[r] resume [c] cancel [o] open dashboard"
+            : isAwaiting
+              ? "[p] pause [c] cancel [o] open dashboard"
+              : "[p] pause [c] cancel [o] open dashboard"}
+        </Text>
       </Box>
     </Box>
   );

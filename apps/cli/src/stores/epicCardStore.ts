@@ -28,7 +28,14 @@ export interface DiffSummary {
   stats: string;
 }
 
-export type EpicCardStatus = "monitoring" | "closed" | "failed" | "escalated";
+export type EpicCardStatus =
+  | "monitoring"
+  | "paused"
+  | "cancelled"
+  | "awaiting_approval"
+  | "closed"
+  | "failed"
+  | "escalated";
 
 export interface EpicCard {
   epic_id: string;
@@ -105,6 +112,16 @@ function describeEvent(payload: PhasePayload): string | null {
         const sha = String(rest[0] ?? "").slice(0, 12);
         return `${personaPrefix}commit ${sha}`;
       }
+      case "paused":
+        return `${personaPrefix}paused`;
+      case "cancelled":
+        return `${personaPrefix}cancelled`;
+      case "awaiting_approval": {
+        const reason = String(rest[0] ?? "approval requested");
+        return `${personaPrefix}awaiting approval — ${reason}`;
+      }
+      case "resumed_from_pause":
+        return `${personaPrefix}resumed`;
       default:
         return `${personaPrefix}${tag}`;
     }
@@ -173,6 +190,14 @@ export const epicCardStore = createStore<EpicCardState>((set, get) => ({
           };
         } else if (tag === "escalated") {
           card.status = "escalated";
+        } else if (tag === "paused") {
+          card.status = "paused";
+        } else if (tag === "cancelled") {
+          card.status = "cancelled";
+        } else if (tag === "awaiting_approval") {
+          card.status = "awaiting_approval";
+        } else if (tag === "resumed_from_pause") {
+          card.status = "monitoring";
         }
       } else if (typeof event === "string") {
         switch (event) {
@@ -185,6 +210,20 @@ export const epicCardStore = createStore<EpicCardState>((set, get) => ({
             break;
           case "failed":
             card.status = "failed";
+            break;
+          case "paused":
+            card.status = "paused";
+            break;
+          case "cancelled":
+            card.status = "cancelled";
+            break;
+          case "awaiting_approval":
+            card.status = "awaiting_approval";
+            break;
+          case "resumed_from_pause":
+            // After resume the card is back to active monitoring unless a
+            // newer event tells us otherwise.
+            card.status = "monitoring";
             break;
           default:
             break;
@@ -209,11 +248,12 @@ export const epicCardStore = createStore<EpicCardState>((set, get) => ({
 
     set({ cards: { ...get().cards, [epic_id]: card } });
 
-    if (card.status === "closed") {
+    if (card.status === "closed" || card.status === "cancelled") {
       const id = epic_id;
+      const reapStatus = card.status;
       setTimeout(() => {
         const latest = get().cards[id];
-        if (latest && latest.status === "closed") {
+        if (latest && latest.status === reapStatus) {
           get().removeCard(id);
         }
       }, REMOVE_AFTER_CLOSED_MS);

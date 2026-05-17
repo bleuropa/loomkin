@@ -43,4 +43,43 @@ defmodule Loomkin.Orchestration.SessionBridgeTest do
 
     :telemetry.detach("test-bridge-tel")
   end
+
+  describe "in-band /orchestration commands" do
+    test "unknown epic id returns {:error, _} from each verb" do
+      for verb <- ~w(pause cancel resume approve reject) do
+        result = SessionBridge.dispatch(session_state(), "/orchestration #{verb} no-such-epic")
+
+        assert match?({:error, _}, result),
+               "expected error tuple for verb #{verb}, got #{inspect(result)}"
+      end
+    end
+
+    test "malformed command returns {:error, usage}" do
+      assert {:error, msg} = SessionBridge.dispatch(session_state(), "/orchestration pause")
+      assert msg =~ "usage"
+    end
+
+    test "unknown verb returns {:error, _}" do
+      assert {:error, msg} =
+               SessionBridge.dispatch(session_state(), "/orchestration foobar some-epic-id")
+
+      assert msg =~ "unknown"
+    end
+
+    test "dispatch emits steering telemetry for in-band commands" do
+      me = self()
+
+      :telemetry.attach(
+        "test-bridge-steering-tel",
+        [:loomkin, :orchestration, :session_bridge, :dispatched],
+        fn _e, _m, meta, _ -> send(me, {:dispatched, meta}) end,
+        nil
+      )
+
+      _ = SessionBridge.dispatch(session_state(), "/orchestration pause no-such-epic")
+      assert_receive {:dispatched, %{intent: :steering, via: :in_band}}
+
+      :telemetry.detach("test-bridge-steering-tel")
+    end
+  end
 end

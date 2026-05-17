@@ -10,7 +10,7 @@ defmodule Loomkin.Orchestration.Schema.Epic do
   import Ecto.Changeset
   alias Loomkin.Orchestration.Schema.DoDItem
 
-  @statuses ~w(pending in_progress awaiting_human closed failed)a
+  @statuses ~w(pending in_progress awaiting_human closed failed cancelled)a
 
   @primary_key {:id, :binary_id, autogenerate: false}
 

@@ -48,7 +48,9 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
     :iterations,
     :gate_verdicts,
     :attempt_knobs,
-    :worktree_pid
+    :worktree_pid,
+    :paused_from,
+    :approval_reason
   ]
 
   @type data :: %__MODULE__{
@@ -61,7 +63,9 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
           iterations: map(),
           gate_verdicts: map(),
           attempt_knobs: %{optional(atom()) => RetryLadder.knobs() | :escalate},
-          worktree_pid: pid() | nil
+          worktree_pid: pid() | nil,
+          paused_from: atom() | nil,
+          approval_reason: String.t() | nil
         }
 
   ## Client API
@@ -103,7 +107,9 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
       iterations: %{},
       gate_verdicts: %{},
       attempt_knobs: %{},
-      worktree_pid: nil
+      worktree_pid: nil,
+      paused_from: nil,
+      approval_reason: nil
     }
 
     {:ok, :pending, data}
@@ -118,6 +124,9 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
     {:next_state, :research, data}
   end
 
+  def pending(:cast, :pause, data), do: pause_from(:pending, data)
+  def pending(:cast, :cancel, data), do: cancel_from(data)
+
   def pending({:call, from}, :status, data),
     do: {:keep_state_and_data, [{:reply, from, snapshot(:pending, data)}]}
 
@@ -128,6 +137,9 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
       data = enter_phase(data, unquote(phase))
       {:keep_state, data, [{:state_timeout, 0, :run}]}
     end
+
+    def unquote(phase)(:cast, :pause, data), do: pause_from(unquote(phase), data)
+    def unquote(phase)(:cast, :cancel, data), do: cancel_from(data)
 
     def unquote(phase)({:call, from}, :status, data),
       do: {:keep_state_and_data, [{:reply, from, snapshot(unquote(phase), data)}]}
@@ -143,6 +155,9 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
     {:keep_state, data, [{:state_timeout, 0, :run}]}
   end
 
+  def research(:cast, :pause, data), do: pause_from(:research, data)
+  def research(:cast, :cancel, data), do: cancel_from(data)
+
   def research({:call, from}, :status, data),
     do: {:keep_state_and_data, [{:reply, from, snapshot(:research, data)}]}
 
@@ -151,6 +166,9 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
       data = enter_phase(data, unquote(phase))
       {:keep_state, data, [{:state_timeout, 0, :run_gate}]}
     end
+
+    def unquote(phase)(:cast, :pause, data), do: pause_from(unquote(phase), data)
+    def unquote(phase)(:cast, :cancel, data), do: cancel_from(data)
 
     def unquote(phase)({:call, from}, :status, data),
       do: {:keep_state_and_data, [{:reply, from, snapshot(unquote(phase), data)}]}
@@ -284,6 +302,9 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
   def closed({:call, from}, :status, data),
     do: {:keep_state_and_data, [{:reply, from, snapshot(:closed, data)}]}
 
+  # Steering casts that arrive after a terminal state are simply dropped.
+  def closed(:cast, _, _data), do: :keep_state_and_data
+
   def escalated(:enter, _old, data) do
     data = stop_worktree(data)
     broadcast(data, {:escalated, data.iterations})
@@ -303,6 +324,10 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
   def escalated({:call, from}, :status, data),
     do: {:keep_state_and_data, [{:reply, from, snapshot(:escalated, data)}]}
 
+  # Drop any other casts (pause/cancel arriving late, etc.) so the state
+  # machine doesn't crash on out-of-order steering commands.
+  def escalated(:cast, _, _data), do: :keep_state_and_data
+
   def failed(:enter, _old, data) do
     data = stop_worktree(data)
     broadcast(data, :failed)
@@ -313,6 +338,88 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
 
   def failed({:call, from}, :status, data),
     do: {:keep_state_and_data, [{:reply, from, snapshot(:failed, data)}]}
+
+  def failed(:cast, _, _data), do: :keep_state_and_data
+
+  ## :paused — reached from any non-terminal state on :pause cast.
+  ## Holds onto `data.paused_from` and resumes back to it on :resume_from_pause.
+  ## Ignores `:state_timeout` events so the in-flight phase doesn't fire while
+  ## the orchestrator is parked.
+
+  def paused(:enter, _old, data) do
+    broadcast(data, {:paused, data.paused_from})
+    notify_owner(data, {:paused, data.paused_from})
+    {:keep_state, data}
+  end
+
+  def paused(:cast, :resume_from_pause, %{paused_from: nil} = _data),
+    do: :keep_state_and_data
+
+  def paused(:cast, :resume_from_pause, data) do
+    resume_to = data.paused_from
+    broadcast(data, {:resumed, resume_to})
+    {:next_state, resume_to, %{data | paused_from: nil}}
+  end
+
+  def paused(:cast, :pause, _data), do: :keep_state_and_data
+  def paused(:cast, :cancel, data), do: cancel_from(data)
+
+  # State_timeouts that arrive after the pause cast are dropped — when we
+  # resume, the destination state's :enter handler re-arms a fresh timeout.
+  def paused(:state_timeout, _, _data), do: :keep_state_and_data
+
+  def paused({:call, from}, :status, data),
+    do: {:keep_state_and_data, [{:reply, from, snapshot(:paused, data)}]}
+
+  ## :cancelled — terminal. Worktree is torn down via the existing path; the
+  ## Epic row is marked `:cancelled` (new enum value).
+
+  def cancelled(:enter, _old, data) do
+    data = stop_worktree(data)
+    broadcast(data, :cancelled)
+    # Epic.statuses now includes `:cancelled` — persist the row accordingly.
+    persist_terminal(data, :cancelled)
+    notify_owner(data, :cancelled)
+    {:keep_state, data}
+  end
+
+  def cancelled({:call, from}, :status, data),
+    do: {:keep_state_and_data, [{:reply, from, snapshot(:cancelled, data)}]}
+
+  def cancelled(:cast, _, _data), do: :keep_state_and_data
+
+  ## :awaiting_approval — reached when `Approval.maybe_block/2` returns
+  ## `{:block, reason}` at a gate-completion / commit boundary. On :approve we
+  ## transition to `paused_from` (the state the orchestrator would have gone
+  ## to next); on :reject we cancel.
+
+  def awaiting_approval(:enter, _old, data) do
+    broadcast(data, {:awaiting_approval, data.paused_from, data.approval_reason})
+    notify_owner(data, {:awaiting_approval, data.paused_from, data.approval_reason})
+    {:keep_state, data}
+  end
+
+  def awaiting_approval(:cast, :approve, %{paused_from: nil} = _data),
+    do: :keep_state_and_data
+
+  def awaiting_approval(:cast, :approve, data) do
+    next = data.paused_from
+    broadcast(data, {:approved, next})
+    {:next_state, next, %{data | paused_from: nil, approval_reason: nil}}
+  end
+
+  def awaiting_approval(:cast, :reject, data) do
+    broadcast(data, :rejected)
+    {:next_state, :cancelled, data}
+  end
+
+  def awaiting_approval(:cast, :pause, _data), do: :keep_state_and_data
+  def awaiting_approval(:cast, :cancel, data), do: cancel_from(data)
+
+  def awaiting_approval(:state_timeout, _, _data), do: :keep_state_and_data
+
+  def awaiting_approval({:call, from}, :status, data),
+    do: {:keep_state_and_data, [{:reply, from, snapshot(:awaiting_approval, data)}]}
 
   ## Internals
 
@@ -447,7 +554,7 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
         data = %{data | gate_verdicts: Map.put(data.gate_verdicts, phase, verdicts)}
         broadcast(data, {:gate_verdict, phase, :pass, length(verdicts)})
         emit_gate_telemetry(data, phase, :pass, iter, duration_ms, knobs)
-        {:next_state, next_state, data}
+        maybe_intercept(data, phase, next_state)
 
       {:fail, verdicts} ->
         data = %{data | gate_verdicts: Map.put(data.gate_verdicts, phase, verdicts)}
@@ -465,6 +572,30 @@ defmodule Loomkin.Orchestration.IssueOrchestrator do
   defp fail(data, where, reason) do
     broadcast(data, {:fail, where, reason})
     {:next_state, :failed, data}
+  end
+
+  # Pause helper used by every non-terminal phase's :pause cast clause.
+  # Records the prior phase in data.paused_from so :resume_from_pause can
+  # rewind to it.
+  defp pause_from(phase, data) do
+    {:next_state, :paused, %{data | paused_from: phase}}
+  end
+
+  # Cancel helper — transition directly to the terminal :cancelled state.
+  defp cancel_from(data), do: {:next_state, :cancelled, data}
+
+  # Approval intercept: after a gate :pass, check the user's approval mode.
+  # If the user opted in to mid-flight approval, park in :awaiting_approval
+  # with `paused_from = next_state`. Otherwise advance normally.
+  defp maybe_intercept(data, _phase, next_state) do
+    case Loomkin.Orchestration.Approval.maybe_block(data.epic, next_state) do
+      :continue ->
+        {:next_state, next_state, data}
+
+      {:block, reason} ->
+        {:next_state, :awaiting_approval,
+         %{data | paused_from: next_state, approval_reason: reason}}
+    end
   end
 
   defp broadcast(%{bus_topic: topic, epic: epic}, message) when is_binary(topic) do

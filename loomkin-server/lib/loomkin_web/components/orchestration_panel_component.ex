@@ -17,6 +17,7 @@ defmodule LoomkinWeb.OrchestrationPanelComponent do
   alias Loomkin.Orchestration
   alias Loomkin.Orchestration.Context
   alias Loomkin.Orchestration.Personas
+  alias Loomkin.Orchestration.SwarmCoordinator
 
   @epic_topic "orchestration.epic"
   @wu_topic "orchestration.work_unit"
@@ -48,8 +49,32 @@ defmodule LoomkinWeb.OrchestrationPanelComponent do
   end
 
   @impl true
+  def handle_event("pause", %{"id" => epic_id}, socket) do
+    SwarmCoordinator.pause(epic_id)
+    {:noreply, socket}
+  end
+
+  def handle_event("cancel", %{"id" => epic_id}, socket) do
+    SwarmCoordinator.cancel(epic_id)
+    {:noreply, socket}
+  end
+
+  def handle_event("resume", %{"id" => epic_id}, socket) do
+    SwarmCoordinator.resume(epic_id)
+    {:noreply, socket}
+  end
+
+  def handle_event("approve", %{"id" => epic_id}, socket) do
+    SwarmCoordinator.approve(epic_id)
+    {:noreply, socket}
+  end
+
+  def handle_event("reject", %{"id" => epic_id}, socket) do
+    SwarmCoordinator.reject(epic_id)
+    {:noreply, socket}
+  end
+
   def handle_event(_event, _params, socket) do
-    # All buttons are dead-links until r14 wires real intents.
     {:noreply, socket}
   end
 
@@ -61,16 +86,34 @@ defmodule LoomkinWeb.OrchestrationPanelComponent do
 
   defp work_unit_count_for(_), do: 0
 
-  defp status_for(%{status: status}) when is_atom(status) do
-    case status do
-      :closed -> :closed
-      :failed -> :failed
-      :awaiting_human -> :escalated
-      _ -> :monitoring
+  defp status_for(%{status: status} = epic) when is_atom(status) do
+    cond do
+      status == :closed -> :closed
+      status == :failed -> :failed
+      status == :cancelled -> :cancelled
+      status == :awaiting_human and awaiting_approval?(epic) -> :awaiting_approval
+      status == :awaiting_human -> :escalated
+      paused?(epic) -> :paused
+      true -> :monitoring
     end
   end
 
   defp status_for(_), do: :monitoring
+
+  defp paused?(%{metadata: %{} = meta}) do
+    Map.get(meta, "paused") == true or Map.get(meta, :paused) == true
+  end
+
+  defp paused?(_), do: false
+
+  defp awaiting_approval?(%{metadata: %{} = meta}) do
+    Map.get(meta, "awaiting_approval") == true or
+      Map.get(meta, :awaiting_approval) == true or
+      not is_nil(Map.get(meta, "approval_reason")) or
+      not is_nil(Map.get(meta, :approval_reason))
+  end
+
+  defp awaiting_approval?(_), do: false
 
   defp persona_for_epic(%{current_phase: phase}) when is_binary(phase) do
     Personas.for_phase(safe_atom(phase))
@@ -97,6 +140,9 @@ defmodule LoomkinWeb.OrchestrationPanelComponent do
   defp status_badge(:closed), do: {"badge badge-success", "closed"}
   defp status_badge(:failed), do: {"badge badge-danger", "failed"}
   defp status_badge(:escalated), do: {"badge badge-warning", "escalated"}
+  defp status_badge(:paused), do: {"badge badge-warning", "paused"}
+  defp status_badge(:cancelled), do: {"badge", "cancelled"}
+  defp status_badge(:awaiting_approval), do: {"badge badge-warning", "awaiting approval"}
   defp status_badge(_), do: {"badge", "monitoring"}
 
   @impl true
@@ -154,24 +200,69 @@ defmodule LoomkinWeb.OrchestrationPanelComponent do
         <dd style="color: var(--text-primary);">{@last_event || "—"}</dd>
       </dl>
 
-      <div class="flex gap-2">
+      <div
+        :if={@status == :awaiting_approval}
+        class="mb-3 rounded p-3"
+        style="background: var(--surface-1); border: 1px solid var(--border-default);"
+      >
+        <p class="text-sm mb-2" style="color: var(--text-primary);">
+          <strong>Approval requested</strong> — review the pending change before continuing.
+        </p>
+        <div class="flex gap-2">
+          <button
+            type="button"
+            class="loom-btn loom-btn-solid"
+            phx-click="approve"
+            phx-target={@myself}
+            phx-value-id={@epic.id}
+            aria-label="Approve and continue"
+          >
+            [a] approve
+          </button>
+          <button
+            type="button"
+            class="loom-btn loom-btn-ghost"
+            phx-click="reject"
+            phx-target={@myself}
+            phx-value-id={@epic.id}
+            aria-label="Reject and stop"
+          >
+            [x] reject
+          </button>
+        </div>
+      </div>
+
+      <div class="flex gap-2" data-testid="orchestration-actions">
         <button
+          :if={@status in [:monitoring, :awaiting_approval]}
           type="button"
           class="loom-btn loom-btn-ghost"
           phx-click="pause"
           phx-target={@myself}
-          aria-label="Pause epic (coming soon)"
-          disabled
+          phx-value-id={@epic.id}
+          aria-label="Pause epic"
         >
           [p] pause
         </button>
         <button
+          :if={@status == :paused}
+          type="button"
+          class="loom-btn loom-btn-ghost"
+          phx-click="resume"
+          phx-target={@myself}
+          phx-value-id={@epic.id}
+          aria-label="Resume epic"
+        >
+          [r] resume
+        </button>
+        <button
+          :if={@status not in [:closed, :failed, :cancelled]}
           type="button"
           class="loom-btn loom-btn-ghost"
           phx-click="cancel"
           phx-target={@myself}
-          aria-label="Cancel epic (coming soon)"
-          disabled
+          phx-value-id={@epic.id}
+          aria-label="Cancel epic"
         >
           [c] cancel
         </button>

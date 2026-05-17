@@ -40,23 +40,92 @@ defmodule Loomkin.Orchestration.SessionBridge do
           | {:complex_task, binary()}
           | {:error, term()}
   def dispatch(session_state, message, opts \\ []) when is_map(session_state) do
-    {intent, via, reason} = IntentClassifier.classify(message, opts)
+    case maybe_steering_command(message) do
+      {:ok, _} = reply ->
+        :telemetry.execute(
+          [:loomkin, :orchestration, :session_bridge, :dispatched],
+          %{},
+          %{intent: :steering, via: :in_band, reason: :orchestration_command}
+        )
 
-    :telemetry.execute(
-      [:loomkin, :orchestration, :session_bridge, :dispatched],
-      %{},
-      %{intent: intent, via: via, reason: reason}
-    )
+        reply
 
-    case intent do
-      :fast_chat ->
-        run_pipeline(LitePipeline, session_state, message, opts)
+      {:error, _} = err ->
+        :telemetry.execute(
+          [:loomkin, :orchestration, :session_bridge, :dispatched],
+          %{},
+          %{intent: :steering, via: :in_band, reason: :orchestration_command_error}
+        )
 
-      :tool_use ->
-        run_pipeline(ShortPipeline, session_state, message, opts)
+        err
 
-      :complex_task ->
-        submit_complex_task(session_state, message, opts)
+      :not_a_command ->
+        {intent, via, reason} = IntentClassifier.classify(message, opts)
+
+        :telemetry.execute(
+          [:loomkin, :orchestration, :session_bridge, :dispatched],
+          %{},
+          %{intent: intent, via: via, reason: reason}
+        )
+
+        case intent do
+          :fast_chat ->
+            run_pipeline(LitePipeline, session_state, message, opts)
+
+          :tool_use ->
+            run_pipeline(ShortPipeline, session_state, message, opts)
+
+          :complex_task ->
+            submit_complex_task(session_state, message, opts)
+        end
+    end
+  end
+
+  ## ─── In-band steering commands ─────────────────────────────────────────
+
+  # Recognise `/orchestration <verb> <epic_id>` and route to SwarmCoordinator.
+  # Returns `{:ok, "<verb>d epic <id>"}` on success so the Session emits a
+  # confirmation assistant message; `{:error, reason}` on bad syntax/lookup;
+  # or `:not_a_command` when the message isn't a steering command.
+  defp maybe_steering_command(text) when is_binary(text) do
+    trimmed = String.trim(text)
+
+    if String.starts_with?(trimmed, "/orchestration ") do
+      parse_and_route(trimmed)
+    else
+      :not_a_command
+    end
+  end
+
+  defp maybe_steering_command(_), do: :not_a_command
+
+  defp parse_and_route(text) do
+    case String.split(text, ~r/\s+/, trim: true) do
+      ["/orchestration", verb, epic_id] when is_binary(verb) and is_binary(epic_id) ->
+        run_steering(verb, epic_id)
+
+      _ ->
+        {:error, "usage: /orchestration <pause|cancel|resume|approve|reject> <epic_id>"}
+    end
+  end
+
+  defp run_steering(verb, epic_id) do
+    case verb do
+      "pause" -> dispatch_verb(:pause, epic_id, "paused")
+      "cancel" -> dispatch_verb(:cancel, epic_id, "cancelled")
+      "resume" -> dispatch_verb(:resume, epic_id, "resumed")
+      "approve" -> dispatch_verb(:approve, epic_id, "approved")
+      "reject" -> dispatch_verb(:reject, epic_id, "rejected")
+      other -> {:error, "unknown orchestration command: #{other}"}
+    end
+  end
+
+  defp dispatch_verb(verb, epic_id, past_tense) do
+    case apply(SwarmCoordinator, verb, [epic_id]) do
+      :ok -> {:ok, "#{past_tense} epic #{epic_id}"}
+      {:ok, _} -> {:ok, "#{past_tense} epic #{epic_id}"}
+      {:error, reason} -> {:error, "could not #{verb} epic #{epic_id}: #{inspect(reason)}"}
+      other -> {:error, "unexpected response from coordinator: #{inspect(other)}"}
     end
   end
 

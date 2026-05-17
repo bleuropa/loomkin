@@ -55,6 +55,21 @@ defmodule LoomkinWeb.UserSettingsController do
     end
   end
 
+  def update(conn, %{"action" => "update_orchestration_preferences"} = params) do
+    %{"user" => user_params} = params
+    user = conn.assigns.current_scope.user
+
+    case Accounts.update_user_orchestration_preferences(user, user_params) do
+      {:ok, _user} ->
+        conn
+        |> put_flash(:info, "Orchestration preferences updated.")
+        |> redirect(to: ~p"/users/settings")
+
+      {:error, changeset} ->
+        render(conn, :edit, orchestration_form: to_form(changeset))
+    end
+  end
+
   def confirm_email(conn, %{"token" => token}) do
     case Accounts.update_user_email(conn.assigns.current_scope.user, token) do
       {:ok, _user} ->
@@ -75,5 +90,6 @@ defmodule LoomkinWeb.UserSettingsController do
     conn
     |> assign(:email_form, to_form(Accounts.change_user_email(user)))
     |> assign(:password_form, to_form(Accounts.change_user_password(user)))
+    |> assign(:orchestration_form, to_form(Accounts.change_user_orchestration_preferences(user)))
   end
 end

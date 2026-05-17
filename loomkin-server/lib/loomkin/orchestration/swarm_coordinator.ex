@@ -40,6 +40,50 @@ defmodule Loomkin.Orchestration.SwarmCoordinator do
   @doc "Returns the list of active epic orchestrators with metadata."
   def list_active(server \\ @name), do: GenServer.call(server, :list_active)
 
+  @doc """
+  Cast `:pause` to the orchestrator owning `epic_id`.
+
+  Resolution: `Registry.lookup(EpicRegistry, epic_id)`.
+  Returns `:ok` if the cast was delivered, `{:error, :not_found}` otherwise.
+  """
+  @spec pause(binary(), GenServer.name()) :: :ok | {:error, :not_found}
+  def pause(epic_id, server \\ @name), do: send_to_orchestrator(epic_id, :pause, server)
+
+  @doc "Cast `:cancel` to the orchestrator owning `epic_id`."
+  @spec cancel(binary(), GenServer.name()) :: :ok | {:error, :not_found}
+  def cancel(epic_id, server \\ @name), do: send_to_orchestrator(epic_id, :cancel, server)
+
+  @doc """
+  Cast `:resume_from_pause` to the orchestrator owning `epic_id`.
+
+  Resumes a paused orchestrator back to whatever state it was in before the
+  `:pause` cast.
+  """
+  @spec resume(binary(), GenServer.name()) :: :ok | {:error, :not_found}
+  def resume(epic_id, server \\ @name),
+    do: send_to_orchestrator(epic_id, :resume_from_pause, server)
+
+  @doc "Cast `:approve` to clear an `:awaiting_approval` block."
+  @spec approve(binary(), GenServer.name()) :: :ok | {:error, :not_found}
+  def approve(epic_id, server \\ @name), do: send_to_orchestrator(epic_id, :approve, server)
+
+  @doc "Cast `:reject` to cancel an `:awaiting_approval` block."
+  @spec reject(binary(), GenServer.name()) :: :ok | {:error, :not_found}
+  def reject(epic_id, server \\ @name), do: send_to_orchestrator(epic_id, :reject, server)
+
+  defp send_to_orchestrator(epic_id, message, _server) when is_binary(epic_id) do
+    case Registry.lookup(Loomkin.Orchestration.EpicRegistry, epic_id) do
+      [{pid, _}] ->
+        :gen_statem.cast(pid, message)
+        :ok
+
+      [] ->
+        {:error, :not_found}
+    end
+  end
+
+  defp send_to_orchestrator(_, _, _), do: {:error, :not_found}
+
   ## Callbacks
 
   @impl true

@@ -37,6 +37,21 @@ defmodule LoomkinWeb.OrchestrationIndexLive do
   def handle_info({@topic, _other}, socket), do: {:noreply, socket}
 
   @impl true
+  def handle_event("pause", %{"id" => epic_id}, socket) do
+    SwarmCoordinator.pause(epic_id)
+    {:noreply, socket}
+  end
+
+  def handle_event("cancel", %{"id" => epic_id}, socket) do
+    SwarmCoordinator.cancel(epic_id)
+    {:noreply, socket}
+  end
+
+  def handle_event("resume", %{"id" => epic_id}, socket) do
+    SwarmCoordinator.resume(epic_id)
+    {:noreply, socket}
+  end
+
   def handle_event("create_epic", %{"epic" => params}, socket) do
     case Context.create_epic(%{
            title: params["title"],
@@ -78,10 +93,21 @@ defmodule LoomkinWeb.OrchestrationIndexLive do
 
   defp status_badge(:closed), do: {"badge badge-success", "closed"}
   defp status_badge(:failed), do: {"badge badge-danger", "failed"}
+  defp status_badge(:cancelled), do: {"badge", "cancelled"}
   defp status_badge(:awaiting_human), do: {"badge badge-warning", "awaiting human"}
   defp status_badge(:in_progress), do: {"badge", "in progress"}
   defp status_badge(:pending), do: {"badge", "pending"}
   defp status_badge(other), do: {"badge", to_string(other)}
+
+  defp paused?(%{metadata: %{} = meta}) do
+    Map.get(meta, "paused") == true or Map.get(meta, :paused) == true
+  end
+
+  defp paused?(_), do: false
+
+  defp active_epic?(epic) do
+    epic.status in [:in_progress, :awaiting_human, :pending]
+  end
 
   @impl true
   def render(assigns) do
@@ -168,8 +194,11 @@ defmodule LoomkinWeb.OrchestrationIndexLive do
               <strong class="font-medium" style="color: var(--text-primary);">
                 {epic.title}
               </strong>
-              <% {cls, lbl} = status_badge(epic.status) %>
-              <span class={cls}>{lbl}</span>
+              <span class="flex items-center gap-2">
+                <% {cls, lbl} = status_badge(epic.status) %>
+                <span class={cls}>{lbl}</span>
+                <span :if={paused?(epic)} class="badge badge-warning">paused</span>
+              </span>
             </.link>
 
             <div
@@ -193,6 +222,42 @@ defmodule LoomkinWeb.OrchestrationIndexLive do
               <span class="ml-2 text-xs font-mono" style="color: var(--text-muted);">
                 phase: {phase_label(epic.current_phase)}
               </span>
+            </div>
+
+            <div
+              :if={active_epic?(epic)}
+              class="mt-3 flex gap-2"
+              data-testid={"orchestration-index-actions-" <> epic.id}
+            >
+              <button
+                :if={not paused?(epic)}
+                type="button"
+                class="loom-btn loom-btn-ghost loom-btn-sm"
+                phx-click="pause"
+                phx-value-id={epic.id}
+                aria-label={"Pause " <> epic.title}
+              >
+                Pause
+              </button>
+              <button
+                :if={paused?(epic)}
+                type="button"
+                class="loom-btn loom-btn-solid loom-btn-sm"
+                phx-click="resume"
+                phx-value-id={epic.id}
+                aria-label={"Resume " <> epic.title}
+              >
+                Resume
+              </button>
+              <button
+                type="button"
+                class="loom-btn loom-btn-ghost loom-btn-sm"
+                phx-click="cancel"
+                phx-value-id={epic.id}
+                aria-label={"Cancel " <> epic.title}
+              >
+                Cancel
+              </button>
             </div>
           </li>
         </ul>
