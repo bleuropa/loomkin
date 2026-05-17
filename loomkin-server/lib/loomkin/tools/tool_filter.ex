@@ -31,7 +31,8 @@ defmodule Loomkin.Tools.ToolFilter do
     Loomkin.Tools.FileRead,
     Loomkin.Tools.FileSearch,
     Loomkin.Tools.ContentSearch,
-    Loomkin.Tools.DirectoryList
+    Loomkin.Tools.DirectoryList,
+    Loomkin.Tools.WebSearch
   ]
 
   @write_tools [
